@@ -1,0 +1,119 @@
+{
+  "theme": "Organic Luxury Enterprise (Light Theme). A fusion of premium Ayurveda (natural, earthy, trustworthy) and modern enterprise fintech (clean, structured, highly legible like Stripe or CRED). Strictly avoids the typical cheap 'MLM' aesthetic.",
+  "typography": {
+    "fonts": {
+      "english_headings": "Poppins, sans-serif",
+      "english_body": "Inter, sans-serif",
+      "hindi": "'Noto Sans Devanagari', sans-serif"
+    },
+    "hierarchy": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl tracking-tight font-semibold text-[#0B4D2E]",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl tracking-tight font-medium text-[#17201B]",
+      "h3": "text-xl sm:text-2xl font-medium text-[#17201B]",
+      "h4": "text-lg sm:text-xl font-medium text-[#17201B]",
+      "body": "text-base leading-relaxed text-[#66736B]",
+      "small_labels": "text-xs font-semibold tracking-[0.1em] uppercase text-[#66736B]"
+    },
+    "rules": [
+      "Headings must use tight letter spacing (tracking-tight).",
+      "Use 'Noto Sans Devanagari' when switching to Hindi language.",
+      "Do NOT use pure bold for everything; leverage font-medium and font-semibold to create elegant hierarchy."
+    ]
+  },
+  "colors": {
+    "primary": {
+      "green": "#176B43",
+      "dark_forest": "#0B4D2E",
+      "light_green": "#EAF5ED"
+    },
+    "accent": {
+      "gold": "#C9A227",
+      "light_gold": "#F6EFD5"
+    },
+    "neutral": {
+      "background": "#F7F9F7",
+      "white": "#FFFFFF",
+      "dark_text": "#17201B",
+      "muted_text": "#66736B"
+    },
+    "status": {
+      "red": "#C62828",
+      "green": "#176B43"
+    },
+    "rules": [
+      "Use #F7F9F7 as the main app background to give an organic paper-like feel.",
+      "Limit the use of #C9A227 (Gold) to premium indicators, badges, or special hover states.",
+      "Never use pure black or grey. Neutrals must pull from the provided palette (#17201B, #66736B)."
+    ]
+  },
+  "visual_enhancers": {
+    "surfaces": [
+      "Cards: #FFFFFF background, 1px solid border (#EAF5ED or black/5), max 8px border-radius (rounded-lg).",
+      "Shadows: Very subtle, diffuse shadows. shadow-[0_4px_24px_rgba(11,77,46,0.04)]",
+      "Glassmorphism: Use for sticky navs/headers. backdrop-blur-xl bg-white/80 border-b border-[#0B4D2E]/10. Never use 100% transparent backgrounds over content."
+    ],
+    "micro_interactions": [
+      "Hover states: Slight lift (-translate-y-0.5), subtle shadow increase, and color darkening.",
+      "Buttons: pill-shaped (rounded-full) or smooth corners (rounded-lg) with smooth transitions (transition-all duration-200).",
+      "Loading: Use elegant skeleton loaders, no generic spinners."
+    ]
+  },
+  "grids_and_layouts": {
+    "spacing": "Generous Spacing Philosophy. Use p-6, p-8, p-12. If a card has borders, use internal padding p-6.",
+    "dashboard_grid": "High Density Bento. Base grid-cols-1 md:grid-cols-3 lg:grid-cols-4. gap-6. Stretch items to match neighbors (h-full).",
+    "navigation": "Desktop: Fixed Left Sidebar (collapsible). Mobile: Fixed Bottom Navigation (Home, Income, Team, Orders, More). Do not cram mobile nav into a top hamburger.",
+    "alignment": "Left-align dense text and dashboard data. Optical alignment for icons inside buttons."
+  },
+  "motion": {
+    "rules": [
+      "Respect prefers-reduced-motion.",
+      "Use framer-motion for page transitions (fade-in, slide-up).",
+      "Stagger list items upon entrance."
+    ]
+  },
+  "components": {
+    "stat_card": "Minimalist bento box. Hero metric top-left. Trend indicator (+/-). Minimal chart preview.",
+    "wallet_card": "Use #0B4D2E background with #C9A227 accents for the premium wallet feel.",
+    "status_badge": "Pill shape. Red/Green based on distributor activation status. Example: bg-[#C62828]/10 text-[#C62828].",
+    "tables": "Clean, row borders only (no vertical lines). Align monetary values to the right. Use Shadcn Table.",
+    "forms": "Floating labels or very clean stacked labels. Shadcn Input/Select with customized border focus (ring-[#176B43])."
+  },
+  "image_urls": {
+    "hero_background": {
+      "url": "https://images.pexels.com/photos/4046683/pexels-photo-4046683.jpeg",
+      "description": "Textured gold and green leaf for premium background overlay."
+    },
+    "products": [
+      {
+        "url": "https://images.pexels.com/photos/7615621/pexels-photo-7615621.jpeg",
+        "description": "Flat lay of herbal supplements with ginkgo leaves on marble surface."
+      },
+      {
+        "url": "https://images.pexels.com/photos/4174743/pexels-photo-4174743.jpeg",
+        "description": "Flat lay of herbal capsules, leaves, and bottle on marble surface."
+      }
+    ],
+    "trust_spa": {
+      "url": "https://images.pexels.com/photos/18408805/pexels-photo-18408805.jpeg",
+      "description": "Elegant premium wellness interior."
+    }
+  },
+  "instructions_to_main_agent": [
+    "Create the app using React (.js extensions, NO TypeScript/tsx).",
+    "Implement routing for: Landing, Auth, Dashboard, Wallet, Products, Checkout, Admin Panel.",
+    "Mobile layout must use a persistent Bottom Navigation bar for the app portion.",
+    "Ensure the Hindi/English bilingual switch is accessible in the header.",
+    "Ensure all Shadcn components are fully restyled to match the 'Organic Luxury Enterprise' theme.",
+    "Avoid generic MLM templates; strictly emulate Stripe/CRED for the dashboard UX."
+  ],
+  "UNIVERSAL GUIDELINES FOR MAIN AGENT": [
+    "Do not converge toward generic outputs. Avoid 'AI slop' aesthetics.",
+    "Never center align the app container (.App { text-align: center; } is banned).",
+    "Create depth through layered design elements with z-index hierarchy.",
+    "Every interaction needs micro-animations - hover states, transitions, entrance animations.",
+    "Use 2-3x more spacing than feels comfortable. Cramped designs look cheap.",
+    "All interactive and key informational elements MUST include a 'data-testid' attribute.",
+    "Use sonner for toast notifications.",
+    "NEVER use AI assistant emoji characters for icons. Use lucide-react."
+  ]
+}
