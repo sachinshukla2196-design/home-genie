@@ -93,8 +93,8 @@ export default function Dashboard() {
         {/* Income chart */}
         <div className="rounded-2xl border border-brand-50 bg-white p-6 shadow-card lg:col-span-2">
           <h3 className="font-display text-lg font-medium text-ink">{t("dash.incomeOverview")}</h3>
-          <div className="mt-4 h-64 w-full" style={{ minHeight: 256 }}>
-            <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+          <div className="mt-4 h-64 w-full">
+            <ResponsiveContainer width="100%" height={256} minWidth={0} debounce={1}>
               <LineChart data={d.income_series}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#EAF5ED" vertical={false} />
                 <XAxis dataKey="date" tick={{ fill: "#66736B", fontSize: 12 }} axisLine={false} tickLine={false} />

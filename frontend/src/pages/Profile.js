@@ -2,6 +2,7 @@ import React from "react";
 import { motion } from "framer-motion";
 import { Mail, Phone, MapPin, LifeBuoy } from "lucide-react";
 import { StatusBadge } from "@/components/StatusBadge";
+import { IdCard } from "@/components/IdCard";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
@@ -28,6 +29,8 @@ export default function Profile() {
         </div>
         {user?.sponsor_id && <div className="mt-4 rounded-lg bg-brand-50 px-4 py-2.5 text-sm text-forest">Sponsor: <b>{user.sponsor_id}</b></div>}
       </motion.div>
+
+      <IdCard user={user} />
 
       <div className="rounded-2xl border border-brand-50 bg-white p-6 shadow-card">
         <div className="flex items-center gap-2 font-medium text-ink"><LifeBuoy size={18} className="text-brand" /> {t("nav.support")}</div>

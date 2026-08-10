@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
+import QRCode from "qrcode";
 import { Copy, Share2, MessageCircle, Mail, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/context/I18nContext";
@@ -11,10 +12,14 @@ export default function Referral() {
   const { t } = useI18n();
   const { user } = useAuth();
   const [info, setInfo] = useState(null);
+  const [qr, setQr] = useState("");
   const link = `${window.location.origin}/register?ref=${user?.distributor_id}`;
-  const qr = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&color=0B4D2E&data=${encodeURIComponent(link)}`;
 
   useEffect(() => { API.get("/referral").then(({ data }) => setInfo(data)).catch(() => {}); }, []);
+  useEffect(() => {
+    QRCode.toDataURL(link, { margin: 1, width: 240, color: { dark: "#0B4D2E", light: "#ffffff" } })
+      .then(setQr).catch(() => {});
+  }, [link]);
 
   const copy = () => { navigator.clipboard.writeText(link); toast.success(t("referral.copied")); };
   const isGreen = user?.status === "green";
@@ -57,7 +62,7 @@ export default function Referral() {
 
         <motion.div initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} className="flex h-fit flex-col items-center rounded-2xl border border-brand-50 bg-white p-6 shadow-card">
           <div className="text-xs font-semibold uppercase tracking-wide text-muted2">{t("referral.qr")}</div>
-          <img src={qr} alt="Referral QR" className="mt-4 rounded-xl border border-brand-50 p-2" data-testid="referral-qr" />
+          {qr && <img src={qr} alt="Referral QR" className="mt-4 rounded-xl border border-brand-50 p-2" data-testid="referral-qr" />}
           <p className="mt-3 text-center text-xs text-muted2">{isGreen ? t("referral.eligibleNote") : t("referral.lockedNote")}</p>
         </motion.div>
       </div>
