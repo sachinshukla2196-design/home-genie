@@ -1,0 +1,345 @@
+"""Admin panel routes: dashboard, users, products, orders, KYC, withdrawals,
+commissions, activations, settings, audit logs, reports (with CSV export)."""
+import io
+import csv
+from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from typing import Optional, List
+from datetime import datetime, timezone
+
+from core import (db, now_iso, new_id, require_admin, get_settings,
+                  add_wallet_transaction, create_notification, log_audit)
+
+router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+# ---------------- Dashboard ----------------
+@router.get("/dashboard")
+async def admin_dashboard(admin: dict = Depends(require_admin)):
+    settings = await get_settings()
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    total_users = await db.users.count_documents({"role": {"$in": ["distributor", "customer"]}})
+    red_users = await db.users.count_documents({"status": "red"})
+    green_users = await db.users.count_documents({"status": "green"})
+    pending_kyc = await db.kyc_records.count_documents({"status": "pending"})
+    pending_wd = await db.withdrawal_requests.count_documents({"status": {"$in": ["pending", "under_review"]}})
+
+    def today_q(field="created_at"):
+        return {field: {"$regex": f"^{today}"}}
+
+    today_regs = await db.users.count_documents({"created_at": {"$regex": f"^{today}"}})
+    today_acts = await db.activation_records.count_documents({"created_at": {"$regex": f"^{today}"}})
+    today_orders = await db.orders.count_documents({"created_at": {"$regex": f"^{today}"}, "payment_status": "paid"})
+
+    revenue_docs = await db.orders.find({"payment_status": "paid", "created_at": {"$regex": f"^{today}"}},
+                                        {"_id": 0, "total": 1}).to_list(1000)
+    today_revenue = sum(o.get("total", 0) for o in revenue_docs)
+
+    all_paid = await db.orders.find({"payment_status": "paid"}, {"_id": 0, "total": 1}).to_list(5000)
+    total_revenue = sum(o.get("total", 0) for o in all_paid)
+
+    return {
+        "settings": {"currency_symbol": settings.get("currency_symbol", "₹")},
+        "stats": {
+            "total_users": total_users, "red_users": red_users, "green_users": green_users,
+            "today_registrations": today_regs, "today_activations": today_acts,
+            "today_orders": today_orders, "today_revenue": today_revenue,
+            "total_revenue": total_revenue,
+            "pending_kyc": pending_kyc, "pending_withdrawals": pending_wd,
+        },
+    }
+
+
+# ---------------- Users ----------------
+@router.get("/users")
+async def admin_users(status: Optional[str] = None, admin: dict = Depends(require_admin)):
+    q = {"role": {"$in": ["distributor", "customer"]}}
+    if status:
+        q["status"] = status
+    users = await db.users.find(q, {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(1000)
+    return users
+
+
+@router.get("/users/{user_id}")
+async def admin_user_detail(user_id: str, admin: dict = Depends(require_admin)):
+    u = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found.")
+    wallet = await db.wallets.find_one({"user_id": user_id}, {"_id": 0})
+    orders = await db.orders.find({"user_id": user_id}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    return {"user": u, "wallet": wallet, "orders": orders}
+
+
+# ---------------- Products ----------------
+class ProductBody(BaseModel):
+    sku: str
+    name: str
+    name_hi: str = ""
+    description: str = ""
+    description_hi: str = ""
+    images: List[str] = []
+    mrp: float
+    selling_price: float
+    gst_percent: float = 5.0
+    stock: int = 100
+    category: str = "General"
+    is_active: bool = True
+    is_activation_product: bool = False
+
+
+@router.post("/products")
+async def create_product(body: ProductBody, request: Request, admin: dict = Depends(require_admin)):
+    if await db.products.find_one({"sku": body.sku}):
+        raise HTTPException(status_code=400, detail="A product with this SKU already exists.")
+    p = body.model_dump()
+    p.update({"id": new_id(), "created_at": now_iso(), "updated_at": now_iso()})
+    await db.products.insert_one(dict(p))
+    await log_audit(admin, "product_created", "product", p["id"], new_value={"sku": p["sku"]}, request=request)
+    p.pop("_id", None)
+    return p
+
+
+@router.put("/products/{product_id}")
+async def update_product(product_id: str, body: ProductBody, request: Request, admin: dict = Depends(require_admin)):
+    existing = await db.products.find_one({"id": product_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Product not found.")
+    upd = body.model_dump()
+    upd["updated_at"] = now_iso()
+    await db.products.update_one({"id": product_id}, {"$set": upd})
+    await log_audit(admin, "product_updated", "product", product_id, old_value=existing, new_value=upd, request=request)
+    return {**existing, **upd}
+
+
+@router.delete("/products/{product_id}")
+async def deactivate_product(product_id: str, request: Request, admin: dict = Depends(require_admin)):
+    await db.products.update_one({"id": product_id}, {"$set": {"is_active": False, "updated_at": now_iso()}})
+    await log_audit(admin, "product_deactivated", "product", product_id, request=request)
+    return {"ok": True}
+
+
+# ---------------- Orders ----------------
+@router.get("/orders")
+async def admin_orders(status: Optional[str] = None, admin: dict = Depends(require_admin)):
+    q = {}
+    if status:
+        q["status"] = status
+    return await db.orders.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
+
+
+class OrderStatusBody(BaseModel):
+    status: str
+
+
+@router.put("/orders/{order_id}/status")
+async def update_order_status(order_id: str, body: OrderStatusBody, request: Request, admin: dict = Depends(require_admin)):
+    allowed = ["pending", "payment_pending", "paid", "processing", "packed", "shipped", "delivered", "cancelled", "refunded"]
+    if body.status not in allowed:
+        raise HTTPException(status_code=400, detail="Invalid status.")
+    o = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not o:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    await db.orders.update_one({"id": order_id}, {"$set": {"status": body.status, "updated_at": now_iso()}})
+    await create_notification(o["user_id"], "order", "Order update",
+                              f"Your order {o['order_number']} is now {body.status}.",
+                              "ऑर्डर अपडेट", f"आपका ऑर्डर {o['order_number']} अब {body.status} है।")
+    await log_audit(admin, "order_status_changed", "order", order_id,
+                    old_value={"status": o["status"]}, new_value={"status": body.status}, request=request)
+    return {"ok": True}
+
+
+# ---------------- Payments ----------------
+@router.get("/payments")
+async def admin_payments(admin: dict = Depends(require_admin)):
+    return await db.payment_transactions.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+
+
+# ---------------- Activations / Referrals / Commissions ----------------
+@router.get("/activations")
+async def admin_activations(admin: dict = Depends(require_admin)):
+    return await db.activation_records.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+
+
+@router.get("/referrals")
+async def admin_referrals(admin: dict = Depends(require_admin)):
+    return await db.referral_relationships.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+
+
+@router.get("/commissions")
+async def admin_commissions(admin: dict = Depends(require_admin)):
+    return await db.commissions.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+
+
+# ---------------- KYC review ----------------
+@router.get("/kyc")
+async def admin_kyc(status: Optional[str] = None, admin: dict = Depends(require_admin)):
+    q = {}
+    if status:
+        q["status"] = status
+    recs = await db.kyc_records.find(q, {"_id": 0}).sort("submitted_at", -1).to_list(1000)
+    return recs
+
+
+class KycReview(BaseModel):
+    action: str  # verify / reject
+    reason: Optional[str] = ""
+
+
+@router.put("/kyc/{user_id}")
+async def review_kyc(user_id: str, body: KycReview, request: Request, admin: dict = Depends(require_admin)):
+    k = await db.kyc_records.find_one({"user_id": user_id}, {"_id": 0})
+    if not k:
+        raise HTTPException(status_code=404, detail="KYC record not found.")
+    if body.action == "verify":
+        new_status = "verified"
+    elif body.action == "reject":
+        new_status = "rejected"
+    else:
+        raise HTTPException(status_code=400, detail="Invalid action.")
+    await db.kyc_records.update_one({"user_id": user_id},
+                                    {"$set": {"status": new_status, "rejection_reason": body.reason,
+                                              "updated_at": now_iso()}})
+    await db.users.update_one({"id": user_id}, {"$set": {"kyc_status": new_status, "updated_at": now_iso()}})
+    await create_notification(user_id, "kyc",
+                              "KYC verified" if new_status == "verified" else "KYC rejected",
+                              "Your KYC has been verified." if new_status == "verified"
+                              else f"Your KYC was rejected: {body.reason}",
+                              "केवाईसी सत्यापित" if new_status == "verified" else "केवाईसी अस्वीकृत",
+                              "आपकी केवाईसी सत्यापित हो गई है।" if new_status == "verified"
+                              else f"आपकी केवाईसी अस्वीकृत: {body.reason}")
+    await log_audit(admin, "kyc_reviewed", "kyc", user_id, new_value={"status": new_status}, request=request)
+    return {"ok": True, "status": new_status}
+
+
+# ---------------- Withdrawals review ----------------
+@router.get("/withdrawals")
+async def admin_withdrawals(status: Optional[str] = None, admin: dict = Depends(require_admin)):
+    q = {}
+    if status:
+        q["status"] = status
+    return await db.withdrawal_requests.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
+
+
+class WithdrawalReview(BaseModel):
+    action: str  # approve / reject / mark_paid
+    note: Optional[str] = ""
+
+
+@router.put("/withdrawals/{wd_id}")
+async def review_withdrawal(wd_id: str, body: WithdrawalReview, request: Request, admin: dict = Depends(require_admin)):
+    wr = await db.withdrawal_requests.find_one({"id": wd_id}, {"_id": 0})
+    if not wr:
+        raise HTTPException(status_code=404, detail="Withdrawal not found.")
+    settings = await get_settings()
+    sym = settings.get("currency_symbol", "₹")
+
+    if body.action == "approve":
+        new_status = "approved"
+    elif body.action == "mark_paid":
+        new_status = "paid"
+        # clear pending balance
+        await db.wallets.update_one({"user_id": wr["user_id"]},
+                                    {"$inc": {"pending_balance": -wr["amount"]},
+                                     "$set": {"updated_at": now_iso()}})
+        await add_wallet_transaction(wr["user_id"], "WITHDRAWAL", wr["amount"], "REVERSED",
+                                     description="Withdrawal paid", direction="debit")
+    elif body.action == "reject":
+        new_status = "rejected"
+        # refund held amount back to available
+        await db.wallets.update_one({"user_id": wr["user_id"]},
+                                    {"$inc": {"available_balance": wr["amount"], "pending_balance": -wr["amount"]},
+                                     "$set": {"updated_at": now_iso()}})
+        await add_wallet_transaction(wr["user_id"], "ADJUSTMENT", wr["amount"], "CREDITED",
+                                     description="Withdrawal rejected - amount refunded", direction="credit")
+    else:
+        raise HTTPException(status_code=400, detail="Invalid action.")
+
+    await db.withdrawal_requests.update_one({"id": wd_id},
+                                            {"$set": {"status": new_status, "admin_note": body.note,
+                                                      "updated_at": now_iso()}})
+    await create_notification(wr["user_id"], "withdrawal", f"Withdrawal {new_status}",
+                              f"Your withdrawal of {sym}{int(wr['amount'])} is now {new_status}.",
+                              f"निकासी {new_status}",
+                              f"आपकी {sym}{int(wr['amount'])} की निकासी अब {new_status} है।")
+    await log_audit(admin, "withdrawal_reviewed", "withdrawal", wd_id,
+                    old_value={"status": wr["status"]}, new_value={"status": new_status}, request=request)
+    return {"ok": True, "status": new_status}
+
+
+# ---------------- Settings ----------------
+@router.get("/settings")
+async def admin_get_settings(admin: dict = Depends(require_admin)):
+    return await get_settings()
+
+
+class SettingsBody(BaseModel):
+    activation_amount: Optional[float] = None
+    activation_product_sku: Optional[str] = None
+    referral_commission: Optional[float] = None
+    withdrawal_minimum: Optional[float] = None
+    require_kyc_for_withdrawal: Optional[bool] = None
+    gst_percent: Optional[float] = None
+    company_name: Optional[str] = None
+    company_email: Optional[str] = None
+    company_phone: Optional[str] = None
+    company_address: Optional[str] = None
+
+
+@router.put("/settings")
+async def admin_update_settings(body: SettingsBody, request: Request, admin: dict = Depends(require_admin)):
+    old = await get_settings()
+    upd = {k: v for k, v in body.model_dump().items() if v is not None}
+    await db.business_settings.update_one({"id": "business_settings"}, {"$set": upd})
+    await log_audit(admin, "settings_updated", "business_settings", "business_settings",
+                    old_value=old, new_value=upd, request=request)
+    return await get_settings()
+
+
+# ---------------- Audit logs ----------------
+@router.get("/audit-logs")
+async def admin_audit(admin: dict = Depends(require_admin)):
+    return await db.audit_logs.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+
+
+# ---------------- Reports ----------------
+REPORTS = {
+    "registrations": ("users", {"role": {"$in": ["distributor", "customer"]}},
+                      ["distributor_id", "full_name", "email", "mobile", "status", "state", "city", "created_at"]),
+    "activations": ("activation_records", {}, ["distributor_id", "order_id", "amount", "status", "activation_date"]),
+    "sales": ("orders", {"payment_status": "paid"},
+              ["order_number", "distributor_id", "subtotal", "gst_amount", "total", "status", "created_at"]),
+    "orders": ("orders", {}, ["order_number", "distributor_id", "total", "status", "payment_status", "created_at"]),
+    "payments": ("payment_transactions", {}, ["session_id", "order_id", "amount", "currency", "payment_status", "created_at"]),
+    "referrals": ("referral_relationships", {},
+                  ["sponsor_distributor_id", "referred_distributor_id", "commission_paid", "created_at"]),
+    "commissions": ("commissions", {}, ["sponsor_distributor_id", "referred_distributor_id", "type", "amount", "status", "created_at"]),
+    "wallet": ("wallet_transactions", {}, ["user_id", "type", "direction", "amount", "status", "created_at"]),
+    "withdrawals": ("withdrawal_requests", {}, ["request_number", "distributor_id", "amount", "status", "created_at"]),
+}
+
+
+@router.get("/reports/{report}")
+async def get_report(report: str, admin: dict = Depends(require_admin)):
+    if report not in REPORTS:
+        raise HTTPException(status_code=404, detail="Report not found.")
+    coll, q, fields = REPORTS[report]
+    rows = await db[coll].find(q, {"_id": 0}).sort("created_at", -1).to_list(2000)
+    return {"report": report, "fields": fields, "rows": rows, "count": len(rows)}
+
+
+@router.get("/reports/{report}/export")
+async def export_report(report: str, admin: dict = Depends(require_admin)):
+    if report not in REPORTS:
+        raise HTTPException(status_code=404, detail="Report not found.")
+    coll, q, fields = REPORTS[report]
+    rows = await db[coll].find(q, {"_id": 0}).sort("created_at", -1).to_list(5000)
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for r in rows:
+        writer.writerow({f: r.get(f, "") for f in fields})
+    buf.seek(0)
+    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
+                             headers={"Content-Disposition": f"attachment; filename={report}_report.csv"})

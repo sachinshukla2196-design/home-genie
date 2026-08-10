@@ -1,0 +1,41 @@
+{
+  "summary": "First iteration full test of Anjali Herbal Life Ayurveda MVP. Ran 28 pytest backend API tests (all passing) covering health, public settings, product seed, admin login/CRUD/settings/reports/audit, OTP registration flow with dev_otp, distributor_id generation (ANJxxxxxx), duplicate email + invalid OTP + invalid sponsor rejection, order creation with 5% GST + Stripe checkout URL, RED-user withdrawal restriction, KYC submit with masking, admin KYC verify, authorization (403 for distributor on /admin, 401 without token). Ran a Playwright UI test verifying landing loads, language switcher works, admin login redirects to /admin, all 9 admin sub-pages render, 2-step registration with OTP auto-fill lands on /app/dashboard with RED 'Activate Now' banner, referral page shows ANJ id, products page shows Starter Kit. Stripe checkout completion + GREEN activation + ₹100 referral commission credit cannot be fully automated (requires interactive card entry on the hosted Stripe page); code review of _process_paid_order confirms idempotency via double-guard (order.payment_status $ne paid, referral.commission_paid $ne True, and existing-commission check).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dashboard income chart", "issues": ["Recharts warning: width(-1)/height(-1) on income chart container on first render — harmless but should set explicit minHeight or use ResponsiveContainer aspect prop"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "MANUAL/BROWSER TEST NEEDED: Full end-to-end payment flow with Stripe test card 4242 4242 4242 4242 — verify (a) order becomes paid + invoice_number set, (b) user becomes GREEN, (c) sponsor gets exactly ₹100 REFERRAL_COMMISSION when a GREEN-referred user activates, (d) polling status multiple times does not create duplicate commissions. Backend logic is well-guarded but cannot be verified without an actual paid Stripe session.",
+    "Minor: fix Recharts container size warning on dashboard income chart (set minHeight on ResponsiveContainer wrapper)."
+  ],
+  "critical_code_review_comments": [
+    "shop_routes._process_paid_order is well-designed: uses conditional Mongo update ({payment_status: {$ne: 'paid'}}) + rel.commission_paid guard + commissions uniqueness check → idempotent under repeated polling. Good.",
+    "shop_routes.payment_status endpoint finalizes on poll (webhook-independent) which is correct for preview environment.",
+    "auth_routes.login has brute-force lockout at 5 attempts (429). Good. However lockout has no auto-expiry; a stuck login_attempts row will block a user permanently. Consider adding a time-based reset (e.g., after 10 min).",
+    "wallet_routes.request_withdrawal calls add_wallet_transaction with status='DEBITED' (which deducts available_balance) AND then 'PENDING' (which increments pending_balance). On mark_paid it decrements pending_balance and adds a REVERSED debit txn. Math is consistent, but the double-txn pattern is a bit confusing — consider a single atomic 'HOLD' status for readability.",
+    "core.hash_password uses bcrypt.gensalt() (default rounds) → produces $2b$ hash. Verified format via test flow.",
+    "CORS is allow_origins=['*'] with allow_credentials=False → OK since auth is Bearer-token, not cookies.",
+    "No _id leakage: all find queries project {_id: 0} or use clean_user helper. Verified across routes.",
+    "auth_routes.send_otp deletes any previous OTP for the email — good; prevents stale OTPs.",
+    "server.py seed_admin correctly re-hashes password if the env-provided admin password doesn't match existing hash — playbook-compliant.",
+    "shop_routes.create_checkout uses server-side order.total (never client-supplied amount) → prevents payment tampering. Good.",
+    "Missing rate limit on /api/auth/send-otp — could be spammed to enumerate/annoy. Non-blocking for MVP but flag for phase 2.",
+    "No pagination on list endpoints (products, orders, admin/*). Fine for MVP scale but will need pagination for production."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (28/28)", "frontend": "100% for automatable flows (payment completion excluded)"},
+  "test_credentials": "Admin: sachin.shukla2196@gmail.com / Admin@12345. New users are auto-generated per-test with TEST_/uitest_ prefix.",
+  "seed_data_creation": "None manually; server auto-seeds admin + 6 products (incl SKU ANJ-STARTER ₹1500) on startup.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend fully validated with pytest (backend_test.py). Frontend UI flows validated including 2-step OTP registration. The ONE thing not covered end-to-end is the Stripe hosted-checkout payment (test card 4242…) and its downstream effects: GREEN activation, invoice_number set, and ₹100 referral commission credited to sponsor wallet. Main agent should either (a) manually walk the browser flow with a real Stripe test card, or (b) add a dev-only endpoint to simulate payment_transactions status='paid' + call _process_paid_order for CI testing. Referral relationship IS created at registration (verified), so once User A activates GREEN and User B (referred by A) subsequently activates GREEN, sponsor A's wallet should show exactly +100.",
+  "rca of the issue": "N/A — no bugs found in tested surface area."
+}

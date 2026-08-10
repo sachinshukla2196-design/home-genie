@@ -1,0 +1,304 @@
+"""Products, cart -> orders, and Stripe payments with server-side verification."""
+import os
+from fastapi import APIRouter, HTTPException, Request, Depends
+from pydantic import BaseModel, Field
+from typing import List, Optional
+
+from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionRequest
+
+from core import (db, now_iso, new_id, get_current_user, get_settings, next_sequence,
+                  add_wallet_transaction, create_notification, log_audit)
+
+router = APIRouter(prefix="/api", tags=["shop"])
+
+STRIPE_API_KEY = os.environ.get("STRIPE_API_KEY", "sk_test_emergent")
+
+
+# ---------------- Products ----------------
+@router.get("/products")
+async def list_products(category: Optional[str] = None, active: bool = True):
+    q = {}
+    if active:
+        q["is_active"] = True
+    if category:
+        q["category"] = category
+    items = await db.products.find(q, {"_id": 0}).sort("created_at", 1).to_list(200)
+    return items
+
+
+@router.get("/products/{product_id}")
+async def get_product(product_id: str):
+    p = await db.products.find_one({"id": product_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Product not found.")
+    return p
+
+
+@router.get("/categories")
+async def categories():
+    return await db.product_categories.find({}, {"_id": 0}).to_list(100)
+
+
+# ---------------- Orders ----------------
+class OrderItemIn(BaseModel):
+    product_id: str
+    quantity: int = Field(ge=1, le=50)
+
+
+class AddressIn(BaseModel):
+    full_name: str
+    mobile: str
+    line1: str
+    city: str
+    state: str
+    pincode: str
+
+
+class CreateOrder(BaseModel):
+    items: List[OrderItemIn]
+    address: AddressIn
+
+
+@router.post("/orders")
+async def create_order(body: CreateOrder, request: Request, user: dict = Depends(get_current_user)):
+    if not body.items:
+        raise HTTPException(status_code=400, detail="Your cart is empty.")
+    settings = await get_settings()
+    gst_percent = settings.get("gst_percent", 5.0)
+
+    line_items = []
+    subtotal = 0.0
+    is_activation_order = False
+    for it in body.items:
+        p = await db.products.find_one({"id": it.product_id}, {"_id": 0})
+        if not p or not p.get("is_active"):
+            raise HTTPException(status_code=400, detail="A product in your cart is unavailable.")
+        price = float(p["selling_price"])
+        total = price * it.quantity
+        subtotal += total
+        if p.get("is_activation_product"):
+            is_activation_order = True
+        line_items.append({
+            "product_id": p["id"], "sku": p["sku"], "name": p["name"], "name_hi": p.get("name_hi", ""),
+            "image": (p.get("images") or [None])[0], "price": price, "quantity": it.quantity,
+            "total": round(total, 2),
+        })
+
+    gst_amount = round(subtotal * gst_percent / 100.0, 2)
+    grand_total = round(subtotal + gst_amount, 2)
+    order_number = await next_sequence("order", "ORD", 6)
+    oid = new_id()
+    order = {
+        "id": oid,
+        "order_number": order_number,
+        "user_id": user["id"],
+        "distributor_id": user.get("distributor_id"),
+        "items": line_items,
+        "subtotal": round(subtotal, 2),
+        "gst_percent": gst_percent,
+        "gst_amount": gst_amount,
+        "total": grand_total,
+        "currency": settings.get("currency", "INR"),
+        "address": body.address.model_dump(),
+        "is_activation_order": is_activation_order,
+        "status": "payment_pending",  # pending, payment_pending, paid, processing, packed, shipped, delivered, cancelled, refunded
+        "payment_status": "pending",
+        "invoice_number": None,
+        "created_at": now_iso(), "updated_at": now_iso(),
+    }
+    await db.orders.insert_one(dict(order))
+    await log_audit(user, "order_created", "order", oid, new_value={"total": grand_total}, request=request)
+    order.pop("_id", None)
+    return order
+
+
+@router.get("/orders")
+async def my_orders(user: dict = Depends(get_current_user)):
+    return await db.orders.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(200)
+
+
+@router.get("/orders/{order_id}")
+async def get_order(order_id: str, user: dict = Depends(get_current_user)):
+    o = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not o:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    if o["user_id"] != user["id"] and user.get("role") not in ("admin", "super_admin", "accounts_admin", "support_admin"):
+        raise HTTPException(status_code=403, detail="Access denied.")
+    return o
+
+
+# ---------------- Payments ----------------
+class CheckoutBody(BaseModel):
+    order_id: str
+    origin_url: str
+
+
+def _stripe(request: Request) -> StripeCheckout:
+    host = str(request.base_url)
+    webhook_url = f"{host}api/webhook/stripe"
+    return StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
+
+
+@router.post("/payments/checkout")
+async def create_checkout(body: CheckoutBody, request: Request, user: dict = Depends(get_current_user)):
+    order = await db.orders.find_one({"id": body.order_id}, {"_id": 0})
+    if not order or order["user_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    if order["payment_status"] == "paid":
+        raise HTTPException(status_code=400, detail="This order is already paid.")
+
+    amount = float(order["total"])  # server-side amount, never from client
+    success_url = f"{body.origin_url}/payment/success?session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{body.origin_url}/payment/cancel"
+    sc = _stripe(request)
+    req = CheckoutSessionRequest(
+        amount=amount, currency=(order.get("currency") or "INR").lower(),
+        success_url=success_url, cancel_url=cancel_url,
+        metadata={"order_id": order["id"], "user_id": user["id"]},
+    )
+    session = await sc.create_checkout_session(req)
+
+    await db.payment_transactions.insert_one({
+        "id": new_id(),
+        "session_id": session.session_id,
+        "order_id": order["id"],
+        "user_id": user["id"],
+        "amount": amount,
+        "currency": order.get("currency", "INR"),
+        "status": "initiated",
+        "payment_status": "pending",
+        "created_at": now_iso(), "updated_at": now_iso(),
+    })
+    await db.orders.update_one({"id": order["id"]},
+                               {"$set": {"stripe_session_id": session.session_id, "updated_at": now_iso()}})
+    return {"checkout_url": session.url, "session_id": session.session_id}
+
+
+async def _process_paid_order(session_id: str, request: Request = None):
+    """Idempotent: mark order paid, generate invoice, run GREEN activation + referral commission."""
+    tx = await db.payment_transactions.find_one({"session_id": session_id})
+    if not tx:
+        return
+    order = await db.orders.find_one({"id": tx["order_id"]})
+    if not order:
+        return
+    if order.get("payment_status") == "paid":
+        return  # already processed
+
+    settings = await get_settings()
+    invoice_number = await next_sequence("invoice", "INV", 6)
+    await db.orders.update_one(
+        {"id": order["id"], "payment_status": {"$ne": "paid"}},
+        {"$set": {"payment_status": "paid", "status": "processing",
+                  "invoice_number": invoice_number, "paid_at": now_iso(), "updated_at": now_iso()}},
+    )
+    await db.payment_transactions.update_one(
+        {"session_id": session_id},
+        {"$set": {"status": "completed", "payment_status": "paid", "updated_at": now_iso()}},
+    )
+
+    user = await db.users.find_one({"id": order["user_id"]})
+    if not user:
+        return
+    await create_notification(user["id"], "payment_success", "Payment successful",
+                              f"Payment received for order {order['order_number']}. Invoice {invoice_number} generated.",
+                              "भुगतान सफल",
+                              f"ऑर्डर {order['order_number']} का भुगतान प्राप्त हुआ। इनवॉइस {invoice_number} बन गया।")
+
+    # ---- GREEN activation ----
+    activation_amount = float(settings.get("activation_amount", 1500.0))
+    qualifies = order.get("is_activation_order") and float(order["total"]) >= activation_amount
+    if qualifies and user.get("status") == "red":
+        await db.users.update_one(
+            {"id": user["id"], "status": "red"},
+            {"$set": {"status": "green", "activation_date": now_iso(),
+                      "activation_order_id": order["id"], "activation_amount": order["total"],
+                      "updated_at": now_iso()}},
+        )
+        await db.activation_records.insert_one({
+            "id": new_id(), "user_id": user["id"], "distributor_id": user.get("distributor_id"),
+            "order_id": order["id"], "amount": order["total"], "status": "activated",
+            "activation_date": now_iso(), "created_at": now_iso(),
+        })
+        await db.wallets.update_one({"user_id": user["id"]}, {"$set": {"active": True, "updated_at": now_iso()}})
+        await create_notification(user["id"], "activation", "Your account is now GREEN",
+                                  "Congratulations! Your distributor account is activated. Income & referrals unlocked.",
+                                  "आपका खाता अब ग्रीन है",
+                                  "बधाई हो! आपका डिस्ट्रीब्यूटर खाता सक्रिय हो गया है। आय और रेफ़रल अनलॉक।")
+        await log_audit(None, "green_activation", "user", user["id"],
+                        old_value={"status": "red"}, new_value={"status": "green"}, request=request)
+
+        # ---- Referral commission (idempotent) ----
+        rel = await db.referral_relationships.find_one({"referred_user_id": user["id"]})
+        if rel and not rel.get("commission_paid"):
+            sponsor = await db.users.find_one({"id": rel["sponsor_id"]})
+            commission_amount = float(settings.get("referral_commission", 100.0))
+            if sponsor and sponsor.get("status") == "green":
+                # guard: no existing commission for this referred user
+                existing = await db.commissions.find_one({"referred_user_id": user["id"],
+                                                          "type": "REFERRAL_COMMISSION"})
+                if not existing:
+                    marked = await db.referral_relationships.update_one(
+                        {"id": rel["id"], "commission_paid": {"$ne": True}},
+                        {"$set": {"commission_paid": True, "commission_paid_at": now_iso()}},
+                    )
+                    if marked.modified_count == 1:
+                        comm = {
+                            "id": new_id(), "sponsor_id": sponsor["id"],
+                            "sponsor_distributor_id": sponsor.get("distributor_id"),
+                            "referred_user_id": user["id"],
+                            "referred_distributor_id": user.get("distributor_id"),
+                            "type": "REFERRAL_COMMISSION", "amount": commission_amount,
+                            "reference_order_id": order["id"], "status": "CREDITED",
+                            "description": f"Referral commission for activation of {user.get('distributor_id')}",
+                            "created_at": now_iso(),
+                        }
+                        await db.commissions.insert_one(dict(comm))
+                        await add_wallet_transaction(
+                            sponsor["id"], "REFERRAL_COMMISSION", commission_amount, "CREDITED",
+                            reference=order["id"],
+                            description=f"Referral commission: {user.get('distributor_id')} activated",
+                            direction="credit",
+                        )
+                        await create_notification(
+                            sponsor["id"], "commission",
+                            f"You earned {settings.get('currency_symbol','₹')}{int(commission_amount)}",
+                            f"Referral commission credited for activation of {user.get('distributor_id')}.",
+                            f"आपने {settings.get('currency_symbol','₹')}{int(commission_amount)} कमाए",
+                            f"{user.get('distributor_id')} के सक्रिय होने पर रेफ़रल कमीशन क्रेडिट हुआ।")
+                        await log_audit(None, "commission_credited", "commission", comm["id"],
+                                        new_value={"amount": commission_amount, "sponsor": sponsor.get("distributor_id")},
+                                        request=request)
+
+
+@router.get("/payments/status/{session_id}")
+async def payment_status(session_id: str, request: Request):
+    tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Transaction not found.")
+    if tx.get("payment_status") != "paid":
+        try:
+            sc = _stripe(request)
+            status = await sc.get_checkout_status(session_id)
+            if status.payment_status == "paid" or status.status == "complete":
+                await _process_paid_order(session_id, request)
+                tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
+        except Exception as e:
+            print(f"[payment_status] error: {e}")
+    return {"session_id": tx["session_id"], "status": tx["status"],
+            "payment_status": tx["payment_status"], "order_id": tx.get("order_id")}
+
+
+@router.post("/webhook/stripe")
+async def stripe_webhook(request: Request):
+    body = await request.body()
+    sig = request.headers.get("Stripe-Signature", "")
+    try:
+        sc = _stripe(request)
+        resp = await sc.handle_webhook(body, sig)
+    except Exception as e:
+        print(f"[webhook] error: {e}")
+        raise HTTPException(status_code=400, detail="Invalid webhook")
+    if resp.payment_status == "paid" and resp.session_id:
+        await _process_paid_order(resp.session_id, request)
+    return {"status": "ok"}
