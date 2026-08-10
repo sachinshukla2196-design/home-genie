@@ -3,6 +3,7 @@ import os
 import uuid
 import jwt
 import bcrypt
+import httpx
 import logging
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
@@ -237,3 +238,47 @@ async def log_audit(user: Optional[dict], action: str, entity: str, entity_id: s
         "created_at": now_iso(),
     }
     await db.audit_logs.insert_one(dict(rec))
+
+
+# ---------- email (Emergent managed Resend) ----------
+EMAIL_BASE_URL = "https://integrations.emergentagent.com"
+EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY")
+EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "Anjali Herbal Life Ayurveda")
+
+
+async def send_email(to: str, subject: str, html: str) -> bool:
+    if not EMAIL_KEY:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{EMAIL_BASE_URL}/api/v1/email/send",
+                headers={"X-Email-Key": EMAIL_KEY},
+                json={"to": [to], "subject": subject, "html": html, "from_name": EMAIL_FROM_NAME},
+            )
+        resp.raise_for_status()
+        return True
+    except Exception as e:
+        logger.error(f"email send failed: {e}")
+        return False
+
+
+def email_shell(title: str, body_html: str) -> str:
+    return f"""
+<table width="100%" cellpadding="0" cellspacing="0" style="background:#F7F9F7;padding:32px 0;font-family:Arial,Helvetica,sans-serif;">
+  <tr><td align="center">
+    <table width="480" cellpadding="0" cellspacing="0" style="background:#ffffff;border:1px solid #EAF5ED;border-radius:16px;overflow:hidden;">
+      <tr><td style="background:#0B4D2E;padding:22px 28px;">
+        <span style="color:#F6EFD5;font-size:18px;font-weight:bold;">Anjali <span style="color:#C9A227;">Herbal Life</span></span>
+        <div style="color:rgba(255,255,255,0.6);font-size:10px;letter-spacing:2px;">AYURVEDA INDIA LLP</div>
+      </td></tr>
+      <tr><td style="padding:32px 28px;">
+        <h2 style="color:#17201B;margin:0 0 12px;font-size:20px;">{title}</h2>
+        {body_html}
+      </td></tr>
+      <tr><td style="padding:18px 28px;background:#EAF5ED;color:#66736B;font-size:12px;">
+        © Anjali Herbal Life Ayurveda India LLP
+      </td></tr>
+    </table>
+  </td></tr>
+</table>"""

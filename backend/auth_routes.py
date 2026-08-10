@@ -7,7 +7,7 @@ from typing import Optional
 
 from core import (db, now_iso, new_id, hash_password, verify_password, create_token,
                   clean_user, get_current_user, next_distributor_id, get_or_create_wallet,
-                  create_notification, log_audit)
+                  create_notification, log_audit, send_email, email_shell)
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -57,7 +57,14 @@ async def send_otp(body: SendOtp, request: Request):
         "purpose": "register", "verified": False, "created_at": now_iso(),
     })
     print(f"[OTP] register {email} -> {code}")
-    return {"message": "OTP sent to your email and mobile.", "dev_otp": code}
+    html = email_shell("Verify your email", f"""
+      <p style="color:#66736B;font-size:14px;">Use the code below to complete your Anjali Herbal Life registration. It is valid for a short time.</p>
+      <div style="margin:20px 0;text-align:center;">
+        <span style="display:inline-block;background:#EAF5ED;color:#0B4D2E;font-size:30px;font-weight:bold;letter-spacing:8px;padding:14px 24px;border-radius:12px;">{code}</span>
+      </div>
+      <p style="color:#66736B;font-size:12px;">If you didn't request this, you can ignore this email.</p>""")
+    sent = await send_email(email, "Your Anjali Herbal Life OTP", html)
+    return {"message": "OTP sent to your email.", "email_sent": sent, "dev_otp": code}
 
 
 @router.post("/register")

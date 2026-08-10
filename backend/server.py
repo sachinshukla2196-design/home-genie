@@ -10,6 +10,7 @@ import auth_routes
 import shop_routes
 import wallet_routes
 import admin_routes
+from demo_seed import seed_demo
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -140,6 +141,12 @@ async def startup():
         await db.users.update_one({"email": admin_email},
                                   {"$set": {"password_hash": hash_password(admin_password),
                                             "role": "super_admin"}})
+
+    # demo data (idempotent)
+    try:
+        await seed_demo()
+    except Exception as e:
+        logger.error(f"demo seed error: {e}")
 
 
 @app.on_event("shutdown")

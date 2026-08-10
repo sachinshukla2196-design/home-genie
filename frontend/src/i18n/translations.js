@@ -41,6 +41,9 @@ export const translations = {
     "auth.noAccount": "Don't have an account?", "auth.haveAccount": "Already have an account?",
     "auth.otpSent": "OTP sent to your email & mobile",
     "auth.devOtp": "Demo OTP (email delivery is simulated)",
+    "auth.tryDemo": "or try a demo",
+    "auth.demoDistributor": "Distributor Demo",
+    "auth.demoAdmin": "Admin Demo",
 
     "status.red": "RED ID", "status.green": "GREEN ID",
     "status.redDesc": "Registered — not activated yet", "status.greenDesc": "Activated distributor",
@@ -137,6 +140,9 @@ export const translations = {
     "auth.noAccount": "खाता नहीं है?", "auth.haveAccount": "पहले से खाता है?",
     "auth.otpSent": "आपके ईमेल और मोबाइल पर ओटीपी भेजा गया",
     "auth.devOtp": "डेमो ओटीपी (ईमेल डिलीवरी सिम्युलेटेड है)",
+    "auth.tryDemo": "या डेमो आज़माएँ",
+    "auth.demoDistributor": "डिस्ट्रीब्यूटर डेमो",
+    "auth.demoAdmin": "एडमिन डेमो",
 
     "status.red": "रेड आईडी", "status.green": "ग्रीन आईडी",
     "status.redDesc": "रजिस्टर्ड — अभी सक्रिय नहीं", "status.greenDesc": "सक्रिय डिस्ट्रीब्यूटर",
