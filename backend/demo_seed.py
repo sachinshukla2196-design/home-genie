@@ -1,12 +1,13 @@
 """Idempotent demo data: a GREEN sponsor with a small referral network,
 orders, wallet ledger, commissions, KYC, and a pending withdrawal — so the
 dashboards, reports and admin panel are populated for testing."""
+import os
 from datetime import datetime, timezone, timedelta
 from core import (db, now_iso, new_id, hash_password, next_distributor_id, next_sequence,
                   get_or_create_wallet, add_wallet_transaction, create_notification, logger)
 
 DEMO_SPONSOR_EMAIL = "demo.distributor@anjaliherballife.in"
-DEMO_PASSWORD = "Demo@1234"
+DEMO_PASSWORD = os.getenv("DEMO_PASSWORD", "Demo@1234")
 
 
 def days_ago(n):

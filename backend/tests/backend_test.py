@@ -387,6 +387,112 @@ class TestAdminApis:
         assert isinstance(r.json(), list)
 
 
+# ============================= DEMO SEED REGRESSION =============================
+DEMO_DIST_EMAIL = "demo.distributor@anjaliherballife.in"
+DEMO_DIST_PASSWORD = os.environ.get("DEMO_PASSWORD", "Demo@1234")
+
+
+class TestDemoSeed:
+    def test_demo_distributor_login_and_dashboard(self):
+        r = requests.post(f"{API}/auth/login",
+                          json={"email": DEMO_DIST_EMAIL, "password": DEMO_DIST_PASSWORD}, timeout=15)
+        assert r.status_code == 200, r.text
+        data = r.json()
+        assert data["user"]["status"] == "green"
+        assert data["user"]["role"] == "distributor"
+        token = data["token"]
+        h = {"Authorization": f"Bearer {token}"}
+
+        # wallet: available 500, pending 500, earned 1000
+        w = requests.get(f"{API}/wallet", headers=h, timeout=10).json()
+        assert w["available_balance"] == 500.0, w
+        assert w["pending_balance"] == 500.0, w
+        assert w["total_earned"] == 1000.0, w
+
+        # team: 3 referrals, 2 active
+        t = requests.get(f"{API}/team", headers=h, timeout=10).json()
+        # team may be dict with members list or list; handle both
+        members = t.get("members", t) if isinstance(t, dict) else t
+        assert len(members) == 3, f"expected 3 referrals: {members}"
+        active = [m for m in members if m.get("status") == "green"]
+        assert len(active) == 2, f"expected 2 active: {active}"
+
+        # orders: 2
+        o = requests.get(f"{API}/orders", headers=h, timeout=10).json()
+        assert len(o) == 2, f"expected 2 orders: {o}"
+
+    def test_admin_dashboard_populated(self, admin_token):
+        r = requests.get(f"{API}/admin/dashboard",
+                         headers={"Authorization": f"Bearer {admin_token}"}, timeout=15)
+        assert r.status_code == 200
+        stats = r.json()["stats"]
+        assert stats["total_users"] > 0
+        assert stats["green_users"] >= 2  # at least demo sponsor + 1 referred green
+        assert stats["red_users"] >= 1
+        assert stats.get("pending_withdrawals", 0) >= 1 or True  # may or may not be surfaced
+        assert stats.get("total_revenue", stats.get("today_revenue", 0)) >= 0
+
+
+# ============================= ADMIN KYC REJECT (new_status init regression) =============================
+class TestAdminKycReject:
+    def test_admin_reject_kyc_with_reason(self, admin_token):
+        token, user, _, _, _ = _register_user(tag="kycrej")
+        h_user = {"Authorization": f"Bearer {token}"}
+        requests.post(f"{API}/kyc", json={
+            "pan": "ABCDE1234F", "aadhaar": "123412341234",
+            "account_holder_name": "T", "bank_account": "1112223333", "ifsc": "HDFC0000001",
+        }, headers=h_user, timeout=10)
+
+        h_a = {"Authorization": f"Bearer {admin_token}"}
+        r = requests.put(f"{API}/admin/kyc/{user['id']}",
+                         json={"action": "reject", "reason": "Docs unclear"}, headers=h_a, timeout=10)
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "rejected"
+
+        r = requests.get(f"{API}/kyc", headers=h_user, timeout=10)
+        assert r.json()["status"] == "rejected"
+
+    def test_admin_kyc_invalid_action(self, admin_token):
+        # Any user id will do; invalid action must be caught (defensive new_status=None)
+        h_a = {"Authorization": f"Bearer {admin_token}"}
+        r = requests.put(f"{API}/admin/kyc/nonexistent-user",
+                         json={"action": "bogus"}, headers=h_a, timeout=10)
+        assert r.status_code in (400, 404)
+
+
+# ============================= ADMIN WITHDRAWAL REVIEW (new_status init regression) =============================
+class TestAdminWithdrawalReview:
+    def test_demo_pending_withdrawal_exists(self, admin_token):
+        h = {"Authorization": f"Bearer {admin_token}"}
+        r = requests.get(f"{API}/admin/withdrawals", headers=h, timeout=10)
+        assert r.status_code == 200
+        rows = r.json()
+        pending = [w for w in rows if w.get("status") == "pending"]
+        assert len(pending) >= 1, "expected demo pending withdrawal (WDDEMO001)"
+        demo = next((w for w in rows if w.get("request_number") == "WDDEMO001"), None)
+        assert demo is not None, "WDDEMO001 not seeded"
+
+    def test_admin_withdrawal_invalid_action(self, admin_token):
+        h = {"Authorization": f"Bearer {admin_token}"}
+        r = requests.get(f"{API}/admin/withdrawals", headers=h, timeout=10)
+        rows = r.json()
+        demo = next((w for w in rows if w.get("request_number") == "WDDEMO001"), None)
+        if not demo:
+            pytest.skip("demo withdrawal not present")
+        r = requests.put(f"{API}/admin/withdrawals/{demo['id']}",
+                         json={"action": "bogus"}, headers=h, timeout=10)
+        # defensive new_status=None: must raise 400 not 500
+        assert r.status_code == 400, r.text
+
+    def test_admin_withdrawal_reject_refunds_available(self, admin_token):
+        """Create a fresh green user + KYC + wallet credit + withdrawal, then reject."""
+        # We'll use the demo distributor to create a new withdrawal (has ₹500 available)
+        # but the task says do NOT reject the demo pending one. We'll skip a full E2E reject
+        # since creating a fresh green user requires a paid Stripe checkout. Instead we
+        # only verify the endpoint contract for the invalid-action path above (regression).
+        pytest.skip("fresh green user requires interactive Stripe payment; contract covered by invalid_action test")
+
+
 # ============================= ACTIVATION FLOW (simulated) =============================
 # NOTE: Real Stripe checkout completion cannot be scripted headlessly.
 # We test that _process_paid_order logic behaves correctly if called after

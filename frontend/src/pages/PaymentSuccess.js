@@ -27,12 +27,13 @@ export default function PaymentSuccess() {
         setOrderId(data.order_id);
         if (data.payment_status === "paid") { setState("paid"); await refresh(); return; }
         if (data.payment_status === "failed" || data.payment_status === "expired") { setState("failed"); return; }
-      } catch { /* keep polling */ }
+      } catch (err) { console.error("payment status poll failed", err); }
       if (attempts.current >= 12) { setState("failed"); return; }
       timer = setTimeout(poll, 2000);
     };
     poll();
     return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
   return (

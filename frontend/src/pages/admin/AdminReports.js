@@ -45,7 +45,7 @@ export default function AdminReports() {
             <thead><tr className="border-b border-brand-50 text-left text-muted2">{data.fields.map((f) => <th key={f} className="p-3 capitalize">{f.replace(/_/g, " ")}</th>)}</tr></thead>
             <tbody>
               {data.rows.slice(0, 200).map((row, i) => (
-                <tr key={i} className="border-b border-brand-50/60" data-testid={`report-row-${i}`}>
+                <tr key={row.id || row.session_id || row.order_number || row.request_number || `row-${i}`} className="border-b border-brand-50/60" data-testid={`report-row-${i}`}>
                   {data.fields.map((f) => <td key={f} className="p-3 text-ink">{String(row[f] ?? "—").slice(0, 40)}</td>)}
                 </tr>
               ))}

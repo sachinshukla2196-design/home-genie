@@ -29,7 +29,7 @@ export function AuthProvider({ children }) {
   };
 
   const logout = async () => {
-    try { await API.post("/auth/logout"); } catch {}
+    try { await API.post("/auth/logout"); } catch (e) { console.error("logout error", e); }
     localStorage.removeItem("anj_token");
     setUser(false);
   };

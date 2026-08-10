@@ -192,6 +192,7 @@ async def review_kyc(user_id: str, body: KycReview, request: Request, admin: dic
     k = await db.kyc_records.find_one({"user_id": user_id}, {"_id": 0})
     if not k:
         raise HTTPException(status_code=404, detail="KYC record not found.")
+    new_status = None
     if body.action == "verify":
         new_status = "verified"
     elif body.action == "reject":
@@ -235,6 +236,7 @@ async def review_withdrawal(wd_id: str, body: WithdrawalReview, request: Request
     settings = await get_settings()
     sym = settings.get("currency_symbol", "₹")
 
+    new_status = None
     if body.action == "approve":
         new_status = "approved"
     elif body.action == "mark_paid":
