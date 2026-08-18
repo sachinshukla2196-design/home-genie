@@ -493,6 +493,60 @@ class TestAdminWithdrawalReview:
         pytest.skip("fresh green user requires interactive Stripe payment; contract covered by invalid_action test")
 
 
+# ============================= PROFILE PHOTO =============================
+class TestProfilePhoto:
+    def test_update_photo_data_uri_and_me_reflects(self):
+        token, _, _, _, _ = _register_user(tag="ph")
+        h = {"Authorization": f"Bearer {token}"}
+        # 1x1 transparent PNG
+        photo = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABAQAAAAA6fptVAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
+        r = requests.put(f"{API}/auth/profile/photo", json={"photo": photo}, headers=h, timeout=10)
+        assert r.status_code == 200, r.text
+        assert r.json()["photo"] == photo
+        r = requests.get(f"{API}/auth/me", headers=h, timeout=10)
+        assert r.status_code == 200 and r.json()["photo"] == photo
+
+    def test_update_photo_http_url_ok(self):
+        token, _, _, _, _ = _register_user(tag="phurl")
+        h = {"Authorization": f"Bearer {token}"}
+        r = requests.put(f"{API}/auth/profile/photo",
+                         json={"photo": "https://example.com/x.jpg"}, headers=h, timeout=10)
+        assert r.status_code == 200
+
+    def test_update_photo_invalid_string_rejected(self):
+        token, _, _, _, _ = _register_user(tag="phbad")
+        h = {"Authorization": f"Bearer {token}"}
+        r = requests.put(f"{API}/auth/profile/photo",
+                         json={"photo": "notanimage"}, headers=h, timeout=10)
+        assert r.status_code == 400
+
+    def test_update_photo_too_large_rejected(self):
+        token, _, _, _, _ = _register_user(tag="phbig")
+        h = {"Authorization": f"Bearer {token}"}
+        big = "data:image/png;base64," + ("A" * 4_000_001)
+        r = requests.put(f"{API}/auth/profile/photo", json={"photo": big}, headers=h, timeout=15)
+        assert r.status_code == 400
+
+    def test_photo_unauthenticated_rejected(self):
+        r = requests.put(f"{API}/auth/profile/photo",
+                         json={"photo": "https://example.com/x.jpg"}, timeout=10)
+        assert r.status_code == 401
+
+    def test_demo_distributor_has_photo_and_team_photos(self):
+        r = requests.post(f"{API}/auth/login",
+                          json={"email": DEMO_DIST_EMAIL, "password": DEMO_DIST_PASSWORD}, timeout=15)
+        assert r.status_code == 200
+        token = r.json()["token"]
+        me = r.json()["user"]
+        assert me.get("photo"), "demo distributor should have a photo"
+        h = {"Authorization": f"Bearer {token}"}
+        t = requests.get(f"{API}/team", headers=h, timeout=10).json()
+        assert t.get("root", {}).get("photo"), "team root should have photo"
+        members = t.get("members", [])
+        with_photo = [m for m in members if m.get("photo")]
+        assert len(with_photo) == 3, f"all 3 members should have photos, got {len(with_photo)}"
+
+
 # ============================= ACTIVATION FLOW (simulated) =============================
 # NOTE: Real Stripe checkout completion cannot be scripted headlessly.
 # We test that _process_paid_order logic behaves correctly if called after

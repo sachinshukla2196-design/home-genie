@@ -62,3 +62,18 @@ body {
     background: rgba(255,255,255,0.82);
     border-bottom: 1px solid rgba(11,77,46,0.08);
 }
+
+@layer components {
+    .btn-grad {
+        background-image: linear-gradient(135deg, #176B43 0%, #0B4D2E 100%);
+        color: #fff;
+        box-shadow: 0 8px 20px -6px rgba(11,77,46,0.45);
+    }
+    .btn-grad:hover { filter: brightness(1.08); box-shadow: 0 10px 26px -6px rgba(11,77,46,0.55); }
+    .btn-gold {
+        background-image: linear-gradient(135deg, #D8B43A 0%, #C9A227 100%);
+        color: #0B4D2E;
+        box-shadow: 0 8px 20px -6px rgba(201,162,39,0.5);
+    }
+    .btn-gold:hover { filter: brightness(1.05); }
+}

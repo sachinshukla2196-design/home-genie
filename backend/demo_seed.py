@@ -14,7 +14,7 @@ def days_ago(n):
     return (datetime.now(timezone.utc) - timedelta(days=n)).isoformat()
 
 
-async def _make_user(name, email, status, sponsor=None, created=None):
+async def _make_user(name, email, status, sponsor=None, created=None, photo=None):
     did = await next_distributor_id()
     uid = new_id()
     doc = {
@@ -24,7 +24,7 @@ async def _make_user(name, email, status, sponsor=None, created=None):
         "sponsor_id": sponsor["distributor_id"] if sponsor else None,
         "sponsor_user_id": sponsor["id"] if sponsor else None,
         "address": "12 Wellness Road", "state": "Maharashtra", "city": "Pune", "pincode": "411001",
-        "kyc_status": "not_started", "activation_date": None, "activation_order_id": None, "activation_amount": None,
+        "photo": photo, "kyc_status": "not_started", "activation_date": None, "activation_order_id": None, "activation_amount": None,
         "created_at": created or now_iso(), "updated_at": created or now_iso(),
     }
     await db.users.insert_one(dict(doc))
@@ -72,7 +72,8 @@ async def seed_demo():
         return
     logger.info("Seeding demo data...")
 
-    sponsor = await _make_user("Anjali Demo Distributor", DEMO_SPONSOR_EMAIL, "red", created=days_ago(20))
+    sponsor = await _make_user("Anjali Demo Distributor", DEMO_SPONSOR_EMAIL, "red", created=days_ago(20),
+                               photo="https://images.unsplash.com/photo-1655249493799-9cee4fe983bb?crop=faces&fit=crop&w=400&h=400&q=80")
     await _activation_order(sponsor, days_ago(20))
     sponsor = await db.users.find_one({"id": sponsor["id"]}, {"_id": 0})
 
@@ -87,12 +88,12 @@ async def seed_demo():
 
     # referral network: 2 GREEN (commission), 1 RED (no commission)
     refs = [
-        ("Ravi Kumar", "ravi.demo@anjaliherballife.in", "green", days_ago(12)),
-        ("Priya Sharma", "priya.demo@anjaliherballife.in", "green", days_ago(1)),
-        ("Amit Patel", "amit.demo@anjaliherballife.in", "red", days_ago(3)),
+        ("Ravi Kumar", "ravi.demo@anjaliherballife.in", "green", days_ago(12), "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?crop=faces&fit=crop&w=400&h=400&q=80"),
+        ("Priya Sharma", "priya.demo@anjaliherballife.in", "green", days_ago(1), "https://images.unsplash.com/photo-1609436132311-e4b0c9370469?crop=faces&fit=crop&w=400&h=400&q=80"),
+        ("Amit Patel", "amit.demo@anjaliherballife.in", "red", days_ago(3), "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?crop=faces&fit=crop&w=400&h=400&q=80"),
     ]
-    for name, email, status, created in refs:
-        ru = await _make_user(name, email, "red", sponsor=sponsor, created=created)
+    for name, email, status, created, photo in refs:
+        ru = await _make_user(name, email, "red", sponsor=sponsor, created=created, photo=photo)
         await db.referral_relationships.insert_one({
             "id": new_id(), "sponsor_id": sponsor["id"], "sponsor_distributor_id": sponsor["distributor_id"],
             "referred_user_id": ru["id"], "referred_distributor_id": ru["distributor_id"],
@@ -131,4 +132,8 @@ async def seed_demo():
                               "This account is pre-loaded with sample income, orders and a team so you can explore.",
                               "आपके डेमो खाते में स्वागत है",
                               "यह खाता नमूना आय, ऑर्डर और टीम के साथ पहले से लोड है ताकि आप एक्सप्लोर कर सकें।")
+    # deterministic wallet snapshot for the demo (avoids drift on re-runs / test activity)
+    await db.wallets.update_one({"user_id": sponsor["id"]}, {"$set": {
+        "available_balance": 500.0, "pending_balance": 500.0, "total_earned": 1000.0,
+        "total_withdrawn": 500.0, "active": True, "updated_at": now_iso()}})
     logger.info("Demo data seeded.")

@@ -57,7 +57,7 @@ export default function Landing() {
             </h1>
             <p className="mt-5 max-w-xl text-base leading-relaxed text-muted2">{t("landing.heroSub")}</p>
             <div className="mt-8 flex flex-wrap gap-3">
-              <Button onClick={() => navigate("/register")} size="lg" className="group rounded-full bg-forest px-7 hover:bg-brand" data-testid="hero-register-btn">
+              <Button onClick={() => navigate("/register")} size="lg" className="group rounded-full btn-grad px-7" data-testid="hero-register-btn">
                 {t("cta.getStarted")} <ArrowRight size={17} className="ml-1.5 transition-transform group-hover:translate-x-1" />
               </Button>
               <Button onClick={() => navigate("/login")} size="lg" variant="outline" className="rounded-full border-forest/20 px-7 text-forest hover:bg-brand-50" data-testid="hero-login-btn">{t("cta.login")}</Button>

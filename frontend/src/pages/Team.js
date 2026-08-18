@@ -86,7 +86,9 @@ function NodeCard({ node, index }) {
       data-testid={`node-${node.distributor_id}`}
     >
       {node.isRoot && <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 rounded-full bg-gold px-2 py-0.5 text-[9px] font-bold text-forest"><Crown size={10} className="mr-0.5 inline" />YOU</span>}
-      <div className={`mx-auto flex h-12 w-12 items-center justify-center rounded-full font-display text-base font-bold text-white ${green ? "bg-forest" : "bg-danger"}`}>{initials}</div>
+      {node.photo
+        ? <img src={node.photo} alt="" className={`mx-auto h-12 w-12 rounded-full object-cover ring-2 ${green ? "ring-brand" : "ring-danger"}`} />
+        : <div className={`mx-auto flex h-12 w-12 items-center justify-center rounded-full font-display text-base font-bold text-white ${green ? "bg-forest" : "bg-danger"}`}>{initials}</div>}
       <div className="mt-2 truncate text-sm font-semibold text-ink">{node.full_name}</div>
       <div className="text-xs font-medium text-forest">{node.distributor_id}</div>
       <div className="mt-2 flex items-center justify-center gap-1.5">
@@ -109,7 +111,14 @@ function ListView({ members, t }) {
         <tbody>
           {members.map((m) => (
             <tr key={m.distributor_id} className="border-b border-brand-50/60" data-testid={`team-row-${m.distributor_id}`}>
-              <td className="p-4 font-medium text-ink">{m.full_name}</td>
+              <td className="p-4">
+                <div className="flex items-center gap-2.5">
+                  {m.photo
+                    ? <img src={m.photo} alt="" className="h-8 w-8 rounded-full object-cover" />
+                    : <div className="flex h-8 w-8 items-center justify-center rounded-full bg-forest text-[10px] font-bold text-white">{(m.full_name || "U").slice(0, 2).toUpperCase()}</div>}
+                  <span className="font-medium text-ink">{m.full_name}</span>
+                </div>
+              </td>
               <td className="p-4 text-forest">{m.distributor_id}</td>
               <td className="p-4"><StatusBadge status={m.status} size="sm" /></td>
               <td className="p-4 text-muted2">{m.downline_count ?? 0}</td>

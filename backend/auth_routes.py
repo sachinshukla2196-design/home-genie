@@ -165,6 +165,23 @@ async def me(user: dict = Depends(get_current_user)):
     return clean_user(user)
 
 
+class PhotoBody(BaseModel):
+    photo: str = ""
+
+
+@router.put("/profile/photo")
+async def update_photo(body: PhotoBody, request: Request, user: dict = Depends(get_current_user)):
+    photo = (body.photo or "").strip()
+    if photo and not (photo.startswith("data:image/") or photo.startswith("http")):
+        raise HTTPException(status_code=400, detail="Invalid image format.")
+    if len(photo) > 4_000_000:
+        raise HTTPException(status_code=400, detail="Image too large. Please choose a smaller photo.")
+    await db.users.update_one({"id": user["id"]}, {"$set": {"photo": photo, "updated_at": now_iso()}})
+    await log_audit(user, "profile_photo_updated", "user", user["id"], request=request)
+    updated = await db.users.find_one({"id": user["id"]})
+    return clean_user(updated)
+
+
 @router.post("/logout")
 async def logout(user: dict = Depends(get_current_user), request: Request = None):
     await log_audit(user, "logout", "user", user["id"], request=request)

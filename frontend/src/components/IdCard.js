@@ -13,6 +13,7 @@ export function IdCard({ user }) {
   const green = user?.status === "green";
   const refLink = `${window.location.origin}/register?ref=${user?.distributor_id}`;
   const since = (user?.created_at || "").slice(0, 10) || "—";
+  const initials = (user?.full_name || "U").split(" ").map((x) => x[0]).slice(0, 2).join("").toUpperCase();
 
   useEffect(() => {
     QRCode.toDataURL(refLink, { margin: 1, width: 240, color: { dark: "#0B4D2E", light: "#ffffff" } })
@@ -86,12 +87,19 @@ export function IdCard({ user }) {
           </div>
 
           <div className="flex items-end justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-[9px] uppercase tracking-wider text-white/50">Distributor ID</div>
-              <div className="font-display text-2xl font-bold" style={{ color: "#F6EFD5" }}>{user?.distributor_id}</div>
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2.5">
+                {user?.photo
+                  ? <img src={user.photo} crossOrigin="anonymous" alt="" className="h-11 w-11 rounded-full object-cover ring-2 ring-gold" />
+                  : <div className="flex h-11 w-11 items-center justify-center rounded-full text-sm font-bold" style={{ background: "rgba(255,255,255,0.15)", color: "#F6EFD5" }}>{initials}</div>}
+                <div className="min-w-0">
+                  <div className="text-[9px] uppercase tracking-wider text-white/50">Distributor ID</div>
+                  <div className="font-display text-xl font-bold" style={{ color: "#F6EFD5" }}>{user?.distributor_id}</div>
+                </div>
+              </div>
               <div className="mt-2 text-[9px] uppercase tracking-wider text-white/50">Name</div>
               <div className="truncate text-sm font-semibold">{user?.full_name}</div>
-              <div className="mt-2 text-[10px] text-white/60">Member since {since}</div>
+              <div className="mt-1.5 text-[10px] text-white/60">Member since {since}</div>
             </div>
             {qr && (
               <div className="rounded-lg bg-white p-1.5">

@@ -13,7 +13,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useCart } from "@/context/CartContext";
 import { API } from "@/lib/api";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
 const NAV = [
   { to: "/app/dashboard", icon: LayoutDashboard, key: "nav.dashboard" },
@@ -118,6 +118,7 @@ export function AppLayout() {
             </Link>
             <Link to="/app/profile" data-testid="header-profile">
               <Avatar className="h-9 w-9 border border-brand-50">
+                <AvatarImage src={user?.photo} className="object-cover" />
                 <AvatarFallback className="bg-forest text-white text-xs font-semibold">
                   {(user?.full_name || "U").slice(0, 2).toUpperCase()}
                 </AvatarFallback>

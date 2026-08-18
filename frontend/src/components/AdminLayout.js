@@ -9,7 +9,7 @@ import { Logo } from "@/components/Logo";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
 const NAV = [
   { to: "/admin", icon: LayoutDashboard, key: "nav.dashboard" },
@@ -66,6 +66,7 @@ export function AdminLayout() {
           <div className="flex items-center gap-3">
             <LanguageSwitcher />
             <Avatar className="h-9 w-9 border border-white/20">
+              <AvatarImage src={user?.photo} className="object-cover" />
               <AvatarFallback className="bg-gold text-forest text-xs font-bold">{(user?.full_name || "AD").slice(0, 2).toUpperCase()}</AvatarFallback>
             </Avatar>
           </div>

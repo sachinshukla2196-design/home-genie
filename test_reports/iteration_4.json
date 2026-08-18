@@ -1,0 +1,52 @@
+{
+  "summary": "Launch-readiness regression + new profile-photo feature testing. Backend: 40/41 tests pass (1 skip, 1 minor demo-seed drift on wallet balance). Frontend: photo upload button/input present, profile avatar + ID card + team matrix (root + 3 nodes) + team list + header avatar + landing hero gradient button all render correctly with real photos. ID card Download/Share/Print click cleanly. Mobile 375px viewport: no horizontal overflow on landing/login/dashboard/team/profile. 0 console errors.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/wallet (demo distributor)", "issue": "Demo seed wallet drift: available_balance=0.0, pending_balance=1000.0 (expected 500 / 500 / earned 1000). WDDEMO001 pending withdrawal still present. Likely demo_seed.py re-ran the WITHDRAWAL PENDING entry twice or DEBITED entry never persisted. Demo distributor cannot demonstrate a fresh withdrawal request since available=0."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Investigate demo wallet drift: demo distributor now shows available=0 / pending=1000 instead of the documented 500/500. Either seed the wallet snapshot deterministically (upsert wallet doc directly) or make demo_seed idempotent so re-runs don't double-count the PENDING WITHDRAWAL entry. WDDEMO001 pending withdrawal itself is fine."
+  ],
+  "critical_code_review_comments": [
+    "backend/auth_routes.py PUT /profile/photo: 4MB check uses byte-length of the string, which for a base64 data URI overstates the actual image size by ~33%. Acceptable but consider decoding to check true byte size, and add server-side MIME sniffing to prevent HTML/JS smuggling in data:image/* URIs.",
+    "backend/auth_routes.py PUT /profile/photo: no audit log call — every other user mutation logs via log_audit; add for consistency.",
+    "frontend team testids differ from what iteration_3 report described: actual ids are 'node-ANJxxxxxx' (no 'team-' prefix) and 'team-view-matrix/list'. Not a bug, just an alignment note for future test scripts."
+  ],
+  "updated_files": [
+    "/app/backend/tests/backend_test.py (added TestProfilePhoto class with 6 tests)"
+  ],
+  "success_rate": {"backend": "40/41 pass, 1 skip (97.5%)", "frontend": "100%"},
+  "test_credentials": "Distributor demo: demo.distributor@anjaliherballife.in / Demo@1234; Admin: sachin.shukla2196@gmail.com / Admin@12345",
+  "seed_data_creation": "None. Test users created via TEST_ prefixed emails during pytest (photos + registrations). Demo distributor photo preserved (never overwritten).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Profile-photo endpoints work end-to-end. TeamMatrix testids: 'node-ANJxxxxxx' and 'team-view-matrix' / 'team-view-list'. Backend photo endpoint validates data:image/http prefix and 4MB length. Watch demo_seed idempotency if the wallet numbers matter for client demo — currently drifted to available=0/pending=1000.",
+  "verified_features": [
+    "PUT /api/auth/profile/photo accepts data:image data URI (200) and http URL (200)",
+    "PUT /api/auth/profile/photo rejects invalid string (400) and >4MB payload (400) and unauthenticated (401)",
+    "GET /api/auth/me returns updated photo",
+    "GET /api/team returns root.photo + all 3 members with photo",
+    "Profile page: avatar image + ID card image both render demo photo (data URI from ID card, unsplash for avatar)",
+    "ID card: Download/Share/Print buttons click without uncaught JS errors",
+    "Team /app/team Matrix (default): root node ANJ000018 + 3 child nodes (ANJ000019/20/21) all with circular photos",
+    "Team List view: rows with small avatar images; toggle works",
+    "Header top-right avatar image renders",
+    "Landing hero Get Started button uses gradient (btn-grad class); Login submit gradient",
+    "Mobile 375px: no horizontal overflow on landing/login/dashboard/team/profile",
+    "0 console errors across tested pages",
+    "Regression: admin login, admin dashboard, admin KYC verify/reject (with reason), admin withdrawal invalid-action returns 400, WDDEMO001 preserved, product CRUD, settings GET/PUT (restored), all 9 reports + CSV export, audit logs, users list",
+    "Regression: registration full flow (send-otp dev_otp -> register -> RED status), invalid OTP/sponsor/duplicate rejected, RED user cannot withdraw + wallet zero, referral relationship created even when sponsor is RED, KYC submit + masking + invalid PAN rejected",
+    "Regression: order creation (₹1500 + 5% GST = ₹1575), checkout URL, payment status polling"
+  ]
+}

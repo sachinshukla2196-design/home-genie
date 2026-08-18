@@ -55,13 +55,13 @@ async def team(user: dict = Depends(get_current_user)):
     for r in rels:
         u = await db.users.find_one({"id": r["referred_user_id"]},
                                     {"_id": 0, "full_name": 1, "distributor_id": 1, "status": 1,
-                                     "created_at": 1, "city": 1, "state": 1})
+                                     "created_at": 1, "city": 1, "state": 1, "photo": 1})
         if u:
             downline = await db.referral_relationships.count_documents({"sponsor_id": r["referred_user_id"]})
             out.append({**u, "commission_paid": r.get("commission_paid", False),
                         "joined_at": r.get("created_at"), "downline_count": downline})
     root = {"full_name": user.get("full_name"), "distributor_id": user.get("distributor_id"),
-            "status": user.get("status")}
+            "status": user.get("status"), "photo": user.get("photo")}
     return {"root": root, "members": out, "total": len(out),
             "active": sum(1 for m in out if m.get("status") == "green")}
 

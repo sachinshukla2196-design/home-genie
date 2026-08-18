@@ -69,7 +69,7 @@ export default function Login() {
               <Label className="text-sm text-ink">{t("auth.password")}</Label>
               <Input type="password" required value={password} onChange={(e) => setPassword(e.target.value)} className="mt-1.5 h-11 rounded-lg focus-visible:ring-brand" data-testid="login-password" />
             </div>
-            <Button type="submit" disabled={loading} className="h-11 w-full rounded-full bg-forest hover:bg-brand" data-testid="login-submit">
+            <Button type="submit" disabled={loading} className="h-11 w-full rounded-full btn-grad" data-testid="login-submit">
               {loading ? t("common.loading") : t("cta.login")}
             </Button>
           </form>
