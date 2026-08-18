@@ -202,14 +202,14 @@ async def mark_all_read(user: dict = Depends(get_current_user)):
 async def dashboard(user: dict = Depends(get_current_user)):
     settings = await get_settings()
     wallet = await get_or_create_wallet(user["id"])
-    orders = await db.orders.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(500)
-    total_orders = len(orders)
-    recent_orders = orders[:5]
+    total_orders = await db.orders.count_documents({"user_id": user["id"]})
+    recent_orders = await db.orders.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).limit(5).to_list(5)
 
     today = datetime.now(timezone.utc).date().isoformat()
     today_income = 0.0
     total_income = wallet["total_earned"]
-    commissions = await db.commissions.find({"sponsor_id": user["id"]}, {"_id": 0}).to_list(1000)
+    commissions = await db.commissions.find({"sponsor_id": user["id"]},
+                                             {"_id": 0, "amount": 1, "created_at": 1}).to_list(2000)
     for c in commissions:
         if (c.get("created_at") or "")[:10] == today:
             today_income += c.get("amount", 0.0)

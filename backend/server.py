@@ -29,6 +29,11 @@ async def health():
     return {"status": "ok"}
 
 
+@app.get("/health")
+async def health_root():
+    return {"status": "ok"}
+
+
 @app.get("/api/settings/public")
 async def public_settings():
     s = await get_settings()

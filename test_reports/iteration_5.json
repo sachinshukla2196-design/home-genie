@@ -1,0 +1,28 @@
+{
+  "summary": "Backend-only regression. Verified deployment health-probe fix and dashboard optimization. All 9 tests passed: /health (root, no /api prefix) returns 200 {'status':'ok'} on backend container (localhost:8001); /api/health returns 200; /api/dashboard for demo distributor returns stats.total_orders (int), <=5 recent_orders, wallet 500/500/1000, income_series and today_income present; core flows regression intact — admin /api/admin/dashboard, /api/wallet (500/500/1000/500 wd), /api/team (root + members with photos + downline_count), /api/referral, /api/products, /api/auth/send-otp all 200.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /health via public ingress", "issue": "Public ingress does NOT route /health to backend (only /api/* is routed to backend; /health hits frontend and returns index.html). This is fine for K8s deployment because the container health probe is executed inside the pod against the backend port (localhost:8001), where /health now correctly returns 200. Not a bug — just noting the ingress behavior for future context."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_health_dashboard.py",
+    "/app/test_reports/pytest/iteration5.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Health route implementation is correct: both @app.get('/health') and @app.get('/api/health') are registered on the FastAPI app, satisfying K8s liveness/readiness probes that call the non-prefixed path directly against the container.",
+    "Dashboard optimization (count_documents + limit(5) + commissions projection) working correctly — response shape unchanged, recent_orders capped at 5, wallet snapshot preserved."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_health_dashboard.py (new file)"
+  ],
+  "success_rate": {"backend": "100% (9/9)", "frontend": "N/A (skipped per request)"},
+  "test_credentials": "Admin: sachin.shukla2196@gmail.com / Admin@12345; Demo distributor: demo.distributor@anjaliherballife.in / Demo@1234 — both work; login returns 'token' (not 'access_token').",
+  "seed_data_creation": "None; used existing demo data (WDDEMO001 + demo accounts + 500/500/1000/500 wallet snapshot preserved).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Login response field is 'token' (not 'access_token'). Wallet fields are available_balance/pending_balance/total_earned/total_withdrawn. send-otp requires both {email, mobile}. /health via public ingress returns frontend HTML — always hit http://localhost:8001/health for the deployment probe check. New reusable regression file at /app/backend/tests/test_health_dashboard.py."
+}
