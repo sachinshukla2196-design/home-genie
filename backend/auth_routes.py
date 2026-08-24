@@ -1,6 +1,7 @@
 """Authentication & registration routes."""
 import re
 import random
+from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel, EmailStr, Field
 from typing import Optional
@@ -8,6 +9,7 @@ from typing import Optional
 from core import (db, now_iso, new_id, hash_password, verify_password, create_token,
                   clean_user, get_current_user, next_distributor_id, get_or_create_wallet,
                   create_notification, log_audit, send_email, email_shell)
+from providers import otp_create, otp_verify
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -43,28 +45,24 @@ def _valid_mobile(m: str) -> bool:
 
 @router.post("/send-otp")
 async def send_otp(body: SendOtp, request: Request):
-    """Generate an OTP for registration. Email/SMS delivery is MOCKED in preview;
-    the OTP is returned as dev_otp and logged server-side."""
+    """Registration mobile OTP (mock provider in beta). Also emails the code when available."""
     email = body.email.lower().strip()
+    mobile = body.mobile.strip()
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="This email is already registered. Please log in.")
-    if not _valid_mobile(body.mobile):
+    if await db.users.find_one({"mobile": mobile}):
+        raise HTTPException(status_code=400, detail="This mobile number is already registered.")
+    if not _valid_mobile(mobile):
         raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number.")
-    code = f"{random.randint(0, 999999):06d}"
-    await db.otp_codes.delete_many({"email": email, "purpose": "register"})
-    await db.otp_codes.insert_one({
-        "id": new_id(), "email": email, "mobile": body.mobile, "code": code,
-        "purpose": "register", "verified": False, "created_at": now_iso(),
-    })
-    print(f"[OTP] register {email} -> {code}")
-    html = email_shell("Verify your email", f"""
-      <p style="color:#66736B;font-size:14px;">Use the code below to complete your Anjali Herbal Life registration. It is valid for a short time.</p>
+    res = await otp_create(mobile, "register")
+    if res.get("dev_otp"):
+        html = email_shell("Verify your mobile", f"""
+      <p style="color:#66736B;font-size:14px;">Use the code below to verify your mobile and complete registration. It expires shortly.</p>
       <div style="margin:20px 0;text-align:center;">
-        <span style="display:inline-block;background:#EAF5ED;color:#0B4D2E;font-size:30px;font-weight:bold;letter-spacing:8px;padding:14px 24px;border-radius:12px;">{code}</span>
-      </div>
-      <p style="color:#66736B;font-size:12px;">If you didn't request this, you can ignore this email.</p>""")
-    sent = await send_email(email, "Your Anjali Herbal Life OTP", html)
-    return {"message": "OTP sent to your email.", "email_sent": sent, "dev_otp": code}
+        <span style="display:inline-block;background:#EAF5ED;color:#0B4D2E;font-size:30px;font-weight:bold;letter-spacing:8px;padding:14px 24px;border-radius:12px;">{res['dev_otp']}</span>
+      </div>""")
+        await send_email(email, "Your Anjali Herbal Life OTP", html)
+    return {"message": "OTP sent to your mobile.", **res}
 
 
 @router.post("/register")
@@ -76,10 +74,11 @@ async def register(body: RegisterBody, request: Request):
         raise HTTPException(status_code=400, detail="Please accept the Terms & Conditions.")
     if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="This email is already registered. Please log in.")
+    mobile = body.mobile.strip()
+    if await db.users.find_one({"mobile": mobile}):
+        raise HTTPException(status_code=400, detail="This mobile number is already registered.")
 
-    otp = await db.otp_codes.find_one({"email": email, "purpose": "register"})
-    if not otp or otp["code"] != body.otp.strip():
-        raise HTTPException(status_code=400, detail="Invalid or expired OTP.")
+    await otp_verify(mobile, "register", body.otp)
 
     # sponsor resolution
     sponsor = None
@@ -128,7 +127,6 @@ async def register(body: RegisterBody, request: Request):
                                   "नया रेफ़रल जुड़ा",
                                   f"{user['full_name']} ({distributor_id}) ने आपके रेफ़रल से रजिस्टर किया।")
 
-    await db.otp_codes.delete_many({"email": email, "purpose": "register"})
     await create_notification(uid, "welcome", "Welcome to Anjali Herbal Life",
                               f"Your Distributor ID is {distributor_id}. Activate your account to unlock income.",
                               "अंजलि हर्बल लाइफ में आपका स्वागत है",
@@ -142,11 +140,16 @@ async def register(body: RegisterBody, request: Request):
 @router.post("/login")
 async def login(body: LoginBody, request: Request):
     email = body.email.lower().strip()
-    ident = f"{request.client.host if request.client else 'x'}:{email}"
+    ident = email
     la = await db.login_attempts.find_one({"identifier": ident})
     if la and la.get("count", 0) >= 5:
-        last = la.get("last")
-        raise HTTPException(status_code=429, detail="Too many failed attempts. Try again in a few minutes.")
+        try:
+            recent = (datetime.now(timezone.utc) - datetime.fromisoformat(la["last"])).total_seconds() < 900
+        except Exception:
+            recent = False
+        if recent:
+            raise HTTPException(status_code=429, detail="Too many failed attempts. Please try again in about 15 minutes.")
+        await db.login_attempts.delete_one({"identifier": ident})
 
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(body.password, user.get("password_hash", "")):
@@ -178,6 +181,89 @@ async def update_photo(body: PhotoBody, request: Request, user: dict = Depends(g
         raise HTTPException(status_code=400, detail="Image too large. Please choose a smaller photo.")
     await db.users.update_one({"id": user["id"]}, {"$set": {"photo": photo, "updated_at": now_iso()}})
     await log_audit(user, "profile_photo_updated", "user", user["id"], request=request)
+    updated = await db.users.find_one({"id": user["id"]})
+    return clean_user(updated)
+
+
+# ---------------- Mobile OTP: login / forgot / change-mobile ----------------
+class MobileBody(BaseModel):
+    mobile: str
+
+
+class MobileOtpBody(BaseModel):
+    mobile: str
+    otp: str
+
+
+class ForgotResetBody(BaseModel):
+    mobile: str
+    otp: str
+    password: str = Field(min_length=6)
+
+
+@router.post("/login-otp/send")
+async def login_otp_send(body: MobileBody):
+    mobile = body.mobile.strip()
+    if not await db.users.find_one({"mobile": mobile}):
+        raise HTTPException(status_code=404, detail="No account found for this mobile number.")
+    res = await otp_create(mobile, "login")
+    return {"message": "OTP sent to your mobile.", **res}
+
+
+@router.post("/login-otp/verify")
+async def login_otp_verify(body: MobileOtpBody, request: Request):
+    mobile = body.mobile.strip()
+    user = await db.users.find_one({"mobile": mobile})
+    if not user:
+        raise HTTPException(status_code=404, detail="No account found for this mobile number.")
+    await otp_verify(mobile, "login", body.otp)
+    await log_audit(clean_user(user), "login_otp", "user", user["id"], request=request)
+    return {"token": create_token(user["id"]), "user": clean_user(user)}
+
+
+@router.post("/forgot/send")
+async def forgot_send(body: MobileBody):
+    mobile = body.mobile.strip()
+    if not await db.users.find_one({"mobile": mobile}):
+        raise HTTPException(status_code=404, detail="No account found for this mobile number.")
+    res = await otp_create(mobile, "forgot")
+    return {"message": "OTP sent to your mobile.", **res}
+
+
+@router.post("/forgot/reset")
+async def forgot_reset(body: ForgotResetBody, request: Request):
+    mobile = body.mobile.strip()
+    user = await db.users.find_one({"mobile": mobile})
+    if not user:
+        raise HTTPException(status_code=404, detail="No account found for this mobile number.")
+    await otp_verify(mobile, "forgot", body.otp)
+    await db.users.update_one({"id": user["id"]},
+                              {"$set": {"password_hash": hash_password(body.password), "updated_at": now_iso()}})
+    await log_audit(clean_user(user), "password_reset", "user", user["id"], request=request)
+    return {"message": "Password updated. Please log in."}
+
+
+@router.put("/change-mobile/send")
+async def change_mobile_send(body: MobileBody, user: dict = Depends(get_current_user)):
+    new_mobile = body.mobile.strip()
+    if not _valid_mobile(new_mobile):
+        raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number.")
+    other = await db.users.find_one({"mobile": new_mobile})
+    if other and other["id"] != user["id"]:
+        raise HTTPException(status_code=400, detail="This mobile number is already attached to another account.")
+    res = await otp_create(new_mobile, "change")
+    return {"message": "OTP sent to the new mobile number.", **res}
+
+
+@router.put("/change-mobile/verify")
+async def change_mobile_verify(body: MobileOtpBody, request: Request, user: dict = Depends(get_current_user)):
+    new_mobile = body.mobile.strip()
+    other = await db.users.find_one({"mobile": new_mobile})
+    if other and other["id"] != user["id"]:
+        raise HTTPException(status_code=400, detail="This mobile number is already attached to another account.")
+    await otp_verify(new_mobile, "change", body.otp)
+    await db.users.update_one({"id": user["id"]}, {"$set": {"mobile": new_mobile, "updated_at": now_iso()}})
+    await log_audit(user, "mobile_changed", "user", user["id"], request=request)
     updated = await db.users.find_one({"id": user["id"]})
     return clean_user(updated)
 

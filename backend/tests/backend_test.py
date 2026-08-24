@@ -14,11 +14,19 @@ import time
 import requests
 import pytest
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://anjali-ayurveda-mvp.preview.emergentagent.com").rstrip("/")
+from dotenv import dotenv_values as _dv
+_fe = _dv("/app/frontend/.env")
+BASE_URL = (os.environ.get("REACT_APP_BACKEND_URL") or _fe.get("REACT_APP_BACKEND_URL") or "").rstrip("/")
 API = f"{BASE_URL}/api"
 
 ADMIN_EMAIL = "sachin.shukla2196@gmail.com"
 ADMIN_PASSWORD = "Admin@12345"
+
+
+def _unique_mobile():
+    """Random valid Indian mobile - avoids the 30s OTP resend cooldown across tests."""
+    import random
+    return "9" + f"{random.randint(0, 999999999):09d}"
 
 
 def _unique_email(tag="user"):
@@ -27,7 +35,7 @@ def _unique_email(tag="user"):
 
 def _register_user(sponsor_id: str = "", tag: str = "u"):
     email = _unique_email(tag)
-    mobile = "9" + str(int(time.time() * 1000))[-9:]
+    mobile = _unique_mobile()
     r = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile}, timeout=15)
     assert r.status_code == 200, f"send-otp: {r.status_code} {r.text}"
     otp = r.json().get("dev_otp")
@@ -98,7 +106,7 @@ class TestRegistration:
     def test_send_otp_returns_dev_otp(self):
         email = _unique_email("otp")
         r = requests.post(f"{API}/auth/send-otp",
-                          json={"email": email, "mobile": "9876543210"}, timeout=15)
+                          json={"email": email, "mobile": _unique_mobile()}, timeout=15)
         assert r.status_code == 200
         assert "dev_otp" in r.json()
         assert len(r.json()["dev_otp"]) == 6
@@ -121,7 +129,7 @@ class TestRegistration:
 
     def test_register_invalid_otp(self):
         email = _unique_email("badotp")
-        mobile = "9876543210"
+        mobile = _unique_mobile()
         r = requests.post(f"{API}/auth/send-otp",
                           json={"email": email, "mobile": mobile}, timeout=15)
         assert r.status_code == 200
@@ -141,7 +149,7 @@ class TestRegistration:
 
     def test_register_invalid_sponsor_rejected(self):
         email = _unique_email("badsp")
-        mobile = "9876543211"
+        mobile = _unique_mobile()
         r = requests.post(f"{API}/auth/send-otp",
                           json={"email": email, "mobile": mobile}, timeout=15)
         otp = r.json()["dev_otp"]

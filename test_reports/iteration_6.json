@@ -1,0 +1,58 @@
+{
+  "summary": "Full backend + frontend testing of the BETA mobile-OTP integration plus the payment/commission regression. New suite /app/backend/tests/test_otp_auth.py (28 tests) covers registration OTP, approved test number 9999999999, login-with-OTP, forgot password, change mobile, OTP security (hashing/single-use/attempt-limit/cooldown) and credential regression - 28/28 pass. Existing regression suites (backend_test.py + test_health_dashboard.py) 49 passed / 1 skipped after fixing test-side issues. End-to-end Stripe TEST payment regression executed for real via Playwright on the Stripe hosted page: A (ANJ000108) registered RED -> paid Rs1,575 -> GREEN with commission still Rs0; B (ANJ000109) registered under A's referral -> RED -> paid -> GREEN -> A wallet exactly Rs100 (single REFERRAL_COMMISSION ledger entry, repeat status polls produced no duplicate). Frontend smoke passed: /login shows both links, /login-otp (dev OTP auto-filled for normal numbers, hidden + '123456' hint for the approved test number -> admin redirect to /admin), /forgot reset -> password login with new password, demo distributor login shows GREEN wallet 500/500/1000/500. 0 unexpected console errors.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/auth/login", "issue": "Brute-force lockout never expires. `login_attempts.count` is only cleared on a successful login, but a locked identifier can never log in successfully -> permanent 429. Proved by seeding a record dated 2020-01-01: correct password still returns 429 'Try again in a few minutes'. `la.get('last')` is read but unused - add a time window (e.g. reset/ignore counts older than 15 min)."},
+      {"endpoint": "POST /api/auth/login", "issue": "Lockout identifier uses request.client.host, which behind the k8s ingress is the proxy pod IP (observed 10.81.8.196 and 10.81.15.196). 6 consecutive wrong-password attempts all returned 401 because the counter was split 3/3 across proxy IPs - the 5-attempt threshold is effectively bypassable. Use X-Forwarded-For (left-most) or key on email only."},
+      {"endpoint": "POST /api/auth/login-otp/verify", "issue": "OTP login is not subject to the password lockout: with the account password-locked (429), login-otp/verify still returned 200. Acceptable by design, but note it fully bypasses the brute-force control."},
+      {"endpoint": "OTP rate limiting", "issue": "Only per-OTP controls exist (5 attempts, 30s resend cooldown). There is no per-mobile/day send cap, so an attacker can loop 'resend + 5 guesses' indefinitely against a 6-digit code. Recommend a daily send/verify cap per mobile before real SMS goes live."},
+      {"endpoint": "db.otp_sessions", "issue": "No indexes and no TTL cleanup (52 docs already). Every send/verify does find_one(identifier,purpose) with sort(created_at) - add a compound index and a TTL index on expires_at."},
+      {"endpoint": "db.users.mobile", "issue": "No unique index on users.mobile (only email/distributor_id are unique). Duplicate-mobile protection in /send-otp, /register and /change-mobile is application-level only, so concurrent requests can create duplicates. Add a unique index."},
+      {"endpoint": "providers.py APP_ENV guard", "issue": "APP_ENV defaults to 'beta' (`os.environ.get('APP_ENV','beta')`). If the variable is ever missing in a production deploy, the mock provider stays active AND dev_otp is returned in the API response (full auth bypass). Fail safe: default to 'production'/strict and require an explicit opt-in for mocks."},
+      {"endpoint": "POST /api/auth/register", "issue": "Cosmetic: still deletes legacy db.otp_codes ({email, purpose:'register'}) which the new provider no longer writes - dead code."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/login-otp and /forgot", "issues": ["The dev OTP is auto-filled into the input and shown in a toast ('Demo OTP: 610901'). Fine for beta (backend hides dev_otp in production and for test numbers) but make sure the toast/auto-fill is env-gated so it cannot surface with a real SMS provider."]},
+      {"screen": "/payment/success", "issues": ["Completing Stripe checkout in a browser session without a stored token redirects straight to /login, so the user never sees the success/activation confirmation. Backend activation is unaffected (verified via /api/payments/status), but consider handling session_id on the public route."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_otp_auth.py",
+    "/app/backend/tests/payflow.py",
+    "/app/backend/tests/probe_lockout.py",
+    "/app/test_reports/pytest/otp_results.xml",
+    "/app/test_reports/pytest/regression_results.xml"
+  ],
+  "action_items": [
+    "Add a time window to the password lockout (login_attempts) and key it on X-Forwarded-For / email instead of request.client.host.",
+    "Add indexes: unique index on users.mobile, compound index on otp_sessions(identifier,purpose) and a TTL index on expires_at.",
+    "Make the APP_ENV/provider guard fail-safe (default to production, explicit opt-in for mock providers) so dev_otp can never leak.",
+    "Add a per-mobile daily OTP send/verify cap before wiring a real SMS provider.",
+    "Optional: remove the dead db.otp_codes cleanup in /api/auth/register."
+  ],
+  "critical_code_review_comments": [
+    "auth_routes.login: `last = la.get('last')` is dead code - the lockout has no expiry, making it a permanent account/IP DoS with a misleading 'try again in a few minutes' message.",
+    "providers.py otp_create: mock/dev_otp exposure is gated on APP_ENV == 'production' with a beta default; an unset env var in prod silently enables the OTP bypass.",
+    "Duplicate-mobile invariants are enforced in 3 places (send-otp, register, change-mobile) without a DB unique index - race-prone and duplicated logic.",
+    "_process_paid_order commission path is correctly idempotent (referral_relationships conditional update + commissions guard) - verified with repeat status polls, no duplicate Rs100 credit."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_otp_auth.py (new)",
+    "/app/backend/tests/payflow.py (new helper for the Stripe payment/commission regression)",
+    "/app/backend/tests/probe_lockout.py (new probe)",
+    "/app/backend/tests/backend_test.py (test-side fix: hardcoded mobiles 9876543210/9876543211 now random - they collided with the new 30s OTP resend cooldown; BASE_URL falls back to frontend/.env)",
+    "/app/backend/tests/test_health_dashboard.py (test-side fix: BASE_URL env fallback, random mobile)"
+  ],
+  "success_rate": {"backend": "100% (28/28 new OTP tests, 49/50 regression with 1 pre-existing skip)", "frontend": "100% of tested flows"},
+  "seed_data_creation": "Throwaway accounts created (safe to keep or purge): ANJ000108 (GREEN, wallet Rs100 referral commission), ANJ000109 (GREEN, referred by ANJ000108), ANJ000110 (OTP-login UI test), ANJ000111 (forgot-password UI test, password now UiReset@2026), ANJ000112/ANJ000113 (lockout probes). All use payflow_*@qa-anjali.example.com emails. Two paid Stripe TEST orders (Rs1,575 each) now count in admin revenue. Demo data (WDDEMO001, demo wallet 500/500/1000/500) and admin/demo credentials untouched.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Admin sachin.shukla2196@gmail.com / Admin@12345 (mobile 9999999999, OTP 123456) - verified. Demo demo.distributor@anjaliherballife.in / Demo@1234 - verified. Neither was modified.",
+  "context_for_next_testing_agent": "OTP suite: /app/backend/tests/test_otp_auth.py. Two gotchas: (1) 30s resend cooldown per (identifier, purpose) - always use a fresh random mobile per test or delete db.otp_sessions for the identifier first (TestApprovedTestNumber has an autouse fixture doing exactly that for 9999999999); (2) EmailStr rejects .test/.local domains - use @qa-anjali.example.com. Stripe payment regression is semi-automated: run `python payflow.py setup`, pay the printed checkout_url with Playwright (Stripe selectors #cardNumber/#cardExpiry/#cardCvc/#billingName, submit button[type=submit]), then `payflow.py pay a`, `checkout_b`, pay again, `verify`. Frontend testids: to-login-otp, to-forgot, otp-mobile, otp-code, otp-submit, forgot-mobile, forgot-otp, forgot-password, forgot-submit.",
+  "rca_of_the_issue": "Password lockout: auth_routes.login increments db.login_attempts on failure and blocks when count>=5, but only deletes the record after a successful login - which is unreachable while blocked - and never compares the stored 'last' timestamp against a window, so the block is permanent (reproduced with a 2020-dated record returning 429 for the correct password). Compounding this, the identifier prefix is request.client.host, which behind the ingress rotates between proxy pod IPs, splitting the counter (6 wrong passwords all returned 401)."
+}

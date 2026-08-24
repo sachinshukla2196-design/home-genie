@@ -10,7 +10,11 @@ import uuid
 import requests
 import pytest
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL").rstrip("/")
+from dotenv import dotenv_values
+_fe = dotenv_values("/app/frontend/.env")
+BASE_URL = (os.environ.get("REACT_APP_BACKEND_URL") or _fe.get("REACT_APP_BACKEND_URL") or "").rstrip("/")
+if not BASE_URL:
+    raise RuntimeError("REACT_APP_BACKEND_URL missing")
 API = f"{BASE_URL}/api"
 
 ADMIN_EMAIL = "sachin.shukla2196@gmail.com"
@@ -122,7 +126,8 @@ class TestCoreFlows:
         assert isinstance(r.json(), list)
 
     def test_register_send_otp(self):
-        mobile = "9" + str(int(time.time() * 1000))[-9:]
+        import random
+        mobile = "9" + f"{random.randint(0, 999999999):09d}"
         email = f"TEST_otp_{uuid.uuid4().hex[:8]}@example.com"
         r = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile}, timeout=15)
         assert r.status_code == 200, r.text

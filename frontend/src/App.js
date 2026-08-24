@@ -11,6 +11,7 @@ import { AdminLayout } from "@/components/AdminLayout";
 import Landing from "@/pages/Landing";
 import Login from "@/pages/Login";
 import Register from "@/pages/Register";
+import { LoginOtp, ForgotPassword } from "@/pages/AuthExtras";
 import Dashboard from "@/pages/Dashboard";
 import Products from "@/pages/Products";
 import ProductDetail from "@/pages/ProductDetail";
@@ -50,6 +51,8 @@ function App() {
               <Route path="/" element={<Landing />} />
               <Route path="/login" element={<Login />} />
               <Route path="/register" element={<Register />} />
+              <Route path="/login-otp" element={<LoginOtp />} />
+              <Route path="/forgot" element={<ForgotPassword />} />
               <Route path="/payment/success" element={<ProtectedRoute><PaymentSuccess /></ProtectedRoute>} />
               <Route path="/payment/cancel" element={<ProtectedRoute><PaymentCancel /></ProtectedRoute>} />
 

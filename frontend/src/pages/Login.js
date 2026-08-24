@@ -73,6 +73,10 @@ export default function Login() {
               {loading ? t("common.loading") : t("cta.login")}
             </Button>
           </form>
+          <div className="mt-3 flex items-center justify-between text-sm">
+            <Link to="/login-otp" className="font-medium text-forest hover:underline" data-testid="to-login-otp">Login with OTP</Link>
+            <Link to="/forgot" className="font-medium text-muted2 hover:text-forest" data-testid="to-forgot">Forgot password?</Link>
+          </div>
           <p className="mt-6 text-center text-sm text-muted2">
             {t("auth.noAccount")} <Link to="/register" className="font-semibold text-forest hover:underline" data-testid="to-register">{t("cta.register")}</Link>
           </p>

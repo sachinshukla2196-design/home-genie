@@ -113,6 +113,11 @@ async def startup():
     await db.orders.create_index("order_number", unique=True)
     await db.wallet_transactions.create_index("user_id")
     await db.notifications.create_index("user_id")
+    await db.otp_sessions.create_index([("identifier", 1), ("purpose", 1)])
+    try:
+        await db.users.create_index("mobile", unique=True, sparse=True)
+    except Exception as e:
+        logger.error(f"mobile index skipped: {e}")
 
     # settings
     await get_settings()
