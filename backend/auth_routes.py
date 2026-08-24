@@ -22,6 +22,7 @@ ADMIN_ROLES = {"super_admin", "admin", "accounts_admin", "support_admin"}
 class SendOtp(BaseModel):
     email: EmailStr
     mobile: str
+    sponsor_id: str = ""
 
 
 class RegisterBody(BaseModel):
@@ -59,6 +60,11 @@ async def send_otp(body: SendOtp, request: Request):
         raise HTTPException(status_code=400, detail="This mobile number is already registered.")
     if not _valid_mobile(mobile):
         raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number.")
+    sid = (body.sponsor_id or "").strip().upper()
+    if not sid:
+        raise HTTPException(status_code=400, detail="A referral / sponsor ID is required to register.")
+    if not await db.users.find_one({"distributor_id": sid}):
+        raise HTTPException(status_code=400, detail="Invalid referral / sponsor ID. Please check and try again.")
     res = await otp_create(mobile, "register")
     if res.get("dev_otp"):
         html = email_shell("Verify your mobile", f"""
@@ -85,13 +91,13 @@ async def register(body: RegisterBody, request: Request):
 
     await otp_verify(mobile, "register", body.otp)
 
-    # sponsor resolution
-    sponsor = None
+    # sponsor resolution — referral ID is mandatory
     sid = (body.sponsor_id or "").strip().upper()
-    if sid:
-        sponsor = await db.users.find_one({"distributor_id": sid}, {"_id": 0})
-        if not sponsor:
-            raise HTTPException(status_code=400, detail="Invalid sponsor / referral ID.")
+    if not sid:
+        raise HTTPException(status_code=400, detail="A referral / sponsor ID is required to register.")
+    sponsor = await db.users.find_one({"distributor_id": sid}, {"_id": 0})
+    if not sponsor:
+        raise HTTPException(status_code=400, detail="Invalid referral / sponsor ID. Please check and try again.")
 
     distributor_id = await next_distributor_id()
     uid = new_id()

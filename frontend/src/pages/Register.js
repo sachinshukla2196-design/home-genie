@@ -28,11 +28,12 @@ export default function Register() {
 
   const sendOtp = async (e) => {
     e.preventDefault();
+    if (!form.sponsor_id.trim()) return toast.error("A referral / sponsor ID is required to register.");
     if (form.password !== form.confirm_password) return toast.error("Passwords do not match.");
     if (!form.accept_terms) return toast.error(t("auth.acceptTerms"));
     setLoading(true);
     try {
-      const { data } = await API.post("/auth/send-otp", { email: form.email, mobile: form.mobile });
+      const { data } = await API.post("/auth/send-otp", { email: form.email, mobile: form.mobile, sponsor_id: form.sponsor_id });
       toast.success(t("auth.otpSent"));
       if (data.dev_otp) {
         setForm((f) => ({ ...f, otp: data.dev_otp }));
@@ -83,7 +84,10 @@ export default function Register() {
                 <Field label={t("auth.password")} type="password" value={form.password} onChange={set("password")} required testid="reg-password" />
                 <Field label={t("auth.confirmPassword")} type="password" value={form.confirm_password} onChange={set("confirm_password")} required testid="reg-confirm" />
               </div>
-              <Field label={t("auth.sponsorId")} value={form.sponsor_id} onChange={set("sponsor_id")} testid="reg-sponsor" />
+              <div>
+                <Field label={`${t("auth.sponsorId")} *`} value={form.sponsor_id} onChange={set("sponsor_id")} required testid="reg-sponsor" />
+                <p className="mt-1 text-xs text-muted2">{t("auth.sponsorRequired")}</p>
+              </div>
               <Field label={t("auth.address")} value={form.address} onChange={set("address")} testid="reg-address" />
               <div className="grid grid-cols-3 gap-3.5">
                 <Field label={t("auth.state")} value={form.state} onChange={set("state")} testid="reg-state" />
