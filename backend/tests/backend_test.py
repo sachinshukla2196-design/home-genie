@@ -425,9 +425,10 @@ class TestDemoSeed:
         active = [m for m in members if m.get("status") == "green"]
         assert len(active) == 2, f"expected 2 active: {active}"
 
-        # orders: 2
+        # orders: at least the 2 seeded ones (other suites create extra orders on this demo account)
         o = requests.get(f"{API}/orders", headers=h, timeout=10).json()
-        assert len(o) == 2, f"expected 2 orders: {o}"
+        assert len(o) >= 2, f"expected >=2 orders: {len(o)}"
+        assert any(x.get("order_number") == "ORD000005" for x in o), "seeded ORD000005 missing"
 
     def test_admin_dashboard_populated(self, admin_token):
         r = requests.get(f"{API}/admin/dashboard",

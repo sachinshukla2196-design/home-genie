@@ -16,6 +16,7 @@ export default function AdminOrders() {
   useEffect(() => { load(); }, []);
 
   const change = async (id, status) => { try { await API.put(`/admin/orders/${id}/status`, { status }); toast.success(t("cta.save")); load(); } catch (e) { toast.error(apiError(e)); } };
+  const confirmUpi = async (id) => { try { await API.put(`/admin/payments/upi-confirm/${id}`); toast.success("Payment confirmed & activated"); load(); } catch (e) { toast.error(apiError(e)); } };
 
   if (!orders) return <Skeleton className="h-96 rounded-2xl" />;
 
@@ -31,7 +32,9 @@ export default function AdminOrders() {
                 <td className="p-4 font-medium text-ink">{o.order_number}</td>
                 <td className="p-4 text-forest">{o.distributor_id}</td>
                 <td className="p-4 text-right font-medium text-ink">{money(o.total)}</td>
-                <td className="p-4"><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${o.payment_status === "paid" ? "bg-brand-50 text-brand" : "bg-danger/10 text-danger"}`}>{o.payment_status}</span></td>
+                <td className="p-4"><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${o.payment_status === "paid" ? "bg-brand-50 text-brand" : o.payment_status === "claimed" ? "bg-gold-light text-gold" : "bg-danger/10 text-danger"}`}>{o.payment_status}</span>
+                  {o.payment_status === "claimed" && <button onClick={() => confirmUpi(o.id)} className="ml-2 rounded-full bg-forest px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-brand" data-testid={`upi-confirm-${o.order_number}`}>Confirm UPI</button>}
+                </td>
                 <td className="p-4">
                   <Select value={o.status} onValueChange={(v) => change(o.id, v)}>
                     <SelectTrigger className="h-8 w-36 text-xs" data-testid={`order-status-${o.order_number}`}><SelectValue /></SelectTrigger>

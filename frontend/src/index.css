@@ -54,6 +54,52 @@ body {
     h1, h2, h3, h4 { font-family: 'Poppins', sans-serif; }
 }
 
+/* ---------------- Dark mode (token remap) ---------------- */
+html.dark body { background-color: #0c1310; color: #e6ede8; }
+.dark {
+    --background: 150 18% 6%;
+    --foreground: 140 12% 91%;
+    --card: 150 14% 11%;
+    --card-foreground: 140 12% 91%;
+    --popover: 150 14% 11%;
+    --popover-foreground: 140 12% 91%;
+    --primary: 150 45% 45%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 150 14% 15%;
+    --secondary-foreground: 140 12% 91%;
+    --muted: 150 12% 15%;
+    --muted-foreground: 150 8% 62%;
+    --accent: 150 14% 16%;
+    --accent-foreground: 140 12% 91%;
+    --border: 150 12% 20%;
+    --input: 150 12% 20%;
+    --ring: 150 45% 45%;
+}
+.dark .bg-white { background-color: #16211c !important; }
+.dark .bg-white\/95 { background-color: rgba(22,33,28,0.95) !important; }
+.dark .text-ink { color: #e6ede8 !important; }
+.dark .text-muted2 { color: #93a39b !important; }
+.dark .text-forest { color: #57b487 !important; }
+.dark .text-brand { color: #57b487 !important; }
+.dark .border-brand-50 { border-color: #24352c !important; }
+.dark .border-brand-50\/60 { border-color: rgba(36,53,44,0.6) !important; }
+.dark .bg-brand-50 { background-color: #1a2a22 !important; }
+.dark .bg-brand-50\/40, .dark .bg-brand-50\/60 { background-color: rgba(26,42,34,0.6) !important; }
+.dark .bg-brand-50\/50 { background-color: #1a2a22 !important; }
+.dark .text-brand-700 { color: #7cc9a0 !important; }
+.dark .text-danger { color: #f28a8a !important; }
+.dark .bg-danger\/10 { background-color: rgba(242,138,138,0.14) !important; }
+.dark .bg-gold-light { background-color: #2a2410 !important; }
+.dark .bg-gold-light\/40 { background-color: rgba(42,36,16,0.5) !important; }
+.dark .shadow-card { box-shadow: 0 2px 14px rgba(0,0,0,0.45) !important; }
+.dark .shadow-soft { box-shadow: 0 4px 24px rgba(0,0,0,0.5) !important; }
+.dark .shadow-lift { box-shadow: 0 12px 32px rgba(0,0,0,0.55) !important; }
+.dark .glass-nav {
+    background: rgba(12,19,16,0.82) !important;
+    border-bottom: 1px solid rgba(255,255,255,0.06) !important;
+}
+.dark ::selection { background: #C9A227; color: #0c1310; }
+
 .no-scrollbar::-webkit-scrollbar { display: none; }
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 

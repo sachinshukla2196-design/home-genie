@@ -1,5 +1,7 @@
 """Authentication & registration routes."""
+import os
 import re
+import hmac
 import random
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, HTTPException, Request, Depends
@@ -12,6 +14,9 @@ from core import (db, now_iso, new_id, hash_password, verify_password, create_to
 from providers import otp_create, otp_verify
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+ADMIN_PASSCODE = os.environ.get("ADMIN_PASSCODE", "")
+ADMIN_ROLES = {"super_admin", "admin", "accounts_admin", "support_admin"}
 
 
 class SendOtp(BaseModel):
@@ -161,6 +166,45 @@ async def login(body: LoginBody, request: Request):
     await log_audit(clean_user(user), "login", "user", user["id"], request=request)
     token = create_token(user["id"])
     return {"token": token, "user": clean_user(user)}
+
+
+class AdminLoginBody(BaseModel):
+    email: EmailStr
+    password: str
+    passcode: str
+
+
+@router.post("/admin-login")
+async def admin_login(body: AdminLoginBody, request: Request):
+    """Secured admin entry: email + password + separate admin passcode. Admin roles only."""
+    email = body.email.lower().strip()
+    ident = f"admin:{email}"
+    la = await db.login_attempts.find_one({"identifier": ident})
+    if la and la.get("count", 0) >= 5:
+        try:
+            recent = (datetime.now(timezone.utc) - datetime.fromisoformat(la["last"])).total_seconds() < 900
+        except Exception:
+            recent = False
+        if recent:
+            raise HTTPException(status_code=429, detail="Too many failed attempts. Please try again in about 15 minutes.")
+        await db.login_attempts.delete_one({"identifier": ident})
+
+    passcode_ok = bool(ADMIN_PASSCODE) and hmac.compare_digest((body.passcode or "").strip(), ADMIN_PASSCODE)
+    user = await db.users.find_one({"email": email})
+    valid = bool(
+        user
+        and verify_password(body.password, user.get("password_hash", ""))
+        and user.get("role") in ADMIN_ROLES
+        and passcode_ok
+    )
+    if not valid:
+        await db.login_attempts.update_one({"identifier": ident},
+                                           {"$inc": {"count": 1}, "$set": {"last": now_iso()}}, upsert=True)
+        raise HTTPException(status_code=401, detail="Invalid admin credentials or passcode.")
+
+    await db.login_attempts.delete_one({"identifier": ident})
+    await log_audit(clean_user(user), "admin_login", "user", user["id"], request=request)
+    return {"token": create_token(user["id"]), "user": clean_user(user)}
 
 
 @router.get("/me")

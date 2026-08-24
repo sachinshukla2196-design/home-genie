@@ -1,0 +1,36 @@
+{
+  "summary": "Frontend-only RETEST of the iteration_7 fixes (backend intentionally not re-run). ALL THREE requested areas PASS. (1) CRITICAL UPI QR fix confirmed: distributor login -> add-cart-ANJ-STARTER -> /app/cart -> cart-checkout-btn -> /app/checkout -> upi-pay-btn now renders upi-qr-panel on /app/checkout (URL no longer bounces to /app/products), with phonepe-qr image loaded and visible, correct amount 'Pay Rs1,575 for order ORD000025', the 'admin will verify' instruction, a success toast 'Order ORD000025 placed - scan the QR to pay', and upi-done-btn navigating to /app/orders. ZERO console errors and NO 'Cannot update a component (BrowserRouter) while rendering a different component' warning -> the useEffect redirect fix is correct. (2) Admin confirm E2E: /admin-secure-login rejected a wrong passcode (stayed on page, toast 'Invalid admin credentials or passcode.'), then correct email+password+passcode redirected to /admin; /admin/orders showed upi-confirm-ORD000025, clicking it flipped the row to payment=paid, status=processing, invoice INV000014 and the confirm button disappeared after reload. (3) DARK MODE contrast measured programmatically (computed color vs resolved ancestor background, WCAG ratio): Add to Cart 9.93:1 (white on #0b4d2e), cart Checkout CTA 9.93:1, Place Order & Pay 9.93:1, UPI outline btn 6.53:1, GREEN ID StatusBadge 7.67:1, 'Your distributor account is active.' banner 5.92:1 (was 2.27:1), wallet debit '-Rs500' rgb(242,138,138) on rgb(22,33,28) ~7.3:1 (was 2.94:1) - all now pass WCAG AA. Theme toggle: dark->light->reload persists 'light' with html class '', light->dark->reload persists 'dark' with html class 'dark'. REGRESSION: /login has 0 demo buttons and normal email+password login redirects to /app/dashboard.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Checkout.js", "issue": "STILL OPEN (MEDIUM, from iteration_7): GST/total in the order summary are computed client-side with a hardcoded 5% (Math.round(subtotal*0.05)) instead of the admin gst_percent setting the backend uses for the invoice. Will silently mismatch if the setting changes.", "selector": "[data-testid=\"place-order-btn\"]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [
+      {"flow": "Manual UPI checkout + admin confirm (full E2E)", "issue": "None - passes end to end now (ORD000025 -> claimed -> QR shown -> admin confirm -> paid/processing/INV000014).", "affected_selectors": ["[data-testid=\"upi-pay-btn\"]", "[data-testid=\"upi-qr-panel\"]", "[data-testid=\"phonepe-qr\"]", "[data-testid=\"upi-done-btn\"]", "[data-testid=\"upi-confirm-ORD000025\"]"]}
+    ],
+    "design_issues": [
+      {"screen": "Dark mode - products grid", "issues": ["MINOR/pre-existing: the gold 'Activation' badge over the starter-kit photo (gold text on bg-gold-light/40 layered on a bright product image) is washed out and hard to read; it is the only remaining dark-mode legibility nit. Product photo tiles still keep their light backgrounds so the grid looks patchy (acceptable for photography)."]},
+      {"screen": "/admin-secure-login", "issues": ["Field visibility is improved (fields now show a visible border on the forest background) but the empty inputs and the white/40 placeholder are still low-contrast at a glance. Cosmetic only - typing and submission work."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_upi_adminlogin.py", "/app/test_reports/pytest/upi_adminlogin.xml"],
+  "action_items": [
+    "Optional polish: use the server gst_percent setting in the Checkout summary instead of the hardcoded 5%.",
+    "Optional polish: raise contrast of the dark-mode 'Activation' badge over product images (solid dark chip + light gold text).",
+    "Optional polish: give /admin-secure-login inputs a darker fill / higher-contrast placeholder.",
+    "Backend items from iteration_7 remain open (admin UPI reject path, upi reference validation, admin-login lockout email+IP keying, backport 15-min window to /api/auth/login) - not retested this run per instructions."
+  ],
+  "critical_code_review_comments": [
+    "Checkout.js is now correct: `if (showQr) return (...)` sits above `if (items.length === 0) return null;` and the empty-cart redirect lives in a useEffect keyed on [items.length, showQr, navigate] - no render-phase navigation.",
+    "Dark mode still relies on ~20 `.dark .<utility> { !important }` overrides in index.css instead of Tailwind dark: variants. The specific gaps are fixed (--primary-foreground now 0 0% 100%, plus bg-brand-50/50, text-brand-700, text-danger, bg-danger/10), but any newly introduced utility class will need a manual override again. Recommend migrating to dark: variants or CSS tokens before adding more pages.",
+    "`.dark .text-forest { color:#57b487 !important }` is still global; it currently does not hurt CTAs because primary buttons resolve text from --primary-foreground, but a future dark-filled button that uses text-forest for its label would regress. Scope this override to non-button contexts."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "not re-run (per request)", "frontend": "100% of retested flows (UPI QR E2E, admin confirm, 7/7 dark-mode contrast checks, theme persistence both directions, login + admin-secure-login regression)"},
+  "seed_data_creation": "ORD000025 created on the demo distributor (ANJ000018) via the UI UPI flow and confirmed paid by admin -> INV000014. ORD000024 (from the main agent's manual check) is left in 'claimed' state and still shows a Confirm UPI button in /admin/orders.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Verified working: admin sachin.shukla2196@gmail.com / Admin@12345 / passcode Anjali@Secure#2026; distributor demo.distributor@anjaliherballife.in / Demo@1234 (from /app/memory/test_credentials.md).",
+  "context_for_next_testing_agent": "iteration_7 CRITICAL (UPI QR never rendering) and the dark-mode CTA/banner/badge/debit contrast issues are FIXED and verified in iteration_8. Remaining open items are cosmetic (dark 'Activation' badge, admin-secure-login field fill) plus the client-side hardcoded 5% GST, and the four backend hardening items from iteration_7. Contrast can be re-measured with the computed-style + WCAG helper used here; force dark with localStorage.setItem('anj_theme','dark') before navigating. Do NOT assert exact order counts for ANJ000018 - each UI run adds an order. ORD000024 remains 'claimed' and can be used to retest upi-confirm without creating a new order.",
+  "rca_of_the_issue": "No new defects. Root cause of the previously reported CRITICAL was branch ordering plus navigate-during-render in Checkout.js; the fix (showQr branch hoisted above the empty-cart guard + redirect moved into useEffect) is verified live with zero console warnings. Dark-mode CTA illegibility was caused by .dark --primary-foreground resolving to a dark green; setting it to 0 0% 100% raised all primary CTAs to 9.93:1."
+}

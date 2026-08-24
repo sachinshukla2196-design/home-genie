@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { StatusBadge } from "@/components/StatusBadge";
 import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
@@ -107,6 +108,7 @@ export function AppLayout() {
             )}
           </div>
           <div className="flex items-center gap-2 sm:gap-3">
+            <ThemeToggle />
             <LanguageSwitcher />
             <Link to="/app/products" className="relative rounded-full p-2 text-muted2 hover:bg-brand-50 hover:text-forest transition-all" data-testid="header-cart">
               <ShoppingCart size={19} />

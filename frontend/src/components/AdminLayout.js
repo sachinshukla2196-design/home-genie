@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -64,6 +65,7 @@ export function AdminLayout() {
           <div className="flex items-center gap-3 text-white lg:hidden"><Logo size="sm" dark /></div>
           <div className="hidden lg:block text-sm text-white/70">{user?.full_name}</div>
           <div className="flex items-center gap-3">
+            <ThemeToggle dark />
             <LanguageSwitcher />
             <Avatar className="h-9 w-9 border border-white/20">
               <AvatarImage src={user?.photo} className="object-cover" />

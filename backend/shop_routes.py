@@ -7,7 +7,7 @@ from typing import List, Optional
 from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionRequest
 
 from core import (db, now_iso, new_id, get_current_user, get_settings, next_sequence,
-                  add_wallet_transaction, create_notification, log_audit)
+                  add_wallet_transaction, create_notification, log_audit, require_admin)
 
 router = APIRouter(prefix="/api", tags=["shop"])
 
@@ -302,3 +302,42 @@ async def stripe_webhook(request: Request):
     if resp.payment_status == "paid" and resp.session_id:
         await _process_paid_order(resp.session_id, request)
     return {"status": "ok"}
+
+
+# ---------------- Manual UPI (PhonePe QR) — admin-confirmed ----------------
+class UpiClaim(BaseModel):
+    order_id: str
+    reference: str = ""
+
+
+@router.post("/payments/upi-claim")
+async def upi_claim(body: UpiClaim, request: Request, user: dict = Depends(get_current_user)):
+    order = await db.orders.find_one({"id": body.order_id}, {"_id": 0})
+    if not order or order["user_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    if order["payment_status"] == "paid":
+        raise HTTPException(status_code=400, detail="This order is already paid.")
+    await db.orders.update_one({"id": order["id"]}, {"$set": {
+        "payment_method": "upi_manual", "payment_status": "claimed",
+        "upi_reference": body.reference, "updated_at": now_iso()}})
+    await log_audit(user, "upi_payment_claimed", "order", order["id"],
+                    new_value={"reference": body.reference}, request=request)
+    return {"message": "Payment submitted. Admin will verify and activate shortly.", "order_id": order["id"]}
+
+
+@router.put("/admin/payments/upi-confirm/{order_id}")
+async def upi_confirm(order_id: str, request: Request, admin: dict = Depends(require_admin)):
+    order = await db.orders.find_one({"id": order_id})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    if order.get("payment_status") == "paid":
+        return {"message": "Order already paid."}
+    sid = f"manual_{order_id}"
+    if not await db.payment_transactions.find_one({"session_id": sid}):
+        await db.payment_transactions.insert_one({
+            "id": new_id(), "session_id": sid, "order_id": order_id, "user_id": order["user_id"],
+            "amount": order["total"], "currency": order.get("currency", "INR"),
+            "status": "manual", "payment_status": "paid", "created_at": now_iso(), "updated_at": now_iso()})
+    await _process_paid_order(sid, request)  # reuses verified activation + commission (idempotent)
+    await log_audit(admin, "upi_payment_confirmed", "order", order_id, request=request)
+    return {"message": "Payment confirmed and account activated."}

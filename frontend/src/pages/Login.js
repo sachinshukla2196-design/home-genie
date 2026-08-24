@@ -80,24 +80,6 @@ export default function Login() {
           <p className="mt-6 text-center text-sm text-muted2">
             {t("auth.noAccount")} <Link to="/register" className="font-semibold text-forest hover:underline" data-testid="to-register">{t("cta.register")}</Link>
           </p>
-
-          <div className="mt-6">
-            <div className="flex items-center gap-3 text-xs uppercase tracking-wider text-muted2">
-              <span className="h-px flex-1 bg-brand-50" /> {t("auth.tryDemo")} <span className="h-px flex-1 bg-brand-50" />
-            </div>
-            <div className="mt-4 grid grid-cols-2 gap-3">
-              <button type="button" onClick={() => doLogin("demo.distributor@anjaliherballife.in", "Demo@1234")} disabled={loading}
-                className="rounded-xl border border-brand-50 bg-white p-3 text-left transition-all hover:-translate-y-0.5 hover:shadow-card" data-testid="demo-distributor-btn">
-                <div className="text-sm font-semibold text-forest">{t("auth.demoDistributor")}</div>
-                <div className="mt-0.5 text-xs text-muted2">GREEN · wallet · team</div>
-              </button>
-              <button type="button" onClick={() => doLogin("sachin.shukla2196@gmail.com", "Admin@12345")} disabled={loading}
-                className="rounded-xl border border-gold/30 bg-gold-light/40 p-3 text-left transition-all hover:-translate-y-0.5 hover:shadow-card" data-testid="demo-admin-btn">
-                <div className="text-sm font-semibold text-forest">{t("auth.demoAdmin")}</div>
-                <div className="mt-0.5 text-xs text-muted2">Admin panel</div>
-              </button>
-            </div>
-          </div>
         </motion.div>
         <div className="mt-auto" />
       </div>
