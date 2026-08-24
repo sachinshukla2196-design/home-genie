@@ -20,7 +20,7 @@ BASE_URL = (os.environ.get("REACT_APP_BACKEND_URL") or _fe.get("REACT_APP_BACKEN
 API = f"{BASE_URL}/api"
 
 ADMIN_EMAIL = "sachin.shukla2196@gmail.com"
-ADMIN_PASSWORD = "Admin@12345"
+ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Admin@12345")
 
 
 def _unique_mobile():

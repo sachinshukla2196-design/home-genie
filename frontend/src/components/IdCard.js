@@ -52,9 +52,15 @@ export function IdCard({ user }) {
     try {
       const url = await render();
       const w = window.open("", "_blank");
-      w.document.write(`<html><head><title>ID Card</title></head><body style="margin:0;display:flex;justify-content:center;align-items:center;height:100vh;background:#F7F9F7"><img src="${url}" style="width:520px;max-width:92vw"/></body></html>`);
-      w.document.close();
-      setTimeout(() => { w.focus(); w.print(); }, 400);
+      if (!w) { toast.error("Please allow pop-ups to print."); return; }
+      const doc = w.document;
+      doc.title = "ID Card";
+      doc.body.style.cssText = "margin:0;display:flex;justify-content:center;align-items:center;height:100vh;background:#F7F9F7";
+      const img = doc.createElement("img");
+      img.style.cssText = "width:520px;max-width:92vw";
+      img.onload = () => { w.focus(); w.print(); };
+      img.src = url;
+      doc.body.appendChild(img);
     } catch (e) { console.error(e); toast.error("Could not open print view."); }
   };
 

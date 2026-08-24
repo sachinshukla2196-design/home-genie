@@ -21,7 +21,7 @@ API = f"{BASE}/api"
 TIMEOUT = 30
 
 ADMIN_EMAIL = "sachin.shukla2196@gmail.com"
-ADMIN_PASSWORD = "Admin@12345"
+ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Admin@12345")
 TEST_NUMBER = "9999999999"
 TEST_OTP = "123456"
 

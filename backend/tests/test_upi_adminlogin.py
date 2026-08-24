@@ -18,11 +18,11 @@ if not BASE_URL:
 API = f"{BASE_URL}/api"
 
 ADMIN_EMAIL = "sachin.shukla2196@gmail.com"
-ADMIN_PASSWORD = "Admin@12345"
-ADMIN_PASSCODE = "anj000088sk"
+ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Admin@12345")
+ADMIN_PASSCODE = os.environ.get("TEST_ADMIN_PASSCODE", "anj000088sk")
 ADMIN_USERNAME = "admin.rahulnirwana"
 DEMO_EMAIL = "demo.distributor@anjaliherballife.in"
-DEMO_PASSWORD = "Demo@1234"
+DEMO_PASSWORD = os.environ.get("TEST_DEMO_PASSWORD", "Demo@1234")
 
 ADDRESS = {"full_name": "QA Tester", "mobile": "9812345678", "line1": "1 QA Street",
            "city": "Pune", "state": "MH", "pincode": "411001"}

@@ -18,9 +18,9 @@ if not BASE_URL:
 API = f"{BASE_URL}/api"
 
 ADMIN_EMAIL = "sachin.shukla2196@gmail.com"
-ADMIN_PASSWORD = "Admin@12345"
+ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Admin@12345")
 DEMO_EMAIL = "demo.distributor@anjaliherballife.in"
-DEMO_PASSWORD = "Demo@1234"
+DEMO_PASSWORD = os.environ.get("TEST_DEMO_PASSWORD", "Demo@1234")
 
 
 # ---------------- Health probe ----------------
