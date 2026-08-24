@@ -169,16 +169,17 @@ async def login(body: LoginBody, request: Request):
 
 
 class AdminLoginBody(BaseModel):
-    email: EmailStr
+    username: str
     password: str
     passcode: str
 
 
 @router.post("/admin-login")
 async def admin_login(body: AdminLoginBody, request: Request):
-    """Secured admin entry: email + password + separate admin passcode. Admin roles only."""
-    email = body.email.lower().strip()
-    ident = f"admin:{email}"
+    """Secured admin entry: username + password + separate admin passcode. Admin roles only."""
+    uname = (body.username or "").strip()
+    ukey = uname.lower()
+    ident = f"admin:{ukey}"
     la = await db.login_attempts.find_one({"identifier": ident})
     if la and la.get("count", 0) >= 5:
         try:
@@ -190,7 +191,7 @@ async def admin_login(body: AdminLoginBody, request: Request):
         await db.login_attempts.delete_one({"identifier": ident})
 
     passcode_ok = bool(ADMIN_PASSCODE) and hmac.compare_digest((body.passcode or "").strip(), ADMIN_PASSCODE)
-    user = await db.users.find_one({"email": email})
+    user = await db.users.find_one({"$or": [{"username": uname}, {"email": ukey}]})
     valid = bool(
         user
         and verify_password(body.password, user.get("password_hash", ""))

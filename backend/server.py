@@ -137,11 +137,13 @@ async def startup():
     # admin seed
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@anjaliherballife.in").lower()
     admin_password = os.environ.get("ADMIN_PASSWORD", "Admin@12345")
+    admin_username = os.environ.get("ADMIN_USERNAME", "admin")
     existing = await db.users.find_one({"email": admin_email})
     if not existing:
         await db.users.insert_one({
             "id": new_id(), "distributor_id": "ANJ000000", "full_name": "Platform Administrator",
-            "email": admin_email, "mobile": "9999999999", "password_hash": hash_password(admin_password),
+            "email": admin_email, "username": admin_username, "mobile": "9999999999",
+            "password_hash": hash_password(admin_password),
             "role": "super_admin", "status": "green", "mobile_verified": True, "email_verified": True,
             "sponsor_id": None, "sponsor_user_id": None, "kyc_status": "verified",
             "created_at": now_iso(), "updated_at": now_iso(),
@@ -151,6 +153,8 @@ async def startup():
         await db.users.update_one({"email": admin_email},
                                   {"$set": {"password_hash": hash_password(admin_password),
                                             "role": "super_admin"}})
+    # always keep the admin username in sync with env
+    await db.users.update_one({"email": admin_email}, {"$set": {"username": admin_username}})
 
     # demo data (idempotent)
     try:

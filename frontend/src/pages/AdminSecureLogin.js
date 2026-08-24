@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
-import { ShieldCheck, Lock } from "lucide-react";
+import { ShieldCheck, Lock, Eye, EyeOff } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -10,10 +10,39 @@ import { Label } from "@/components/ui/label";
 import { useAuth } from "@/context/AuthContext";
 import { API, apiError } from "@/lib/api";
 
+function SecretField({ label, value, onChange, testid, placeholder }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div>
+      <Label className="text-sm text-white/80">{label}</Label>
+      <div className="relative mt-1.5">
+        <Input
+          type={show ? "text" : "password"}
+          required
+          value={value}
+          onChange={onChange}
+          placeholder={placeholder}
+          className="h-11 rounded-lg border-white/25 bg-white/[0.14] pr-11 text-white placeholder:text-white/50 focus-visible:ring-gold"
+          data-testid={testid}
+        />
+        <button
+          type="button"
+          onClick={() => setShow((s) => !s)}
+          aria-label={show ? "Hide" : "Show"}
+          className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-white/60 hover:text-white"
+          data-testid={`${testid}-toggle`}
+        >
+          {show ? <EyeOff size={18} /> : <Eye size={18} />}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function AdminSecureLogin() {
   const { applyAuth } = useAuth();
   const navigate = useNavigate();
-  const [email, setEmail] = useState("");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [passcode, setPasscode] = useState("");
   const [loading, setLoading] = useState(false);
@@ -22,7 +51,7 @@ export default function AdminSecureLogin() {
     e.preventDefault();
     setLoading(true);
     try {
-      const { data } = await API.post("/auth/admin-login", { email, password, passcode });
+      const { data } = await API.post("/auth/admin-login", { username, password, passcode });
       applyAuth(data);
       toast.success("Admin access granted");
       navigate("/admin");
@@ -52,17 +81,11 @@ export default function AdminSecureLogin() {
         </div>
         <form onSubmit={submit} className="mt-8 space-y-4">
           <div>
-            <Label className="text-sm text-white/80">Admin Email</Label>
-            <Input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="mt-1.5 h-11 rounded-lg border-white/25 bg-white/[0.14] text-white placeholder:text-white/50 focus-visible:ring-gold" data-testid="admin-email" />
+            <Label className="text-sm text-white/80">Admin Username</Label>
+            <Input type="text" required value={username} onChange={(e) => setUsername(e.target.value)} placeholder="admin.rahulnirwana" className="mt-1.5 h-11 rounded-lg border-white/25 bg-white/[0.14] text-white placeholder:text-white/50 focus-visible:ring-gold" data-testid="admin-email" />
           </div>
-          <div>
-            <Label className="text-sm text-white/80">Password</Label>
-            <Input type="password" required value={password} onChange={(e) => setPassword(e.target.value)} className="mt-1.5 h-11 rounded-lg border-white/25 bg-white/[0.14] text-white placeholder:text-white/50 focus-visible:ring-gold" data-testid="admin-password" />
-          </div>
-          <div>
-            <Label className="text-sm text-white/80">Admin Passcode</Label>
-            <Input type="password" required value={passcode} onChange={(e) => setPasscode(e.target.value)} placeholder="Secret passcode" className="mt-1.5 h-11 rounded-lg border-white/25 bg-white/[0.14] text-white placeholder:text-white/50 focus-visible:ring-gold" data-testid="admin-passcode" />
-          </div>
+          <SecretField label="Password" value={password} onChange={(e) => setPassword(e.target.value)} testid="admin-password" placeholder="Your password" />
+          <SecretField label="Admin Passcode" value={passcode} onChange={(e) => setPasscode(e.target.value)} testid="admin-passcode" placeholder="Secret passcode" />
           <Button type="submit" disabled={loading} className="h-11 w-full rounded-full btn-gold" data-testid="admin-login-submit">
             {loading ? "Verifying…" : "Unlock Admin Panel"}
           </Button>
