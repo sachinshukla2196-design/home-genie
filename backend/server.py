@@ -41,6 +41,7 @@ async def public_settings():
         "activation_amount": s.get("activation_amount"),
         "referral_commission": s.get("referral_commission"),
         "currency_symbol": s.get("currency_symbol", "₹"),
+        "gst_percent": s.get("gst_percent", 5.0),
         "company_name": s.get("company_name"),
         "company_email": s.get("company_email"),
         "company_phone": s.get("company_phone"),

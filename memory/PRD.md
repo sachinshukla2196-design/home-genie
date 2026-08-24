@@ -34,6 +34,12 @@ FastAPI+Mongo+React · Stripe · Email+Password with email OTP (OTP delivery MOC
 - Secured/isolated Admin login: hidden route /admin-secure-login + POST /api/auth/admin-login (email+password+ADMIN_PASSCODE via hmac.compare_digest, admin-roles gate, 15-min brute-force lockout). Passcode: Anjali@Secure#2026 (backend .env). Public demo login buttons REMOVED from /login. VERIFIED.
 - Dark/Light theme: ThemeContext + ThemeToggle in distributor & admin headers, persisted (localStorage anj_theme), Tailwind class dark mode + token overrides in index.css. WCAG AA verified (all CTAs/badges/banners ≥4.5:1).
 
+## Implemented (2026-06 — session 2)
+- Admin login hardened: username `admin.rahulnirwana` (or email) + password + passcode `anj000088sk` (backend .env ADMIN_PASSCODE, ADMIN_USERNAME). Password/passcode fields have show/hide eye toggle. Endpoint /api/auth/admin-login accepts username OR email. VERIFIED (iteration_9, 100%).
+- Manual UPI **Reference ID now MANDATORY**, entered by admin in a confirm modal on /admin/orders; stored as order.payment_reference; shown in new "Reference ID" column; admin Orders page shows UPI stat cards (awaiting-confirm count + collected total). VERIFIED.
+- Checkout GST now server-driven from /api/settings/public gst_percent (was hardcoded 5%). VERIFIED at 5% and 12%.
+- Dark/Light theme toggle added to public Landing/home header (persisted via localStorage anj_theme). Landing interactivity boosted (hero gradient orbs, floating badge, card hover lift, global button active-scale). VERIFIED.
+
 ## Backlog
 - Cosmetic polish (P2): Checkout summary uses hardcoded 5% GST (use server gst_percent); dark-mode 'Activation' badge over product image; /admin-secure-login field fill.
 - Backend hardening (P1): admin "reject UPI claim" path + upi reference validation; admin-login lockout email+IP keying; backport 15-min window to /api/auth/login.

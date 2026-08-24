@@ -1,0 +1,45 @@
+{
+  "summary": "Cycle-9 formal E2E validation (backend + frontend). BACKEND: 104 passed / 1 skipped across the whole /app/backend/tests suite, including a new dedicated suite (12/12) for the mandatory UPI reference, gst_percent in /api/settings/public, and admin-login by username. Verified: PUT /api/admin/payments/upi-confirm/{id} rejects missing body (422) and empty/whitespace reference (400, 'Payment reference ID (UTR / txn id) is required.') leaving the order 'claimed' with NO invoice; valid reference -> payment_status paid, status processing, invoice generated, order.payment_reference == reference (trimmed), reference echoed in /api/admin/orders (no _id leakage); idempotent re-confirm keeps the same invoice AND does not overwrite the original reference; 403 for distributor, 404 for unknown order. /api/settings/public returns gst_percent 5.0 + currency_symbol, and the server-side order total equals subtotal + round(subtotal*gst/100). /api/auth/admin-login works with username 'admin.rahulnirwana' AND with the email as username using passcode 'anj000088sk'; old passcode and wrong password -> 401; throwaway-identifier lockout returns 429 on the 6th attempt; admin bcrypt hash is $2b$12$. FRONTEND: (a) Landing theme-toggle applies html.dark, persists anj_theme in localStorage across reload and toggles back to light; hero/products/opportunity/CTA/footer all legible in dark (measured contrasts: h1 7.46:1, body copy 7.16:1, header link 7.42:1; the 4 sub-4.5 hits from the automated audit were false positives caused by white/5 translucent card backgrounds). (b) /admin-secure-login with the new username+passcode redirects to /admin; /admin/orders renders stat-upi-pending (7) and stat-upi-collected (Rs22,050) and the new 'Reference ID' column; Confirm UPI -> upi-confirm-modal, submit-confirm-btn is DISABLED for empty AND whitespace-only reference, enabled after typing; submitting 'UTR-UI-778899' on ORD000053 returned 200, closed the modal, flipped the row to paid/processing/INV000029, showed the reference in ref-ORD000053 (persisted after reload), removed the Confirm UPI button and updated both stat cards (7->6, Rs22,050->Rs23,625). (c) Checkout GST is genuinely server-driven: with gst_percent temporarily set to 12 the summary showed 'GST (12%) Rs180 / Total Rs1,680', and after reverting to 5 it shows 'GST (5%) Rs75 / Total Rs1,575' (setting reverted to 5.0 - verified via /api/settings/public). UPI checkout E2E works: add-cart-ANJ-STARTER -> /app/checkout -> upi-pay-btn -> upi-qr-panel with PhonePe QR, 'Pay Rs1,575 for order ORD000058' and the admin-verification note. (d) REGRESSION: /login has 0 demo buttons, email+password login lands on /app/dashboard, and place-order-btn redirects to a live Stripe Checkout session (checkout.stripe.com, Rs1,575.00). Zero console errors in every run; backend log clean apart from a mocked-email 429 from the external email integration.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/admin/payments/upi-confirm/{order_id}", "issue": "Missing 'reference' key yields a raw FastAPI 422 validation payload rather than the friendly 400 message used for an empty string. Cosmetic API-contract inconsistency only (UI always sends the key)."},
+      {"endpoint": "POST /api/auth/admin-login", "issue": "Breaking field rename: the endpoint now requires 'username' and no longer accepts the previous 'email' key (older clients get 422). Documented/expected, noted for API consumers."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Landing header (dark mode)", "issues": ["theme-toggle keeps a light pill background (rgb(234,245,237)) in dark mode while the sun icon stays light grey -> icon/pill contrast only 2.36:1; the control looks washed out against the dark header. Cosmetic, click works."]},
+      {"screen": "Dark mode product grid / admin-secure-login", "issues": ["Pre-existing nits carried from iteration_8 and unchanged: gold 'Activation' badge over the bright starter-kit photo is washed out; admin-secure-login inputs/placeholders are still low-contrast on the forest background."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_cycle9_upi_ref.py",
+    "/app/backend/tests/test_upi_adminlogin.py",
+    "/app/test_reports/pytest/cycle9.xml",
+    "/app/test_reports/pytest/cycle9_regression.xml",
+    "/app/test_reports/pytest/cycle9_full.xml"
+  ],
+  "action_items": [
+    "Optional: return the friendly 400 message for a completely missing 'reference' key too (e.g. make the field Optional[str] and validate in code) so the API contract is consistent.",
+    "Optional polish: style the landing theme-toggle for dark mode (dark pill + light icon) - it is currently a light pill with a light icon (2.36:1)."
+  ],
+  "critical_code_review_comments": [
+    "upi_confirm is correctly ordered: reference validation happens BEFORE the order lookup and before _process_paid_order, and the already-paid short-circuit returns before the $set, so an idempotent re-confirm cannot overwrite the stored payment_reference (verified by test).",
+    "Checkout.js now derives gstPct/currency from /settings/public with a 5% fallback; verified dynamic against a live setting change. Client-side rounding (Math.round) matches the server's round(), so no summary-vs-invoice drift.",
+    "AdminOrders.js prefills the reference input with the distributor's claimed upi_reference; the admin can silently accept the distributor-supplied value. Consider making the admin retype/confirm it if reconciliation requires an admin-verified UTR."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_cycle9_upi_ref.py (new)",
+    "/app/backend/tests/test_upi_adminlogin.py (updated stale passcode -> anj000088sk, admin-login body email->username, upi-confirm calls now send the mandatory reference)"
+  ],
+  "success_rate": {"backend": "100% (104 passed, 1 skipped)", "frontend": "100% of tested flows (theme toggle+persistence, admin login by username, admin orders stat cards/Reference ID column/confirm modal validation+submit, server-driven GST at 5% and 12%, UPI QR E2E, Stripe redirect, no demo buttons on /login)"},
+  "seed_data_creation": "Created ~10 starter-kit orders on demo distributor ANJ000018 via API tests (several confirmed paid with refs QA-UTR-1/2, UTR-TRIM-1, UTRC833B37436; a few left claimed/pending) plus ORD000053 confirmed via UI with reference UTR-UI-778899 (INV000029) and ORD000058 left in 'claimed' state from the UI UPI run. business_settings.gst_percent was temporarily set to 12 and REVERTED to 5.0 (confirmed).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "All verified working: admin username admin.rahulnirwana (or email sachin.shukla2196@gmail.com) / Admin@12345 / passcode anj000088sk; distributor demo.distributor@anjaliherballife.in / Demo@1234. NOTE: /app/memory/test_credentials.md still lists the OLD passcode context in older iterations' reports - the file itself is correct (anj000088sk).",
+  "context_for_next_testing_agent": "All four cycle-9 changes PASS end to end. Correct data-testids on /admin-secure-login are admin-email / admin-password / admin-passcode / admin-login-submit (NOT admin-username-input). When testing admin login redirect, do not use wait_for_url('**/admin**') - it matches /admin-secure-login itself; assert url.endswith('/admin'). /app/checkout redirects to /app/products when the cart is empty, so always add-cart-ANJ-STARTER first. The confirm modal prefills the distributor's claim reference, so clear the input before asserting the disabled state. gst_percent can be flipped via PUT /api/admin/settings to prove server-driven GST - remember to revert to 5. Many claimed/pending orders exist on ANJ000018; reuse them instead of creating new ones and never assert exact counts.",
+  "rca_of_the_issue": "No product defects found this cycle. The only failures encountered were in my own tooling/stale tests: test_upi_adminlogin.py used the retired passcode and the removed 'email' body key and omitted the now-mandatory reference (fixed in-scope, all 15 pass), and two Playwright runs failed on a wrong data-testid guess plus an over-permissive wait_for_url glob (fixed). The 'low contrast' hits in the dark-landing audit are false positives: getComputedStyle resolves the translucent white/5 card background to rgb(255,255,255), so white text on a dark-green card is mis-scored."
+}

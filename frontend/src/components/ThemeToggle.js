@@ -11,7 +11,9 @@ export function ThemeToggle({ dark = false }) {
       aria-label="Toggle theme"
       data-testid="theme-toggle"
       className={`relative rounded-full p-2 transition-all ${
-        dark ? "text-white/70 hover:bg-white/10 hover:text-white" : "text-muted2 hover:bg-brand-50 hover:text-forest"
+        dark
+          ? "text-white/70 hover:bg-white/10 hover:text-white"
+          : "text-muted2 hover:bg-brand-50 hover:text-forest dark:text-white/70 dark:hover:bg-white/10 dark:hover:text-white"
       }`}
     >
       {isDark ? <Sun size={19} /> : <Moon size={19} />}

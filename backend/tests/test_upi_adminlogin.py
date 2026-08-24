@@ -19,7 +19,8 @@ API = f"{BASE_URL}/api"
 
 ADMIN_EMAIL = "sachin.shukla2196@gmail.com"
 ADMIN_PASSWORD = "Admin@12345"
-ADMIN_PASSCODE = "Anjali@Secure#2026"
+ADMIN_PASSCODE = "anj000088sk"
+ADMIN_USERNAME = "admin.rahulnirwana"
 DEMO_EMAIL = "demo.distributor@anjaliherballife.in"
 DEMO_PASSWORD = "Demo@1234"
 
@@ -99,7 +100,7 @@ class TestManualUpi:
             "claimed order not visible in /api/admin/orders"
 
         # admin confirm
-        c = adm.put(f"{API}/admin/payments/upi-confirm/{oid}", timeout=30)
+        c = adm.put(f"{API}/admin/payments/upi-confirm/{oid}", json={"reference": "QA-UTR-1"}, timeout=30)
         assert c.status_code == 200, c.text
 
         g2 = ds.get(f"{API}/orders/{oid}", timeout=20)
@@ -109,7 +110,7 @@ class TestManualUpi:
         assert od2.get("invoice_number"), "invoice_number not generated"
 
         # idempotency: second confirm must not change anything
-        c2 = adm.put(f"{API}/admin/payments/upi-confirm/{oid}", timeout=30)
+        c2 = adm.put(f"{API}/admin/payments/upi-confirm/{oid}", json={"reference": "QA-UTR-1"}, timeout=30)
         assert c2.status_code == 200, c2.text
         od3 = ds.get(f"{API}/orders/{oid}", timeout=20).json()
         assert od3["invoice_number"] == od2["invoice_number"], "invoice regenerated on repeat confirm"
@@ -120,7 +121,7 @@ class TestManualUpi:
         adm, _ = admin
         order = _create_order(ds, starter_product["id"])
         ds.post(f"{API}/payments/upi-claim", json={"order_id": order["id"]}, timeout=25)
-        adm.put(f"{API}/admin/payments/upi-confirm/{order['id']}", timeout=30)
+        adm.put(f"{API}/admin/payments/upi-confirm/{order['id']}", json={"reference": "QA-UTR-2"}, timeout=30)
         r = ds.post(f"{API}/payments/upi-claim", json={"order_id": order["id"]}, timeout=25)
         assert r.status_code == 400, f"expected 400 for paid order, got {r.status_code} {r.text[:200]}"
 
@@ -136,14 +137,14 @@ class TestManualUpi:
     def test_confirm_requires_admin(self, dist, starter_product):
         ds, _ = dist
         order = _create_order(ds, starter_product["id"])
-        r = ds.put(f"{API}/admin/payments/upi-confirm/{order['id']}", timeout=20)
+        r = ds.put(f"{API}/admin/payments/upi-confirm/{order['id']}", json={"reference": "QA-UTR-3"}, timeout=20)
         assert r.status_code == 403, f"distributor must not confirm payments, got {r.status_code}"
         # order must stay pending
         assert ds.get(f"{API}/orders/{order['id']}", timeout=20).json()["payment_status"] == "pending"
 
     def test_confirm_unknown_order_404(self, admin):
         adm, _ = admin
-        r = adm.put(f"{API}/admin/payments/upi-confirm/{uuid.uuid4()}", timeout=20)
+        r = adm.put(f"{API}/admin/payments/upi-confirm/{uuid.uuid4()}", json={"reference": "QA-UTR-4"}, timeout=20)
         assert r.status_code == 404, r.status_code
 
     def test_cannot_claim_other_users_order(self, admin, dist, starter_product):
@@ -174,7 +175,7 @@ class TestStripeRegression:
         adm, _ = admin
         order = _create_order(ds, starter_product["id"])
         ds.post(f"{API}/payments/upi-claim", json={"order_id": order["id"]}, timeout=25)
-        adm.put(f"{API}/admin/payments/upi-confirm/{order['id']}", timeout=30)
+        adm.put(f"{API}/admin/payments/upi-confirm/{order['id']}", json={"reference": "QA-UTR-2"}, timeout=30)
         r = ds.post(f"{API}/payments/checkout", json={"order_id": order["id"], "origin_url": BASE_URL}, timeout=40)
         assert r.status_code == 400, r.status_code
 
@@ -183,7 +184,7 @@ class TestStripeRegression:
 class TestAdminLogin:
     def test_success(self):
         r = requests.post(f"{API}/auth/admin-login", json={
-            "email": ADMIN_EMAIL, "password": ADMIN_PASSWORD, "passcode": ADMIN_PASSCODE}, timeout=25)
+            "username": ADMIN_EMAIL, "password": ADMIN_PASSWORD, "passcode": ADMIN_PASSCODE}, timeout=25)
         assert r.status_code == 200, r.text
         d = r.json()
         assert d.get("token") and isinstance(d["token"], str)
@@ -198,18 +199,18 @@ class TestAdminLogin:
 
     def test_wrong_passcode_401(self):
         r = requests.post(f"{API}/auth/admin-login", json={
-            "email": ADMIN_EMAIL, "password": ADMIN_PASSWORD, "passcode": "wrong-passcode"}, timeout=25)
+            "username": ADMIN_EMAIL, "password": ADMIN_PASSWORD, "passcode": "wrong-passcode"}, timeout=25)
         assert r.status_code == 401, f"{r.status_code} {r.text[:200]}"
         assert "token" not in r.text
 
     def test_missing_passcode_rejected(self):
         r = requests.post(f"{API}/auth/admin-login", json={
-            "email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=25)
+            "username": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=25)
         assert r.status_code in (401, 422), r.status_code
 
     def test_distributor_role_gated(self):
         r = requests.post(f"{API}/auth/admin-login", json={
-            "email": DEMO_EMAIL, "password": DEMO_PASSWORD, "passcode": ADMIN_PASSCODE}, timeout=25)
+            "username": DEMO_EMAIL, "password": DEMO_PASSWORD, "passcode": ADMIN_PASSCODE}, timeout=25)
         assert r.status_code == 401, f"distributor must be rejected, got {r.status_code} {r.text[:200]}"
 
     def test_lockout_after_5_wrong_attempts(self):
@@ -218,16 +219,16 @@ class TestAdminLogin:
         codes = []
         for _ in range(6):
             r = requests.post(f"{API}/auth/admin-login", json={
-                "email": email, "password": "Nope@1234", "passcode": "bad"}, timeout=25)
+                "username": email, "password": "Nope@1234", "passcode": "bad"}, timeout=25)
             codes.append(r.status_code)
         assert codes[:5] == [401] * 5, codes
         assert codes[5] == 429, f"expected 429 lockout on 6th attempt, got {codes}"
         # even correct passcode is blocked while locked
         r = requests.post(f"{API}/auth/admin-login", json={
-            "email": email, "password": "Nope@1234", "passcode": ADMIN_PASSCODE}, timeout=25)
+            "username": email, "password": "Nope@1234", "passcode": ADMIN_PASSCODE}, timeout=25)
         assert r.status_code == 429, r.status_code
 
     def test_admin_credentials_not_locked_by_this_suite(self):
         r = requests.post(f"{API}/auth/admin-login", json={
-            "email": ADMIN_EMAIL, "password": ADMIN_PASSWORD, "passcode": ADMIN_PASSCODE}, timeout=25)
+            "username": ADMIN_EMAIL, "password": ADMIN_PASSWORD, "passcode": ADMIN_PASSCODE}, timeout=25)
         assert r.status_code == 200, f"admin got locked out: {r.status_code} {r.text[:200]}"

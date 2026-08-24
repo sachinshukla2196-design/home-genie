@@ -325,19 +325,28 @@ async def upi_claim(body: UpiClaim, request: Request, user: dict = Depends(get_c
     return {"message": "Payment submitted. Admin will verify and activate shortly.", "order_id": order["id"]}
 
 
+class UpiConfirm(BaseModel):
+    reference: str = ""
+
+
 @router.put("/admin/payments/upi-confirm/{order_id}")
-async def upi_confirm(order_id: str, request: Request, admin: dict = Depends(require_admin)):
+async def upi_confirm(order_id: str, body: UpiConfirm, request: Request, admin: dict = Depends(require_admin)):
+    ref = (body.reference or "").strip()
+    if not ref:
+        raise HTTPException(status_code=400, detail="Payment reference ID (UTR / txn id) is required.")
     order = await db.orders.find_one({"id": order_id})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found.")
     if order.get("payment_status") == "paid":
         return {"message": "Order already paid."}
+    await db.orders.update_one({"id": order_id}, {"$set": {
+        "payment_reference": ref, "upi_reference": ref, "updated_at": now_iso()}})
     sid = f"manual_{order_id}"
     if not await db.payment_transactions.find_one({"session_id": sid}):
         await db.payment_transactions.insert_one({
             "id": new_id(), "session_id": sid, "order_id": order_id, "user_id": order["user_id"],
-            "amount": order["total"], "currency": order.get("currency", "INR"),
+            "amount": order["total"], "currency": order.get("currency", "INR"), "reference": ref,
             "status": "manual", "payment_status": "paid", "created_at": now_iso(), "updated_at": now_iso()})
     await _process_paid_order(sid, request)  # reuses verified activation + commission (idempotent)
-    await log_audit(admin, "upi_payment_confirmed", "order", order_id, request=request)
-    return {"message": "Payment confirmed and account activated."}
+    await log_audit(admin, "upi_payment_confirmed", "order", order_id, new_value={"reference": ref}, request=request)
+    return {"message": "Payment confirmed and account activated.", "reference": ref}

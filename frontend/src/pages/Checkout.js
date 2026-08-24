@@ -17,15 +17,21 @@ export default function Checkout() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
   const [showQr, setShowQr] = useState(null);
+  const [cfg, setCfg] = useState({ currency_symbol: "₹", gst_percent: 5 });
   const [addr, setAddr] = useState({
     full_name: user?.full_name || "", mobile: user?.mobile || "", line1: user?.address || "",
     city: user?.city || "", state: user?.state || "", pincode: user?.pincode || "",
   });
-  const sym = "₹";
+  const sym = cfg.currency_symbol || "₹";
   const money = (v) => `${sym}${Number(v).toLocaleString("en-IN")}`;
-  const gst = Math.round(subtotal * 0.05);
+  const gstPct = Number(cfg.gst_percent ?? 5);
+  const gst = Math.round(subtotal * gstPct / 100);
   const total = subtotal + gst;
   const set = (k) => (e) => setAddr((a) => ({ ...a, [k]: e.target.value }));
+
+  useEffect(() => {
+    API.get("/settings/public").then(({ data }) => setCfg((c) => ({ ...c, ...data }))).catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (items.length === 0 && !showQr) navigate("/app/products");
@@ -97,7 +103,7 @@ export default function Checkout() {
             ))}
             <div className="my-2 border-t border-brand-50" />
             <div className="flex justify-between text-muted2"><span>{t("order.subtotal")}</span><span>{money(subtotal)}</span></div>
-            <div className="flex justify-between text-muted2"><span>{t("order.gst")} (5%)</span><span>{money(gst)}</span></div>
+            <div className="flex justify-between text-muted2"><span>{t("order.gst")} ({gstPct}%)</span><span>{money(gst)}</span></div>
             <div className="my-2 border-t border-brand-50" />
             <div className="flex justify-between font-display text-lg font-semibold text-forest"><span>{t("order.total")}</span><span>{money(total)}</span></div>
           </div>
