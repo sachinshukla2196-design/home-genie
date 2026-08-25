@@ -62,6 +62,11 @@ FastAPI+Mongo+React · Stripe · Email+Password with email OTP (OTP delivery MOC
 - Forgot-password is EMAIL-based now (was mobile OTP): POST /api/auth/forgot/send {email} + /forgot/reset {email, otp, password}. In beta the code is shown on-screen (dev_otp) because the email integration currently returns 422 — REAL email delivery needs a working provider (Resend) wired in production.
 - Admin can reset/generate a user's password: POST /api/admin/users/{id}/reset-password (optional {password}; else auto-generates like Anj#####). UI: "Reset Password" button per row on /admin/users, shows the new password with copy. VERIFIED (auto + custom login works).
 
+## Implemented (2026-06 — session 5)
+- Real email (Resend managed) CONFIRMED WORKING: send returns 202 for real inboxes (Gmail verified); forgot-password code + OTPs delivered by email. Fake/undeliverable test domains (@example.com) return 422 by design (proxy deliverability protection). Env: EMERGENT_EMAIL_KEY, EMAIL_FROM_NAME already set.
+- Razorpay: Key ID (rzp_test_TU3scdWQy95DIu) in env; code ready. STILL NEEDS RAZORPAY_KEY_SECRET to activate (returns 503 until set). Checkout shows "Pay Online (Card/UPI/Netbanking)" + "Pay via PhonePe/UPI (QR)".
+- DEPLOY NOTE: keep APP_ENV=beta in production for now so registration/login OTP still shows on-screen (OTP_PROVIDER=mock is blocked when APP_ENV=production). Switch to production only after MSG91 SMS is wired.
+
 ## Backlog
 - Cosmetic polish (P2): Checkout summary uses hardcoded 5% GST (use server gst_percent); dark-mode 'Activation' badge over product image; /admin-secure-login field fill.
 - Backend hardening (P1): admin "reject UPI claim" path + upi reference validation; admin-login lockout email+IP keying; backport 15-min window to /api/auth/login.
