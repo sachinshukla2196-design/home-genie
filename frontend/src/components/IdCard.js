@@ -10,7 +10,6 @@ export function IdCard({ user }) {
   const { t } = useI18n();
   const cardRef = useRef(null);
   const [qr, setQr] = useState("");
-  const green = user?.status === "green";
   const refLink = `${window.location.origin}/register?ref=${user?.distributor_id}`;
   const since = (user?.created_at || "").slice(0, 10) || "—";
   const initials = (user?.full_name || "U").split(" ").map((x) => x[0]).slice(0, 2).join("").toUpperCase();
@@ -86,10 +85,10 @@ export function IdCard({ user }) {
                 <div className="text-[8px] tracking-[0.18em] text-white/60">AYURVEDA INDIA LLP</div>
               </div>
             </div>
-            <span className="rounded-full px-2.5 py-1 text-[10px] font-bold"
-              style={{ background: green ? "rgba(255,255,255,0.16)" : "rgba(198,40,40,0.9)", color: green ? "#C9A227" : "#fff" }}>
-              {green ? "GREEN ID" : "RED ID"}
-            </span>
+            <div className="max-w-[155px] text-right text-[7px] leading-[1.35] text-white/70">
+              <div className="text-[8px] font-semibold text-white/90">Ayurveda India LLP</div>
+              255, Saini Bhawan, Bengali Colony,<br />Ramadevi, Kanpur (U.P.)<br />☎ 9569381755, 9936694255
+            </div>
           </div>
 
           <div className="flex items-end justify-between gap-3">

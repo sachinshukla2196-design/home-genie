@@ -20,7 +20,7 @@ export default function Register() {
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [form, setForm] = useState({
-    full_name: "", email: "", mobile: "", password: "", confirm_password: "",
+    full_name: "", email: "", mobile: "", aadhaar_number: "", password: "", confirm_password: "",
     sponsor_id: params.get("ref") || "", address: "", state: "", city: "", pincode: "",
     otp: "", accept_terms: false,
   });
@@ -29,6 +29,7 @@ export default function Register() {
   const sendOtp = async (e) => {
     e.preventDefault();
     if (!form.sponsor_id.trim()) return toast.error("A referral / sponsor ID is required to register.");
+    if (!/^\d{12}$/.test(form.aadhaar_number.trim())) return toast.error("Enter a valid 12-digit Aadhaar number.");
     if (form.password !== form.confirm_password) return toast.error("Passwords do not match.");
     if (!form.accept_terms) return toast.error(t("auth.acceptTerms"));
     setLoading(true);
@@ -78,8 +79,9 @@ export default function Register() {
               <Field label={t("auth.fullName")} value={form.full_name} onChange={set("full_name")} required testid="reg-fullname" />
               <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
                 <Field label={t("auth.email")} type="email" value={form.email} onChange={set("email")} required testid="reg-email" />
-                <Field label={t("auth.mobile")} value={form.mobile} onChange={set("mobile")} required testid="reg-mobile" />
+                <Field label={`${t("auth.mobile")}`} value={form.mobile} onChange={set("mobile")} required testid="reg-mobile" />
               </div>
+              <Field label={`${t("auth.aadhaar")} *`} value={form.aadhaar_number} onChange={set("aadhaar_number")} required testid="reg-aadhaar" />
               <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
                 <Field label={t("auth.password")} type="password" value={form.password} onChange={set("password")} required testid="reg-password" />
                 <Field label={t("auth.confirmPassword")} type="password" value={form.confirm_password} onChange={set("confirm_password")} required testid="reg-confirm" />

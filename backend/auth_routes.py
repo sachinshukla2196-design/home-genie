@@ -29,6 +29,7 @@ class RegisterBody(BaseModel):
     full_name: str
     email: EmailStr
     mobile: str
+    aadhaar_number: str = ""
     password: str = Field(min_length=6)
     confirm_password: str
     otp: str
@@ -49,6 +50,29 @@ def _valid_mobile(m: str) -> bool:
     return bool(re.fullmatch(r"[6-9]\d{9}", (m or "").strip()))
 
 
+def _valid_aadhaar(a: str) -> bool:
+    return bool(re.fullmatch(r"\d{12}", (a or "").strip()))
+
+
+async def _resolve_sponsor(sid_raw: str) -> dict:
+    """Referral ID mandatory + must be an ACTIVE (GREEN) distributor, an admin, or an admin-generated code."""
+    sid = (sid_raw or "").strip().upper()
+    if not sid:
+        raise HTTPException(status_code=400, detail="A referral / sponsor ID is required to register.")
+    rc = await db.referral_codes.find_one({"code": sid, "active": True})
+    if rc:
+        admin = await db.users.find_one({"id": rc.get("created_by")}) or await db.users.find_one({"role": "super_admin"})
+        if admin:
+            await db.referral_codes.update_one({"code": sid}, {"$inc": {"uses": 1}})
+            return admin
+    sponsor = await db.users.find_one({"distributor_id": sid})
+    if not sponsor:
+        raise HTTPException(status_code=400, detail="Invalid referral / sponsor ID. Please check and try again.")
+    if sponsor.get("role") not in ADMIN_ROLES and sponsor.get("status") != "green":
+        raise HTTPException(status_code=400, detail="This referral ID belongs to an inactive member. Please use an active (GREEN) distributor's referral ID.")
+    return sponsor
+
+
 @router.post("/send-otp")
 async def send_otp(body: SendOtp, request: Request):
     """Registration mobile OTP (mock provider in beta). Also emails the code when available."""
@@ -60,11 +84,7 @@ async def send_otp(body: SendOtp, request: Request):
         raise HTTPException(status_code=400, detail="This mobile number is already registered.")
     if not _valid_mobile(mobile):
         raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number.")
-    sid = (body.sponsor_id or "").strip().upper()
-    if not sid:
-        raise HTTPException(status_code=400, detail="A referral / sponsor ID is required to register.")
-    if not await db.users.find_one({"distributor_id": sid}):
-        raise HTTPException(status_code=400, detail="Invalid referral / sponsor ID. Please check and try again.")
+    await _resolve_sponsor(body.sponsor_id)
     res = await otp_create(mobile, "register")
     if res.get("dev_otp"):
         html = email_shell("Verify your mobile", f"""
@@ -91,13 +111,11 @@ async def register(body: RegisterBody, request: Request):
 
     await otp_verify(mobile, "register", body.otp)
 
-    # sponsor resolution — referral ID is mandatory
-    sid = (body.sponsor_id or "").strip().upper()
-    if not sid:
-        raise HTTPException(status_code=400, detail="A referral / sponsor ID is required to register.")
-    sponsor = await db.users.find_one({"distributor_id": sid}, {"_id": 0})
-    if not sponsor:
-        raise HTTPException(status_code=400, detail="Invalid referral / sponsor ID. Please check and try again.")
+    if not _valid_aadhaar(body.aadhaar_number):
+        raise HTTPException(status_code=400, detail="A valid 12-digit Aadhaar number is required.")
+
+    # sponsor resolution — referral ID is mandatory + must be an active (GREEN) member or admin-generated code
+    sponsor = await _resolve_sponsor(body.sponsor_id)
 
     distributor_id = await next_distributor_id()
     uid = new_id()
@@ -115,6 +133,7 @@ async def register(body: RegisterBody, request: Request):
         "sponsor_id": sponsor["distributor_id"] if sponsor else None,
         "sponsor_user_id": sponsor["id"] if sponsor else None,
         "address": body.address, "state": body.state, "city": body.city, "pincode": body.pincode,
+        "aadhaar_number": body.aadhaar_number.strip(),
         "kyc_status": "not_started",
         "activation_date": None, "activation_order_id": None, "activation_amount": None,
         "created_at": now_iso(), "updated_at": now_iso(),

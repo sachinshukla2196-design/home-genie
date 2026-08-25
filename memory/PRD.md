@@ -48,6 +48,15 @@ FastAPI+Mongo+React · Stripe · Email+Password with email OTP (OTP delivery MOC
 - NOTE: The "Frontend Preview Only / Wake up servers" banner + 404s are Emergent PREVIEW dormancy behavior only; they do NOT occur on production. Preview backend verified healthy (/health 200, all APIs 200/401 as expected).
 - Referral/sponsor ID is now MANDATORY at registration (send-otp + register validate it; frontend field required with helper text EN/HI).
 
+## Implemented (2026-06 — session 3)
+- Razorpay online payment (test key rzp_test_TU3scdWQy95DIu) wired READY-TO-USE: POST /api/payments/razorpay/order + /verify (signature check via razorpay lib), Checkout "Pay Online" button opens Razorpay checkout. NEEDS RAZORPAY_KEY_SECRET in backend/.env to activate (returns 503 until set). VERIFIED endpoints respond correctly.
+- Easy admin creds per owner: username `admin` / password `admin123` / passcode `admin123`. Lockouts cleared.
+- Aadhaar number MANDATORY (12 digits) at registration (backend + frontend field). VERIFIED.
+- Active-Referrer Rule: sponsor must be GREEN distributor, an admin, or an admin-generated code. RED sponsor rejected. VERIFIED.
+- Admin referral-code generator: POST/GET /api/admin/referral-codes + "Generate Code" UI on /admin/users. Code resolves sponsor to company root (ANJ000000). VERIFIED (ANJ000171 registered under a code).
+- ID card: removed RED/GREEN status badge; added company address (255, Saini Bhawan, Bengali Colony, Ramadevi, Kanpur; ☎ 9569381755, 9936694255).
+- NOTE: signups via admin-generated codes credit the ₹100 referral commission to the company root (super_admin, GREEN) on activation — expected default.
+
 ## Backlog
 - Cosmetic polish (P2): Checkout summary uses hardcoded 5% GST (use server gst_percent); dark-mode 'Activation' badge over product image; /admin-secure-login field fill.
 - Backend hardening (P1): admin "reject UPI claim" path + upi reference validation; admin-login lockout email+IP keying; backport 15-min window to /api/auth/login.

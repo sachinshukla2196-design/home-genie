@@ -2,6 +2,7 @@
 commissions, activations, settings, audit logs, reports (with CSV export)."""
 import io
 import csv
+import secrets
 from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -297,6 +298,22 @@ async def admin_update_settings(body: SettingsBody, request: Request, admin: dic
     await log_audit(admin, "settings_updated", "business_settings", "business_settings",
                     old_value=old, new_value=upd, request=request)
     return await get_settings()
+
+
+@router.post("/referral-codes")
+async def gen_referral_code(request: Request, admin: dict = Depends(require_admin)):
+    code = "ANJ" + "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(6))
+    doc = {"id": new_id(), "code": code, "active": True, "created_by": admin["id"],
+           "created_by_name": admin.get("full_name"), "uses": 0, "created_at": now_iso()}
+    await db.referral_codes.insert_one(dict(doc))
+    doc.pop("_id", None)
+    await log_audit(admin, "referral_code_generated", "referral_code", code, request=request)
+    return doc
+
+
+@router.get("/referral-codes")
+async def list_referral_codes(admin: dict = Depends(require_admin)):
+    return await db.referral_codes.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
 
 
 # ---------------- Audit logs ----------------

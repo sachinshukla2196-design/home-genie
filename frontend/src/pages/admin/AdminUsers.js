@@ -1,15 +1,35 @@
 import React, { useEffect, useState } from "react";
+import { toast } from "sonner";
+import { Copy, Ticket, Plus } from "lucide-react";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
 import { useI18n } from "@/context/I18nContext";
-import { API } from "@/lib/api";
+import { API, apiError } from "@/lib/api";
 
 export default function AdminUsers() {
   const { t } = useI18n();
   const [users, setUsers] = useState(null);
   const [filter, setFilter] = useState("");
+  const [codes, setCodes] = useState([]);
+  const [genLoading, setGenLoading] = useState(false);
 
-  useEffect(() => { API.get("/admin/users").then(({ data }) => setUsers(data)).catch(() => setUsers([])); }, []);
+  useEffect(() => {
+    API.get("/admin/users").then(({ data }) => setUsers(data)).catch(() => setUsers([]));
+    API.get("/admin/referral-codes").then(({ data }) => setCodes(data)).catch(() => {});
+  }, []);
+
+  const generate = async () => {
+    setGenLoading(true);
+    try {
+      const { data } = await API.post("/admin/referral-codes");
+      setCodes((c) => [data, ...c]);
+      toast.success(`Referral code ${data.code} generated`);
+    } catch (e) { toast.error(apiError(e)); } finally { setGenLoading(false); }
+  };
+
+  const copy = (code) => { navigator.clipboard?.writeText(code); toast.success(`Copied ${code}`); };
+
   if (!users) return <Skeleton className="h-96 rounded-2xl" />;
 
   const filtered = users.filter((u) => !filter || u.full_name?.toLowerCase().includes(filter.toLowerCase()) || u.distributor_id?.toLowerCase().includes(filter.toLowerCase()) || u.email?.toLowerCase().includes(filter.toLowerCase()));
@@ -20,6 +40,34 @@ export default function AdminUsers() {
         <h1 className="font-display text-2xl font-semibold text-ink">{t("nav.users")}</h1>
         <input placeholder={t("common.search")} value={filter} onChange={(e) => setFilter(e.target.value)} className="h-10 w-64 rounded-full border border-brand-50 bg-white px-4 text-sm focus:outline-none focus:ring-2 focus:ring-brand" data-testid="user-search" />
       </div>
+
+      {/* Referral code generator */}
+      <div className="rounded-2xl border border-brand-50 bg-white p-6 shadow-card" data-testid="referral-code-card">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-50 text-forest"><Ticket size={20} /></div>
+            <div>
+              <h3 className="font-display text-lg font-medium text-ink">Referral Codes</h3>
+              <p className="text-xs text-muted2">Generate a code and share it to onboard new distributors (referral is mandatory at signup).</p>
+            </div>
+          </div>
+          <Button onClick={generate} disabled={genLoading} className="rounded-full bg-forest hover:bg-brand" data-testid="generate-referral-code-btn">
+            <Plus size={16} className="mr-1.5" /> {genLoading ? "Generating…" : "Generate Code"}
+          </Button>
+        </div>
+        {codes.length > 0 && (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {codes.slice(0, 12).map((c) => (
+              <button key={c.code} onClick={() => copy(c.code)} className="group inline-flex items-center gap-2 rounded-full border border-brand-50 bg-brand-50/40 px-3 py-1.5 text-sm font-medium text-forest transition-all hover:-translate-y-0.5 hover:shadow-card" data-testid={`referral-code-${c.code}`}>
+                <span className="font-mono">{c.code}</span>
+                <span className="text-[10px] text-muted2">· {c.uses || 0} used</span>
+                <Copy size={13} className="opacity-60 group-hover:opacity-100" />
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="overflow-x-auto rounded-2xl border border-brand-50 bg-white shadow-card">
         <table className="w-full text-sm">
           <thead><tr className="border-b border-brand-50 text-left text-muted2"><th className="p-4">ID</th><th className="p-4">{t("common.name")}</th><th className="p-4">{t("auth.email")}</th><th className="p-4">{t("common.status")}</th><th className="p-4">Sponsor</th><th className="p-4">KYC</th><th className="p-4">Joined</th></tr></thead>

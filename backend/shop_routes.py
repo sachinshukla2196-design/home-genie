@@ -11,6 +11,16 @@ from core import (db, now_iso, new_id, get_current_user, get_settings, next_sequ
 
 router = APIRouter(prefix="/api", tags=["shop"])
 
+import razorpay
+RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID", "")
+RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET", "")
+
+
+def _razorpay_client():
+    if not (RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET):
+        raise HTTPException(status_code=503, detail="Online payment is not configured yet. Please use UPI or contact admin.")
+    return razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
+
 STRIPE_API_KEY = os.environ.get("STRIPE_API_KEY", "sk_test_emergent")
 
 
@@ -175,6 +185,54 @@ async def create_checkout(body: CheckoutBody, request: Request, user: dict = Dep
     await db.orders.update_one({"id": order["id"]},
                                {"$set": {"stripe_session_id": session.session_id, "updated_at": now_iso()}})
     return {"checkout_url": session.url, "session_id": session.session_id}
+
+
+class RzpOrderBody(BaseModel):
+    order_id: str
+
+
+@router.post("/payments/razorpay/order")
+async def razorpay_create_order(body: RzpOrderBody, user: dict = Depends(get_current_user)):
+    order = await db.orders.find_one({"id": body.order_id}, {"_id": 0})
+    if not order or order["user_id"] != user["id"]:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    if order["payment_status"] == "paid":
+        raise HTTPException(status_code=400, detail="This order is already paid.")
+    client = _razorpay_client()
+    amount_paise = int(round(float(order["total"]) * 100))
+    rzp_order = client.order.create({"amount": amount_paise, "currency": "INR",
+                                     "receipt": order["order_number"][:40], "payment_capture": 1})
+    await db.payment_transactions.insert_one({
+        "id": new_id(), "session_id": rzp_order["id"], "order_id": order["id"], "user_id": user["id"],
+        "amount": float(order["total"]), "currency": "INR", "provider": "razorpay",
+        "status": "initiated", "payment_status": "pending", "created_at": now_iso(), "updated_at": now_iso()})
+    await db.orders.update_one({"id": order["id"]}, {"$set": {"razorpay_order_id": rzp_order["id"], "updated_at": now_iso()}})
+    return {"key_id": RAZORPAY_KEY_ID, "razorpay_order_id": rzp_order["id"],
+            "amount": amount_paise, "currency": "INR", "order_number": order["order_number"],
+            "name": user.get("full_name"), "email": user.get("email"), "contact": user.get("mobile")}
+
+
+class RzpVerifyBody(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+
+
+@router.post("/payments/razorpay/verify")
+async def razorpay_verify(body: RzpVerifyBody, request: Request, user: dict = Depends(get_current_user)):
+    client = _razorpay_client()
+    try:
+        client.utility.verify_payment_signature({
+            "razorpay_order_id": body.razorpay_order_id,
+            "razorpay_payment_id": body.razorpay_payment_id,
+            "razorpay_signature": body.razorpay_signature})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Payment verification failed.")
+    await db.payment_transactions.update_one({"session_id": body.razorpay_order_id},
+        {"$set": {"razorpay_payment_id": body.razorpay_payment_id, "updated_at": now_iso()}})
+    await _process_paid_order(body.razorpay_order_id, request)
+    tx = await db.payment_transactions.find_one({"session_id": body.razorpay_order_id}, {"_id": 0})
+    return {"message": "Payment successful", "order_id": tx.get("order_id") if tx else None}
 
 
 async def _process_paid_order(session_id: str, request: Request = None):

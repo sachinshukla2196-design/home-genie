@@ -64,6 +64,45 @@ export default function Checkout() {
     } catch (err) { toast.error(apiError(err)); } finally { setLoading(false); }
   };
 
+  const loadRzp = () => new Promise((res) => {
+    if (window.Razorpay) return res(true);
+    const s = document.createElement("script");
+    s.src = "https://checkout.razorpay.com/v1/checkout.js";
+    s.onload = () => res(true); s.onerror = () => res(false);
+    document.body.appendChild(s);
+  });
+
+  const razorpayPay = async () => {
+    setLoading(true);
+    try {
+      const orderItems = items.map((i) => ({ product_id: i.product_id, quantity: i.quantity }));
+      const { data: order } = await API.post("/orders", { items: orderItems, address: addr });
+      const { data: rzp } = await API.post("/payments/razorpay/order", { order_id: order.id });
+      const ok = await loadRzp();
+      if (!ok) { toast.error("Could not load payment gateway."); setLoading(false); return; }
+      const rz = new window.Razorpay({
+        key: rzp.key_id, amount: rzp.amount, currency: rzp.currency,
+        name: "Anjali Herbal Life", description: `Order ${rzp.order_number}`,
+        order_id: rzp.razorpay_order_id,
+        prefill: { name: rzp.name, email: rzp.email, contact: rzp.contact },
+        theme: { color: "#0B4D2E" },
+        handler: async (resp) => {
+          try {
+            await API.post("/payments/razorpay/verify", {
+              razorpay_order_id: resp.razorpay_order_id,
+              razorpay_payment_id: resp.razorpay_payment_id,
+              razorpay_signature: resp.razorpay_signature });
+            clear();
+            toast.success("Payment successful!");
+            navigate(`/app/orders/${order.id}`);
+          } catch (e) { toast.error(apiError(e)); }
+        },
+        modal: { ondismiss: () => setLoading(false) },
+      });
+      rz.open();
+    } catch (err) { toast.error(apiError(err)); setLoading(false); }
+  };
+
   if (showQr) return (
     <div className="mx-auto max-w-md text-center" data-testid="upi-qr-panel">
       <div className="rounded-2xl border border-brand-50 bg-white p-6 shadow-card">
@@ -113,6 +152,9 @@ export default function Checkout() {
           <p className="mt-3 text-center text-xs text-muted2">Test card: 4242 4242 4242 4242</p>
           <div className="mt-4 border-t border-brand-50 pt-4">
             <div className="mb-2 text-center text-xs font-medium uppercase tracking-wide text-muted2">or pay directly</div>
+            <Button type="button" onClick={razorpayPay} disabled={loading} className="mb-2 w-full rounded-full bg-forest hover:bg-brand" data-testid="razorpay-pay-btn">
+              Pay Online (Card / UPI / Netbanking)
+            </Button>
             <Button type="button" onClick={upiPay} disabled={loading} variant="outline" className="w-full rounded-full border-forest/30 text-forest hover:bg-brand-50" data-testid="upi-pay-btn">
               Pay via PhonePe / UPI (QR)
             </Button>
