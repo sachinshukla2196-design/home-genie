@@ -86,8 +86,7 @@ export function IdCard({ user }) {
               </div>
             </div>
             <div className="max-w-[155px] text-right text-[7px] leading-[1.35] text-white/70">
-              <div className="text-[8px] font-semibold text-white/90">Ayurveda India LLP</div>
-              255, Saini Bhawan, Bengali Colony,<br />Ramadevi, Kanpur (U.P.)<br />☎ 9569381755, 9936694255
+              255, Saini Bhawan, Bengali Colony,<br />Ramadevi, Kanpur (U.P.) - 208007<br />☎ 9569381755, 9936694255
             </div>
           </div>
 
