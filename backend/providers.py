@@ -38,7 +38,10 @@ async def otp_create(identifier: str, purpose: str) -> dict:
         except Exception:
             pass
     code = TEST_OTP if is_test_number(identifier) else f"{secrets.randbelow(1000000):06d}"
-    await db.otp_sessions.delete_many({"identifier": identifier, "purpose": purpose})
+    # invalidate any prior pending OTP for this identifier/purpose (non-destructive)
+    await db.otp_sessions.update_many(
+        {"identifier": identifier, "purpose": purpose, "used": False},
+        {"$set": {"used": True}})
     await db.otp_sessions.insert_one({
         "identifier": identifier, "purpose": purpose, "code_hash": _hash(code),
         "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=OTP_TTL)).isoformat(),

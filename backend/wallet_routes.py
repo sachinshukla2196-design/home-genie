@@ -51,15 +51,26 @@ async def referral_info(user: dict = Depends(get_current_user)):
 @router.get("/team")
 async def team(user: dict = Depends(get_current_user)):
     rels = await db.referral_relationships.find({"sponsor_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    referred_ids = [r["referred_user_id"] for r in rels]
+    users_map = {u["id"]: u for u in await db.users.find(
+        {"id": {"$in": referred_ids}},
+        {"_id": 0, "id": 1, "full_name": 1, "distributor_id": 1, "status": 1,
+         "created_at": 1, "city": 1, "state": 1, "photo": 1}).to_list(len(referred_ids) or 1)}
+    downline_map = {}
+    if referred_ids:
+        agg = await db.referral_relationships.aggregate([
+            {"$match": {"sponsor_id": {"$in": referred_ids}}},
+            {"$group": {"_id": "$sponsor_id", "c": {"$sum": 1}}},
+        ]).to_list(len(referred_ids))
+        downline_map = {g["_id"]: g["c"] for g in agg}
     out = []
     for r in rels:
-        u = await db.users.find_one({"id": r["referred_user_id"]},
-                                    {"_id": 0, "full_name": 1, "distributor_id": 1, "status": 1,
-                                     "created_at": 1, "city": 1, "state": 1, "photo": 1})
+        u = users_map.get(r["referred_user_id"])
         if u:
-            downline = await db.referral_relationships.count_documents({"sponsor_id": r["referred_user_id"]})
+            u = {k: v for k, v in u.items() if k != "id"}
             out.append({**u, "commission_paid": r.get("commission_paid", False),
-                        "joined_at": r.get("created_at"), "downline_count": downline})
+                        "joined_at": r.get("created_at"),
+                        "downline_count": downline_map.get(r["referred_user_id"], 0)})
     root = {"full_name": user.get("full_name"), "distributor_id": user.get("distributor_id"),
             "status": user.get("status"), "photo": user.get("photo")}
     return {"root": root, "members": out, "total": len(out),

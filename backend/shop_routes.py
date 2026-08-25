@@ -69,8 +69,11 @@ async def create_order(body: CreateOrder, request: Request, user: dict = Depends
     line_items = []
     subtotal = 0.0
     is_activation_order = False
+    product_ids = [it.product_id for it in body.items]
+    products = {p["id"]: p for p in await db.products.find(
+        {"id": {"$in": product_ids}}, {"_id": 0}).to_list(len(product_ids) or 1)}
     for it in body.items:
-        p = await db.products.find_one({"id": it.product_id}, {"_id": 0})
+        p = products.get(it.product_id)
         if not p or not p.get("is_active"):
             raise HTTPException(status_code=400, detail="A product in your cart is unavailable.")
         price = float(p["selling_price"])
