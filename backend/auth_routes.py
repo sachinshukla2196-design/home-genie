@@ -265,8 +265,12 @@ class MobileOtpBody(BaseModel):
     otp: str
 
 
+class EmailBody(BaseModel):
+    email: EmailStr
+
+
 class ForgotResetBody(BaseModel):
-    mobile: str
+    email: EmailStr
     otp: str
     password: str = Field(min_length=6)
 
@@ -292,21 +296,32 @@ async def login_otp_verify(body: MobileOtpBody, request: Request):
 
 
 @router.post("/forgot/send")
-async def forgot_send(body: MobileBody):
-    mobile = body.mobile.strip()
-    if not await db.users.find_one({"mobile": mobile}):
-        raise HTTPException(status_code=404, detail="No account found for this mobile number.")
-    res = await otp_create(mobile, "forgot")
-    return {"message": "OTP sent to your mobile.", **res}
+async def forgot_send(body: EmailBody):
+    email = body.email.lower().strip()
+    user = await db.users.find_one({"email": email})
+    if not user:
+        raise HTTPException(status_code=404, detail="No account found for this email.")
+    res = await otp_create(email, "forgot")
+    if res.get("dev_otp"):
+        html = email_shell("Reset your password", f"""
+      <p style="color:#66736B;font-size:14px;">Use the code below to reset your Anjali Herbal Life password. It expires shortly.</p>
+      <div style="margin:20px 0;text-align:center;">
+        <span style="display:inline-block;background:#EAF5ED;color:#0B4D2E;font-size:30px;font-weight:bold;letter-spacing:8px;padding:14px 24px;border-radius:12px;">{res['dev_otp']}</span>
+      </div>""")
+        try:
+            await send_email(email, "Your Anjali Herbal Life password reset code", html)
+        except Exception:
+            pass
+    return {"message": "A reset code has been sent to your email.", **res}
 
 
 @router.post("/forgot/reset")
 async def forgot_reset(body: ForgotResetBody, request: Request):
-    mobile = body.mobile.strip()
-    user = await db.users.find_one({"mobile": mobile})
+    email = body.email.lower().strip()
+    user = await db.users.find_one({"email": email})
     if not user:
-        raise HTTPException(status_code=404, detail="No account found for this mobile number.")
-    await otp_verify(mobile, "forgot", body.otp)
+        raise HTTPException(status_code=404, detail="No account found for this email.")
+    await otp_verify(email, "forgot", body.otp)
     await db.users.update_one({"id": user["id"]},
                               {"$set": {"password_hash": hash_password(body.password), "updated_at": now_iso()}})
     await log_audit(clean_user(user), "password_reset", "user", user["id"], request=request)

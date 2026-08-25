@@ -3,6 +3,7 @@ commissions, activations, settings, audit logs, reports (with CSV export)."""
 import io
 import csv
 import secrets
+from core import hash_password
 from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -314,6 +315,24 @@ async def gen_referral_code(request: Request, admin: dict = Depends(require_admi
 @router.get("/referral-codes")
 async def list_referral_codes(admin: dict = Depends(require_admin)):
     return await db.referral_codes.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
+
+
+class AdminPwBody(BaseModel):
+    password: Optional[str] = None
+
+
+@router.post("/users/{user_id}/reset-password")
+async def admin_reset_password(user_id: str, body: AdminPwBody, request: Request, admin: dict = Depends(require_admin)):
+    u = await db.users.find_one({"id": user_id})
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found.")
+    new_pw = (body.password or "").strip() or ("Anj" + "".join(secrets.choice("23456789") for _ in range(5)))
+    if len(new_pw) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
+    await db.users.update_one({"id": user_id}, {"$set": {"password_hash": hash_password(new_pw), "updated_at": now_iso()}})
+    await log_audit(admin, "admin_reset_password", "user", user_id, request=request)
+    return {"message": "Password reset successfully.", "password": new_pw,
+            "distributor_id": u.get("distributor_id"), "email": u.get("email"), "full_name": u.get("full_name")}
 
 
 # ---------------- Audit logs ----------------

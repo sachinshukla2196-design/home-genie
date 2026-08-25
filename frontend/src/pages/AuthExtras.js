@@ -82,7 +82,7 @@ export function ForgotPassword() {
   const { t } = useI18n();
   const navigate = useNavigate();
   const [step, setStep] = useState(1);
-  const [mobile, setMobile] = useState("");
+  const [email, setEmail] = useState("");
   const [otp, setOtp] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
@@ -90,31 +90,31 @@ export function ForgotPassword() {
   const send = async () => {
     setLoading(true);
     try {
-      const { data } = await API.post("/auth/forgot/send", { mobile });
-      if (data.dev_otp) { setOtp(data.dev_otp); toast.info(`Demo OTP: ${data.dev_otp}`, { duration: 8000 }); }
-      else toast.success(data.test_number ? "Use test OTP 123456" : "OTP sent to your mobile");
+      const { data } = await API.post("/auth/forgot/send", { email });
+      if (data.dev_otp) { setOtp(data.dev_otp); toast.info(`Demo code: ${data.dev_otp}`, { duration: 8000 }); }
+      else toast.success("A reset code has been sent to your email.");
       setStep(2);
     } catch (e) { toast.error(apiError(e)); } finally { setLoading(false); }
   };
   const reset = async () => {
     setLoading(true);
     try {
-      await API.post("/auth/forgot/reset", { mobile, otp, password });
+      await API.post("/auth/forgot/reset", { email, otp, password });
       toast.success("Password updated. Please log in.");
       navigate("/login");
     } catch (e) { toast.error(apiError(e)); } finally { setLoading(false); }
   };
 
   return (
-    <Shell title="Forgot password" sub="Reset with a mobile OTP">
+    <Shell title="Forgot password" sub="We'll email you a reset code">
       <div className="mt-8 space-y-4">
-        <Field label={t("auth.mobile")} value={mobile} onChange={(e) => setMobile(e.target.value)} testid="forgot-mobile" />
+        <Field label={t("auth.email")} type="email" value={email} onChange={(e) => setEmail(e.target.value)} testid="forgot-email" />
         {step === 2 && <>
-          <Field label={t("auth.otp")} value={otp} onChange={(e) => setOtp(e.target.value)} testid="forgot-otp" />
+          <Field label="Reset code (from email)" value={otp} onChange={(e) => setOtp(e.target.value)} testid="forgot-otp" />
           <Field label="New password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} testid="forgot-password" />
         </>}
         <Button onClick={step === 1 ? send : reset} disabled={loading} className="h-11 w-full rounded-full btn-grad" data-testid="forgot-submit">
-          {loading ? t("common.loading") : step === 1 ? t("auth.sendOtp") : "Reset password"}
+          {loading ? t("common.loading") : step === 1 ? "Send reset code" : "Reset password"}
         </Button>
         <p className="text-center text-sm text-muted2"><Link to="/login" className="font-semibold text-forest hover:underline">{t("cta.back")} to login</Link></p>
       </div>

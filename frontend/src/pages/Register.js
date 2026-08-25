@@ -8,6 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { STATES, CITIES } from "@/data/indiaLocations";
 import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
 import { API, apiError } from "@/lib/api";
@@ -91,9 +93,21 @@ export default function Register() {
                 <p className="mt-1 text-xs text-muted2">{t("auth.sponsorRequired")}</p>
               </div>
               <Field label={t("auth.address")} value={form.address} onChange={set("address")} testid="reg-address" />
-              <div className="grid grid-cols-3 gap-3.5">
-                <Field label={t("auth.state")} value={form.state} onChange={set("state")} testid="reg-state" />
-                <Field label={t("auth.city")} value={form.city} onChange={set("city")} testid="reg-city" />
+              <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">
+                <div>
+                  <Label className="text-sm text-ink">{t("auth.state")}</Label>
+                  <Select value={form.state} onValueChange={(v) => setForm((f) => ({ ...f, state: v, city: "" }))}>
+                    <SelectTrigger className="mt-1.5 h-11 rounded-lg" data-testid="reg-state"><SelectValue placeholder="Select" /></SelectTrigger>
+                    <SelectContent className="max-h-64">{STATES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-sm text-ink">{t("auth.city")}</Label>
+                  <Select value={form.city} onValueChange={(v) => setForm((f) => ({ ...f, city: v }))} disabled={!form.state}>
+                    <SelectTrigger className="mt-1.5 h-11 rounded-lg" data-testid="reg-city"><SelectValue placeholder={form.state ? "Select" : "State first"} /></SelectTrigger>
+                    <SelectContent className="max-h-64">{[...(CITIES[form.state] || []), "Other"].map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
                 <Field label={t("auth.pincode")} value={form.pincode} onChange={set("pincode")} testid="reg-pincode" />
               </div>
               <label className="flex items-center gap-2 pt-1 text-sm text-muted2">

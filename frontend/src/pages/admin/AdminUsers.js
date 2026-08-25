@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Copy, Ticket, Plus } from "lucide-react";
+import { Copy, Ticket, Plus, KeyRound, X } from "lucide-react";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,8 @@ export default function AdminUsers() {
   const [filter, setFilter] = useState("");
   const [codes, setCodes] = useState([]);
   const [genLoading, setGenLoading] = useState(false);
+  const [pwResult, setPwResult] = useState(null); // {full_name, distributor_id, password}
+  const [busyId, setBusyId] = useState(null);
 
   useEffect(() => {
     API.get("/admin/users").then(({ data }) => setUsers(data)).catch(() => setUsers([]));
@@ -28,7 +30,16 @@ export default function AdminUsers() {
     } catch (e) { toast.error(apiError(e)); } finally { setGenLoading(false); }
   };
 
-  const copy = (code) => { navigator.clipboard?.writeText(code); toast.success(`Copied ${code}`); };
+  const copy = (text) => { navigator.clipboard?.writeText(text); toast.success(`Copied ${text}`); };
+
+  const resetPw = async (u) => {
+    setBusyId(u.id);
+    try {
+      const { data } = await API.post(`/admin/users/${u.id}/reset-password`, {});
+      setPwResult(data);
+      toast.success("New password generated");
+    } catch (e) { toast.error(apiError(e)); } finally { setBusyId(null); }
+  };
 
   if (!users) return <Skeleton className="h-96 rounded-2xl" />;
 
@@ -40,6 +51,17 @@ export default function AdminUsers() {
         <h1 className="font-display text-2xl font-semibold text-ink">{t("nav.users")}</h1>
         <input placeholder={t("common.search")} value={filter} onChange={(e) => setFilter(e.target.value)} className="h-10 w-64 rounded-full border border-brand-50 bg-white px-4 text-sm focus:outline-none focus:ring-2 focus:ring-brand" data-testid="user-search" />
       </div>
+
+      {pwResult && (
+        <div className="flex items-center justify-between gap-3 rounded-2xl border border-gold/40 bg-gold-light/50 p-4" data-testid="pw-reset-result">
+          <div className="text-sm text-ink">
+            New password for <b>{pwResult.full_name}</b> ({pwResult.distributor_id}):
+            <button onClick={() => copy(pwResult.password)} className="ml-2 inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1 font-mono font-semibold text-forest shadow-sm hover:shadow" data-testid="pw-reset-value">{pwResult.password} <Copy size={13} /></button>
+            <span className="ml-2 text-xs text-muted2">Share this with the distributor. They can log in and change it.</span>
+          </div>
+          <button onClick={() => setPwResult(null)} className="text-muted2 hover:text-ink" data-testid="pw-reset-dismiss"><X size={18} /></button>
+        </div>
+      )}
 
       {/* Referral code generator */}
       <div className="rounded-2xl border border-brand-50 bg-white p-6 shadow-card" data-testid="referral-code-card">
@@ -70,7 +92,7 @@ export default function AdminUsers() {
 
       <div className="overflow-x-auto rounded-2xl border border-brand-50 bg-white shadow-card">
         <table className="w-full text-sm">
-          <thead><tr className="border-b border-brand-50 text-left text-muted2"><th className="p-4">ID</th><th className="p-4">{t("common.name")}</th><th className="p-4">{t("auth.email")}</th><th className="p-4">{t("common.status")}</th><th className="p-4">Sponsor</th><th className="p-4">KYC</th><th className="p-4">Joined</th></tr></thead>
+          <thead><tr className="border-b border-brand-50 text-left text-muted2"><th className="p-4">ID</th><th className="p-4">{t("common.name")}</th><th className="p-4">{t("auth.email")}</th><th className="p-4">{t("common.status")}</th><th className="p-4">Sponsor</th><th className="p-4">KYC</th><th className="p-4">Joined</th><th className="p-4">Action</th></tr></thead>
           <tbody>
             {filtered.map((u) => (
               <tr key={u.id} className="border-b border-brand-50/60" data-testid={`admin-user-${u.distributor_id}`}>
@@ -81,6 +103,11 @@ export default function AdminUsers() {
                 <td className="p-4 text-muted2">{u.sponsor_id || "—"}</td>
                 <td className="p-4 capitalize text-muted2">{(u.kyc_status || "").replace("_", " ")}</td>
                 <td className="p-4 text-muted2">{(u.created_at || "").slice(0, 10)}</td>
+                <td className="p-4">
+                  <button onClick={() => resetPw(u)} disabled={busyId === u.id} className="inline-flex items-center gap-1.5 rounded-full border border-forest/25 px-3 py-1.5 text-xs font-semibold text-forest transition-all hover:bg-brand-50 disabled:opacity-50" data-testid={`reset-pw-${u.distributor_id}`}>
+                    <KeyRound size={13} /> {busyId === u.id ? "…" : "Reset Password"}
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
