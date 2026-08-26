@@ -67,6 +67,11 @@ FastAPI+Mongo+React · Stripe · Email+Password with email OTP (OTP delivery MOC
 - Razorpay: Key ID (rzp_test_TU3scdWQy95DIu) in env; code ready. STILL NEEDS RAZORPAY_KEY_SECRET to activate (returns 503 until set). Checkout shows "Pay Online (Card/UPI/Netbanking)" + "Pay via PhonePe/UPI (QR)".
 - DEPLOY NOTE: keep APP_ENV=beta in production for now so registration/login OTP still shows on-screen (OTP_PROVIDER=mock is blocked when APP_ENV=production). Switch to production only after MSG91 SMS is wired.
 
+## Fix (session 6) — admin login broken on production
+- Root cause: production had no ADMIN_PASSCODE env set -> `bool("")` made passcode_ok always False -> every admin login returned "Invalid admin credentials or passcode".
+- Fix: auth_routes.py `ADMIN_PASSCODE = os.environ.get("ADMIN_PASSCODE") or "admin123"`; server.py admin_password/username default to "admin123"/"admin". So the easy creds work even when production env vars are missing. Verified via env-unset simulation.
+- ACTION: user must REDEPLOY for production to pick this up. After redeploy, admin login = admin / admin123 / admin123.
+
 ## Razorpay — LIVE (test mode) as of session 5
 - RAZORPAY_KEY_ID="rzp_test_TU6SLmQAw29WNT", RAZORPAY_KEY_SECRET set. Verified: order.create returns real rzp order (order_TU6...), Checkout popup opens (Cards/Netbanking/Wallet/PayLater/UPI), signature verify → _process_paid_order activation.
 - Owner will swap to LIVE keys after Razorpay approves the site.

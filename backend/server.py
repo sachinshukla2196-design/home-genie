@@ -137,8 +137,8 @@ async def startup():
 
     # admin seed
     admin_email = os.environ.get("ADMIN_EMAIL", "admin@anjaliherballife.in").lower()
-    admin_password = os.environ.get("ADMIN_PASSWORD", "Admin@12345")
-    admin_username = os.environ.get("ADMIN_USERNAME", "admin")
+    admin_password = os.environ.get("ADMIN_PASSWORD") or "admin123"
+    admin_username = os.environ.get("ADMIN_USERNAME") or "admin"
     existing = await db.users.find_one({"email": admin_email})
     if not existing:
         await db.users.insert_one({
