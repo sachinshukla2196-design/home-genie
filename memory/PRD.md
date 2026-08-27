@@ -40,6 +40,13 @@ FastAPI+Mongo+React · Stripe · Email+Password with email OTP (OTP delivery MOC
 - Checkout GST now server-driven from /api/settings/public gst_percent (was hardcoded 5%). VERIFIED at 5% and 12%.
 - Dark/Light theme toggle added to public Landing/home header (persisted via localStorage anj_theme). Landing interactivity boosted (hero gradient orbs, floating badge, card hover lift, global button active-scale). VERIFIED.
 
+## Fix (session 7) — BETA request/approval registration + demo cleanup
+- NO-OTP registration: POST /api/auth/register-request (name, mobile, password, email optional, sponsor/address optional) -> PENDING registration_requests; user sees "wait for Admin approval". Register.js is now a single-step form + pending screen.
+- Admin approval on /admin/users (Registration Requests card): GET/approve/reject. Approve -> next_distributor_id() (ANJxxxxxx, unique), user status RED + account_status active + wallet created; audited.
+- Login widened: /api/auth/login accepts Distributor ID / mobile / email + password. Login.js input now type=text.
+- CRITICAL fixes (found by testing agent, iteration_10/11): users.email unique index rebuilt with partialFilterExpression {email:{$type:string}} + drop old email_1 (multiple email-less users now allowed); approve insert try/except -> 400 friendly. Verified 24/24 backend + 7/7 browser (iteration_11).
+- reset-data now also clears registration_requests. SEED_DEMO=false.
+
 ## Deployment Readiness (2026-06 — session 2)
 - Passed deployment_agent scan with ZERO blockers. Fixed 3 issues found:
   1. providers.py OTP cleanup: destructive `delete_many` → non-destructive `update_many` (marks prior pending OTPs used:True). Verified send-otp + register still work.

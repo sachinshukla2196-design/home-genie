@@ -12,6 +12,7 @@ export default function AdminUsers() {
   const [users, setUsers] = useState(null);
   const [filter, setFilter] = useState("");
   const [codes, setCodes] = useState([]);
+  const [reqs, setReqs] = useState([]);
   const [genLoading, setGenLoading] = useState(false);
   const [pwResult, setPwResult] = useState(null); // {full_name, distributor_id, password}
   const [busyId, setBusyId] = useState(null);
@@ -19,7 +20,12 @@ export default function AdminUsers() {
   useEffect(() => {
     API.get("/admin/users").then(({ data }) => setUsers(data)).catch(() => setUsers([]));
     API.get("/admin/referral-codes").then(({ data }) => setCodes(data)).catch(() => {});
+    API.get("/admin/registration-requests").then(({ data }) => setReqs(data)).catch(() => {});
   }, []);
+
+  const loadReqs = () => API.get("/admin/registration-requests").then(({ data }) => setReqs(data)).catch(() => {});
+  const approveReq = async (r) => { try { const { data } = await API.post(`/admin/registration-requests/${r.id}/approve`); toast.success(data.message); loadReqs(); API.get("/admin/users").then(({ data }) => setUsers(data)); } catch (e) { toast.error(apiError(e)); } };
+  const rejectReq = async (r) => { if (!window.confirm(`Reject ${r.full_name}?`)) return; try { await API.post(`/admin/registration-requests/${r.id}/reject`); toast.success("Request rejected"); loadReqs(); } catch (e) { toast.error(apiError(e)); } };
 
   const generate = async () => {
     setGenLoading(true);
@@ -62,6 +68,35 @@ export default function AdminUsers() {
           <button onClick={() => setPwResult(null)} className="text-muted2 hover:text-ink" data-testid="pw-reset-dismiss"><X size={18} /></button>
         </div>
       )}
+
+      {/* Registration requests */}
+      <div className="rounded-2xl border border-brand-50 bg-white p-6 shadow-card" data-testid="registration-requests-card">
+        <h3 className="font-display text-lg font-medium text-ink">Registration Requests</h3>
+        <p className="text-xs text-muted2">Approve to generate a Distributor ID (RED, active). No OTP — verify the applicant manually.</p>
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead><tr className="border-b border-brand-50 text-left text-muted2"><th className="p-3">Name</th><th className="p-3">Mobile</th><th className="p-3">Email</th><th className="p-3">Submitted</th><th className="p-3">Status</th><th className="p-3">Action</th></tr></thead>
+            <tbody>
+              {reqs.filter((r) => r.status === "pending").length === 0 && <tr><td colSpan={6} className="p-4 text-center text-muted2">No pending requests.</td></tr>}
+              {reqs.filter((r) => r.status === "pending").map((r) => (
+                <tr key={r.id} className="border-b border-brand-50/60" data-testid={`reg-req-${r.mobile}`}>
+                  <td className="p-3 text-ink">{r.full_name}</td>
+                  <td className="p-3 font-mono text-muted2">{r.mobile}</td>
+                  <td className="p-3 text-muted2">{r.email || "—"}</td>
+                  <td className="p-3 text-muted2">{(r.created_at || "").slice(0, 10)}</td>
+                  <td className="p-3"><span className="rounded-full bg-gold-light px-2 py-0.5 text-xs font-semibold text-gold">pending</span></td>
+                  <td className="p-3">
+                    <div className="flex gap-2">
+                      <button onClick={() => approveReq(r)} className="rounded-full bg-forest px-3 py-1 text-xs font-semibold text-white hover:bg-brand" data-testid={`approve-${r.mobile}`}>Approve</button>
+                      <button onClick={() => rejectReq(r)} className="rounded-full border border-danger/40 px-3 py-1 text-xs font-semibold text-danger hover:bg-danger/10" data-testid={`reject-${r.mobile}`}>Reject</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
 
       {/* Referral code generator */}
       <div className="rounded-2xl border border-brand-50 bg-white p-6 shadow-card" data-testid="referral-code-card">

@@ -42,7 +42,7 @@ class RegisterBody(BaseModel):
 
 
 class LoginBody(BaseModel):
-    email: EmailStr
+    email: str
     password: str
 
 
@@ -94,6 +94,44 @@ async def send_otp(body: SendOtp, request: Request):
       </div>""")
         await send_email(email, "Your Anjali Herbal Life OTP", html)
     return {"message": "OTP sent to your mobile.", **res}
+
+
+class RegRequestBody(BaseModel):
+    full_name: str
+    mobile: str
+    password: str = Field(min_length=6)
+    confirm_password: str
+    email: str = ""
+    address: str = ""
+    state: str = ""
+    city: str = ""
+    pincode: str = ""
+    sponsor_id: str = ""
+
+
+@router.post("/register-request")
+async def register_request(body: RegRequestBody):
+    """BETA: simple registration request (no OTP). Creates a PENDING request for admin approval."""
+    mobile = body.mobile.strip()
+    if not _valid_mobile(mobile):
+        raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number.")
+    if body.password != body.confirm_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match.")
+    if await db.users.find_one({"mobile": mobile}):
+        raise HTTPException(status_code=400, detail="An account already exists for this mobile number.")
+    if await db.registration_requests.find_one({"mobile": mobile, "status": "pending"}):
+        raise HTTPException(status_code=400, detail="A registration request for this mobile is already pending admin approval.")
+    doc = {
+        "id": new_id(), "full_name": body.full_name.strip(), "mobile": mobile,
+        "email": (body.email or "").strip().lower() or None,
+        "password_hash": hash_password(body.password),
+        "address": body.address.strip(), "state": body.state.strip(),
+        "city": body.city.strip(), "pincode": body.pincode.strip(),
+        "sponsor_id": (body.sponsor_id or "").strip().upper() or None,
+        "status": "pending", "created_at": now_iso(),
+    }
+    await db.registration_requests.insert_one(dict(doc))
+    return {"message": "Your registration request has been submitted. Please wait for Admin approval."}
 
 
 @router.post("/register")
@@ -181,11 +219,11 @@ async def login(body: LoginBody, request: Request):
             raise HTTPException(status_code=429, detail="Too many failed attempts. Please try again in about 15 minutes.")
         await db.login_attempts.delete_one({"identifier": ident})
 
-    user = await db.users.find_one({"email": email})
+    user = await db.users.find_one({"$or": [{"email": ident}, {"mobile": body.email.strip()}, {"distributor_id": body.email.strip().upper()}]})
     if not user or not verify_password(body.password, user.get("password_hash", "")):
         await db.login_attempts.update_one({"identifier": ident},
                                            {"$inc": {"count": 1}, "$set": {"last": now_iso()}}, upsert=True)
-        raise HTTPException(status_code=401, detail="Invalid email or password.")
+        raise HTTPException(status_code=401, detail="Invalid credentials. Use your Distributor ID / email / mobile and password.")
 
     await db.login_attempts.delete_one({"identifier": ident})
     await log_audit(clean_user(user), "login", "user", user["id"], request=request)

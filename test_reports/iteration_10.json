@@ -1,0 +1,74 @@
+{
+  "summary": "Scoped E2E test of BETA registration-request -> admin approval -> login-by-ID workflow + product permanent delete + admin security. Backend: 20/21 pytest cases pass (new file /app/backend/tests/test_regrequest_flow.py). Frontend: registration pending screen, duplicate guard, admin Registration Requests card, approve (ANJ000177 generated, RED/active), reject, and product permanent delete all work. TWO blocking bugs found: (1) approving an EMAIL-LESS request returns 500 (DuplicateKeyError on non-sparse unique users.email index - only ONE null-email user can ever exist); (2) /login identifier input is type='email' + required, so HTML5 validation blocks submit for Distributor ID and mobile - login-by-ID is impossible in the UI even though the backend supports it.",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/admin/registration-requests/{id}/approve",
+        "issue": "500 Internal Server Error when the request has no email. server.py:110 creates `db.users.create_index('email', unique=True)` WITHOUT sparse/partial filter, and approve inserts email:None -> pymongo.errors.DuplicateKeyError: E11000 dup key users.email_1 { email: null }. Only the first email-less distributor (ANJ000172) could be created; every later email-optional approval fails. Reproduced via API and via Admin UI (toast 'Request failed with status code 500', row stays pending). Fix: create index with partialFilterExpression {email: {$type: 'string'}} (note: sparse alone does NOT help because null IS indexed), or omit the email key entirely when there is no email, and drop/rebuild the existing email_1 index.",
+        "priority": "CRITICAL"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "POST /api/admin/registration-requests/{id}/reject",
+        "issue": "No guard for already-approved/already-rejected requests (idempotently re-sets status, returns 200). Approve correctly 400s on double-approve."
+      },
+      {
+        "endpoint": "GET /api/admin/registration-requests",
+        "issue": "Returns all requests (pending/approved/rejected) with no status filter or pagination beyond 500; frontend filters client-side. Fine now, will not scale."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "Login.js",
+        "issue": "Identifier field is <Input type=\"email\" required> and labelled 'Email'. Entering a Distributor ID (ANJ000177) or a 10-digit mobile makes checkValidity()=false, so the browser blocks form submit and NO API call is made -> approved email-less/ID-based distributors cannot log in from the UI. Backend /api/auth/login accepts DID/mobile/email (verified 200 via API). Fix: type='text' and label 'Distributor ID / Mobile / Email'.",
+        "selector": "[data-testid=\"login-email\"]",
+        "priority": "CRITICAL"
+      },
+      {
+        "component": "AdminProducts.js",
+        "issue": "Add-product button label uses t('cta.getStarted') so it renders 'Get Started' instead of 'Add Product'.",
+        "selector": "[data-testid=\"admin-add-product\"]",
+        "priority": "LOW"
+      }
+    ],
+    "integration_issues": [
+      {
+        "flow": "Admin approve of email-less registration request",
+        "issue": "Backend 500 surfaces only as a generic 'Request failed with status code 500' toast; row remains pending with no actionable message.",
+        "affected_selectors": ["[data-testid=\"approve-{mobile}\"]"]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "Admin /admin/users - Registration Requests card",
+        "issues": ["Layout, contrast and spacing look correct; pending badge readable. No issues found."]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_regrequest_flow.py",
+    "/app/test_reports/pytest/regrequest_results.xml"
+  ],
+  "action_items": [
+    "CRITICAL: Fix users.email unique index (partialFilterExpression email:{$type:'string'}) AND drop the existing email_1 index so email-optional approvals stop 500ing; then re-run the email-less approve test.",
+    "CRITICAL: Change /login identifier input to type='text' (remove email validation) and relabel to 'Distributor ID / Mobile / Email' so login-by-ID/mobile actually works in the UI.",
+    "Optional: guard reject() against already-approved requests; surface backend error detail in the approve toast.",
+    "Optional: fix Add Product button label (uses cta.getStarted)."
+  ],
+  "critical_code_review_comments": [
+    "server.py:110 `db.users.create_index('email', unique=True)` is incompatible with the new email-optional registration; must be partial/unique-on-string.",
+    "admin_routes.py approve_registration_request has no try/except around users.insert_one, so DB constraint violations leak as 500 instead of a 400/409 with a clear message.",
+    "auth_routes.py login(): brute-force counter keys only on the lowercased raw identifier, so DID vs mobile vs email attempts are counted separately (lockout can be bypassed by rotating identifier form)."
+  ],
+  "updated_files": ["/app/backend/tests/test_regrequest_flow.py"],
+  "success_rate": {"backend": "95% (20/21)", "frontend": "78% (7/9 E2E steps)"},
+  "seed_data_creation": "Created test registration requests (TEST_*, UI Test Alpha/Bravo) and approved distributors ANJ000174/175/177 (emails test_*/ui_*@example.test, password Test@1234), plus one temp product (deleted). Several TEST_ pending requests remain - will be cleared by POST /api/admin/maintenance/reset-data.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "Admin: admin / admin123 / admin123 at /admin-secure-login. Test distributors: ANJ000177 (ui_9423843910@example.test) / Test@1234",
+  "context_for_next_testing_agent": "Run `pytest /app/backend/tests/test_regrequest_flow.py -v` - it covers register-request, duplicate guard, approve/reject, login by DID/mobile/email, admin auth on registration endpoints, and product permanent delete. test_emailless_approval_bug is the intentional failing test for the null-email unique-index bug; it must pass after the index fix. After the Login.js type fix, re-run the Playwright DID/mobile login steps (fill [data-testid=login-email] with the DID and assert navigation away from /login).",
+  "rca_of_the_issue": "Bug 1: MongoDB unique index on users.email was created without a partial filter. Since MongoDB indexes null values, the second user document with email:null violates uniqueness -> DuplicateKeyError -> unhandled 500 in approve_registration_request. Bug 2: Login.js kept the legacy email-only input (type='email' required) after the backend was widened to accept Distributor ID / mobile, so the browser's own constraint validation prevents submission for non-email identifiers."
+}

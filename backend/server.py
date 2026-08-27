@@ -107,7 +107,11 @@ CATEGORY_SEED = ["Starter Kit", "Immunity", "Wellness", "Personal Care"]
 @app.on_event("startup")
 async def startup():
     # indexes
-    await db.users.create_index("email", unique=True)
+    try:
+        await db.users.drop_index("email_1")
+    except Exception:
+        pass
+    await db.users.create_index("email", unique=True, partialFilterExpression={"email": {"$type": "string"}})
     await db.users.create_index("distributor_id", unique=True)
     await db.products.create_index("sku", unique=True)
     await db.commissions.create_index("referred_user_id")

@@ -1,0 +1,41 @@
+{
+  "summary": "Scoped RETEST of the 2 CRITICAL iteration_10 fixes. FIX 1 (email-less approvals) VERIFIED: new test file /app/backend/tests/test_it11_emailless.py creates 3 registration requests with NO email and approves each -> all 200, distinct IDs (ANJ000189/190/191), status=red, account_status=active, email null, login works by both DID and mobile; duplicate real-string email is still blocked (400), so the partial unique index is correct. Full prior suite /app/backend/tests/test_regrequest_flow.py now 21/21 PASS (test_emailless_approval_bug passes). FIX 2 (login UI) VERIFIED in browser: [data-testid=login-email] is type='text' labelled 'Distributor ID / Mobile / Email', checkValidity()=true for DID and mobile, and all three identifier forms (ANJ000189, mobile, email) submit and navigate to /app/dashboard (header shows ANJ000189 + RED ID badge). Regression VERIFIED: /register submit shows 'Request submitted / Please wait for Admin approval' screen; admin UI approve of TWO consecutive email-less requests both succeeded with toast 'Approved. Distributor ID ANJ000195 created (RED, active).' (no 500, rows removed from pending) and the UI-approved email-less distributor could then log in by mobile. No new bugs found.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "GET /api/admin/registration-requests", "issue": "Pending list is accumulating leftover TEST_* requests from prior test runs (9 pending rows visible in admin UI). Consider clearing via POST /api/admin/maintenance/reset-data before demo/production."},
+      {"endpoint": "POST /api/admin/registration-requests/{id}/reject", "issue": "Still no guard for already-approved/rejected requests (carry-over from iteration_10, not retested in depth)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AdminProducts.js", "issue": "Carry-over LOW: Add-product button label uses t('cta.getStarted') -> renders 'Get Started' (not retested this iteration).", "selector": "[data-testid=\"admin-add-product\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/login, /register, /admin/users", "issues": ["No contrast/spacing issues found; pending badges and success toasts readable."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_it11_emailless.py",
+    "/app/backend/tests/test_regrequest_flow.py",
+    "/app/test_reports/pytest/it11_results.xml",
+    "/app/test_reports/pytest/regrequest_results_it11.xml"
+  ],
+  "action_items": [
+    "Nothing blocking. Optional: clear leftover TEST_* pending registration requests; optional reject() idempotency guard; optional Add Product label fix."
+  ],
+  "critical_code_review_comments": [
+    "server.py index fix is correct: drop_index('email_1') + create_index('email', unique=True, partialFilterExpression={'email': {'$type': 'string'}}). Note drop_index is inside try/except - confirm it is tolerant on a fresh DB (it was, startup logs clean).",
+    "admin_routes.py approve now wraps insert_one in try/except returning 400 with the raw exception string in `detail` - avoid leaking PyMongo internals to clients; map to a friendly message.",
+    "auth_routes.py login(): brute-force counter still keys on the raw lowercased identifier, so DID/mobile/email attempts count separately (lockout bypass by rotating identifier form) - unfixed from iteration_10."
+  ],
+  "updated_files": ["/app/backend/tests/test_it11_emailless.py", "/app/test_reports/iteration_11.json"],
+  "success_rate": {"backend": "100% (24/24: 21 regression + 3 new)", "frontend": "100% (7/7 E2E steps)"},
+  "seed_data_creation": "Email-less approved distributors ANJ000189/190/191 (mobiles 9246912866/9102869293/9323164250), ANJ000194 'UI11 Alpha' (9303324595), ANJ000195 'UI11 Bravo' (9889591876); email distributor test_9310131856@example.test. All password Test@1234. Creds also written to /app/test_reports/it11_creds.json. A few TEST_* pending requests remain.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "Admin: admin / admin123 / admin123 at /admin-secure-login. Email-less distributors: ANJ000189 or mobile 9102869293 / Test@1234. Email distributor: test_9310131856@example.test / Test@1234",
+  "context_for_next_testing_agent": "Both iteration_10 CRITICALs are fixed and verified (backend + browser). Regression suites: pytest /app/backend/tests/test_regrequest_flow.py (21 pass) and /app/backend/tests/test_it11_emailless.py (3 pass, covers multi email-less approval + duplicate-email uniqueness). Not retested this run (out of scope): OTP/email/SMS, Razorpay, referral commissions, KYC, wallet, orders, brute-force lockout, httpOnly cookie/CORS playbook checks.",
+  "rca_of_the_issue": "Both root causes from iteration_10 confirmed resolved: (1) users.email unique index rebuilt with partialFilterExpression {email:{$type:'string'}} so multiple null-email users are allowed while real emails stay unique; approve also try/excepts insert -> 400 instead of 500. (2) Login.js identifier input changed from type='email' required to type='text', removing browser constraint validation that previously blocked DID/mobile submits."
+}

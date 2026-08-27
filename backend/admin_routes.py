@@ -3,7 +3,7 @@ commissions, activations, settings, audit logs, reports (with CSV export)."""
 import io
 import csv
 import secrets
-from core import hash_password
+from core import hash_password, next_distributor_id, get_or_create_wallet
 from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -343,10 +343,58 @@ async def reset_data(body: ResetBody, request: Request, admin: dict = Depends(re
     result = {"users": (await db.users.delete_many({"role": {"$nin": list(admin_roles)}})).deleted_count}
     for coll in ["orders", "payment_transactions", "commissions", "wallets", "wallet_transactions",
                  "referral_relationships", "activation_records", "withdrawal_requests",
-                 "kyc_records", "notifications", "otp_sessions", "referral_codes", "login_attempts"]:
+                 "kyc_records", "notifications", "otp_sessions", "referral_codes", "login_attempts",
+                 "registration_requests"]:
         result[coll] = (await db[coll].delete_many({})).deleted_count
     await log_audit(admin, "data_reset", "system", "all", new_value=result, request=request)
     return {"message": "All non-admin data cleared. Admins, products and settings preserved.", "deleted": result}
+
+
+@router.get("/registration-requests")
+async def list_registration_requests(admin: dict = Depends(require_admin)):
+    return await db.registration_requests.find({}, {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(500)
+
+
+@router.post("/registration-requests/{req_id}/approve")
+async def approve_registration_request(req_id: str, request: Request, admin: dict = Depends(require_admin)):
+    r = await db.registration_requests.find_one({"id": req_id})
+    if not r:
+        raise HTTPException(status_code=404, detail="Request not found.")
+    if r.get("status") == "approved":
+        raise HTTPException(status_code=400, detail="This request is already approved.")
+    if await db.users.find_one({"mobile": r["mobile"]}):
+        raise HTTPException(status_code=400, detail="A user with this mobile already exists.")
+    did = await next_distributor_id()
+    user = {
+        "id": new_id(), "distributor_id": did, "full_name": r["full_name"],
+        "email": r.get("email") or None, "mobile": r["mobile"], "password_hash": r["password_hash"],
+        "role": "distributor", "status": "red", "account_status": "active",
+        "mobile_verified": False, "email_verified": False,
+        "sponsor_id": r.get("sponsor_id") or None, "sponsor_user_id": None,
+        "address": r.get("address", ""), "state": r.get("state", ""), "city": r.get("city", ""),
+        "pincode": r.get("pincode", ""), "aadhaar_number": "", "kyc_status": "not_started",
+        "profile_complete": bool(r.get("email")), "created_at": now_iso(), "updated_at": now_iso(),
+    }
+    try:
+        await db.users.insert_one(dict(user))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not create distributor (possibly a duplicate email or mobile). Please check and try again.")
+    await get_or_create_wallet(user["id"])
+    await db.registration_requests.update_one({"id": req_id},
+        {"$set": {"status": "approved", "distributor_id": did, "approved_by": admin["id"], "approved_at": now_iso()}})
+    await log_audit(admin, "registration_approved", "user", user["id"], new_value={"distributor_id": did}, request=request)
+    return {"message": f"Approved. Distributor ID {did} created (RED, active).", "distributor_id": did}
+
+
+@router.post("/registration-requests/{req_id}/reject")
+async def reject_registration_request(req_id: str, request: Request, admin: dict = Depends(require_admin)):
+    r = await db.registration_requests.find_one({"id": req_id})
+    if not r:
+        raise HTTPException(status_code=404, detail="Request not found.")
+    await db.registration_requests.update_one({"id": req_id},
+        {"$set": {"status": "rejected", "rejected_by": admin["id"], "rejected_at": now_iso()}})
+    await log_audit(admin, "registration_rejected", "registration_request", req_id, request=request)
+    return {"message": "Request rejected."}
 
 
 class AdminPwBody(BaseModel):

@@ -1,0 +1,22 @@
+{
+  "password": "Test@1234",
+  "emailless": [
+    {
+      "mobile": "9246912866",
+      "did": "ANJ000189"
+    },
+    {
+      "mobile": "9102869293",
+      "did": "ANJ000190"
+    },
+    {
+      "mobile": "9323164250",
+      "did": "ANJ000191"
+    }
+  ],
+  "email_user": {
+    "email": "test_9310131856@example.test",
+    "mobile": "9310131856",
+    "did": "ANJ000192"
+  }
+}

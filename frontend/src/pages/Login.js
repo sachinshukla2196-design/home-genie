@@ -62,8 +62,8 @@ export default function Login() {
           <p className="mt-1 text-muted2">{t("auth.loginSub")}</p>
           <form onSubmit={submit} className="mt-8 space-y-4">
             <div>
-              <Label className="text-sm text-ink">{t("auth.email")}</Label>
-              <Input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className="mt-1.5 h-11 rounded-lg focus-visible:ring-brand" data-testid="login-email" />
+              <Label className="text-sm text-ink">Distributor ID / Mobile / Email</Label>
+              <Input type="text" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="ANJ000001 / mobile / email" className="mt-1.5 h-11 rounded-lg focus-visible:ring-brand" data-testid="login-email" />
             </div>
             <div>
               <Label className="text-sm text-ink">{t("auth.password")}</Label>
