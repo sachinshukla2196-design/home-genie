@@ -4,7 +4,7 @@ forgot password, change mobile, OTP security (hashing/single-use/attempts/cooldo
 Uses the public REACT_APP_BACKEND_URL. Cleans up created users via direct Mongo access.
 """
 import os
-import random
+import secrets
 import time
 
 import pytest
@@ -35,18 +35,18 @@ def _mongo():
 
 
 def rnd_mobile():
-    m = f"9{random.randint(100000000, 999999999)}"
+    m = f"9{secrets.randbelow(900000000) + 100000000}"
     _created_mobiles.append(m)
     return m
 
 
 def rnd_email():
-    e = f"test_otp_{random.randint(100000, 999999)}@qa-anjali.example.com"
+    e = f"test_otp_{secrets.randbelow(900000) + 100000}@qa-anjali.example.com"
     _created_emails.append(e)
     return e
 
 
-def register_user(sponsor_id="", password="Test@1234"):
+def register_user(sponsor_id="", password=os.getenv("TEST_USER_PASSWORD", "Test@1234")):
     """Register a throwaway RED user; returns dict with creds + token."""
     email, mobile = rnd_email(), rnd_mobile()
     r = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile}, timeout=TIMEOUT)

@@ -25,8 +25,8 @@ ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Admin@12345")
 
 def _unique_mobile():
     """Random valid Indian mobile - avoids the 30s OTP resend cooldown across tests."""
-    import random
-    return "9" + f"{random.randint(0, 999999999):09d}"
+    import secrets
+    return "9" + f"{secrets.randbelow(1000000000):09d}"
 
 
 def _unique_email(tag="user"):

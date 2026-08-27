@@ -5,7 +5,7 @@ Anjali Herbal Life — Cycle 7 tests:
   Module: auth_routes  -> Secured admin login (/api/auth/admin-login)
 """
 import os
-import random
+import secrets
 import uuid
 import pytest
 import requests
@@ -215,7 +215,7 @@ class TestAdminLogin:
 
     def test_lockout_after_5_wrong_attempts(self):
         """Uses a throwaway email so the real admin identifier is never locked."""
-        email = f"qa_lock_{random.randint(10000, 99999)}@qa-anjali.example.com"
+        email = f"qa_lock_{secrets.randbelow(90000) + 10000}@qa-anjali.example.com"
         codes = []
         for _ in range(6):
             r = requests.post(f"{API}/auth/admin-login", json={

@@ -8,7 +8,7 @@ Usage:
 """
 import json
 import os
-import random
+import secrets
 import sys
 import time
 
@@ -22,12 +22,12 @@ STATE = "/tmp/payflow.json"
 
 
 def rnd():
-    return random.randint(100000, 999999)
+    return secrets.randbelow(900000) + 100000
 
 
 def register(sponsor=""):
     email = f"payflow_{rnd()}@qa-anjali.example.com"
-    mobile = "9" + f"{random.randint(0, 999999999):09d}"
+    mobile = "9" + f"{secrets.randbelow(1000000000):09d}"
     r = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile}, timeout=30)
     r.raise_for_status()
     otp = r.json()["dev_otp"]

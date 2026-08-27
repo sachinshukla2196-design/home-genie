@@ -126,8 +126,8 @@ class TestCoreFlows:
         assert isinstance(r.json(), list)
 
     def test_register_send_otp(self):
-        import random
-        mobile = "9" + f"{random.randint(0, 999999999):09d}"
+        import secrets
+        mobile = "9" + f"{secrets.randbelow(1000000000):09d}"
         email = f"TEST_otp_{uuid.uuid4().hex[:8]}@example.com"
         r = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile}, timeout=15)
         assert r.status_code == 200, r.text
