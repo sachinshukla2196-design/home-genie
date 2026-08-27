@@ -386,6 +386,74 @@ async def upi_claim(body: UpiClaim, request: Request, user: dict = Depends(get_c
     return {"message": "Payment submitted. Admin will verify and activate shortly.", "order_id": order["id"]}
 
 
+async def _create_activation_order(user: dict) -> dict:
+    settings = await get_settings()
+    amt = float(settings.get("activation_amount", 1500.0))
+    prod = await db.products.find_one({"is_activation_product": True}, {"_id": 0})
+    items = []
+    if prod:
+        items = [{"product_id": prod["id"], "sku": prod.get("sku"), "name": prod.get("name"),
+                  "name_hi": prod.get("name_hi", ""), "image": (prod.get("images") or [None])[0],
+                  "price": amt, "quantity": 1, "total": amt}]
+    order = {
+        "id": new_id(), "order_number": await next_sequence("order", "ORD", 6),
+        "user_id": user["id"], "distributor_id": user.get("distributor_id"),
+        "items": items, "subtotal": amt, "gst_amount": 0.0, "total": amt, "currency": "INR",
+        "payment_status": "pending", "status": "payment_pending", "is_activation_order": True,
+        "payment_method": "admin_manual",
+        "address": {"full_name": user.get("full_name"), "mobile": user.get("mobile", ""),
+                    "line1": user.get("address", ""), "city": user.get("city", ""),
+                    "state": user.get("state", ""), "pincode": user.get("pincode", "")},
+        "created_at": now_iso(), "updated_at": now_iso(),
+    }
+    await db.orders.insert_one(dict(order))
+    return order
+
+
+class ManualPayBody(BaseModel):
+    distributor_id: str
+    reference: str
+    note: str = ""
+
+
+@router.post("/admin/payments/manual")
+async def manual_payment_by_distributor(body: ManualPayBody, request: Request, admin: dict = Depends(require_admin)):
+    """ADMIN/MANUAL payment recorded against an existing Distributor ID. Never creates a user; no duplicates."""
+    did = (body.distributor_id or "").strip().upper()
+    ref = (body.reference or "").strip()
+    if not did:
+        raise HTTPException(status_code=400, detail="Distributor ID is required.")
+    if not ref:
+        raise HTTPException(status_code=400, detail="Payment reference / reason is required.")
+    user = await db.users.find_one({"distributor_id": did})
+    if not user:
+        raise HTTPException(status_code=404, detail=f"No distributor found with ID {did}.")
+    order = await db.orders.find_one({"user_id": user["id"], "payment_status": {"$ne": "paid"}},
+                                     sort=[("created_at", -1)])
+    if not order:
+        order = await _create_activation_order(user)
+    if order.get("payment_status") == "paid":
+        return {"message": "This distributor's latest order is already paid.", "order_id": order["id"]}
+    prev = order.get("payment_status")
+    sid = f"admin_{order['id']}"
+    if not await db.payment_transactions.find_one({"session_id": sid}):
+        await db.payment_transactions.insert_one({
+            "id": new_id(), "session_id": sid, "order_id": order["id"], "user_id": user["id"],
+            "amount": float(order["total"]), "currency": order.get("currency", "INR"),
+            "provider": "admin_manual", "reference": ref, "note": (body.note or "").strip(),
+            "recorded_by": admin["id"], "status": "manual", "payment_status": "paid",
+            "created_at": now_iso(), "updated_at": now_iso()})
+    await db.orders.update_one({"id": order["id"]},
+        {"$set": {"payment_reference": ref, "payment_method": "admin_manual", "updated_at": now_iso()}})
+    await _process_paid_order(sid, request)
+    await log_audit(admin, "admin_manual_payment", "order", order["id"],
+                    old_value={"payment_status": prev},
+                    new_value={"payment_status": "paid", "reference": ref, "distributor_id": did}, request=request)
+    o = await db.orders.find_one({"id": order["id"]}, {"_id": 0})
+    return {"message": f"Manual payment recorded for {did}.", "order": o,
+            "distributor_id": did, "full_name": user.get("full_name")}
+
+
 class UpiConfirm(BaseModel):
     reference: str = ""
 

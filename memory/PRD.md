@@ -67,6 +67,12 @@ FastAPI+Mongo+React · Stripe · Email+Password with email OTP (OTP delivery MOC
 - Razorpay: Key ID (rzp_test_TU3scdWQy95DIu) in env; code ready. STILL NEEDS RAZORPAY_KEY_SECRET to activate (returns 503 until set). Checkout shows "Pay Online (Card/UPI/Netbanking)" + "Pay via PhonePe/UPI (QR)".
 - DEPLOY NOTE: keep APP_ENV=beta in production for now so registration/login OTP still shows on-screen (OTP_PROVIDER=mock is blocked when APP_ENV=production). Switch to production only after MSG91 SMS is wired.
 
+## Fix (session 6) — Paid workflow + product delete + fresh start
+- Manual payment by Distributor ID: POST /api/admin/payments/manual {distributor_id, reference, note}. Finds existing user (404 if none, never creates a user/duplicate), attaches to their latest unpaid order or creates an activation order, records an ADMIN/MANUAL payment_transaction (provider=admin_manual), runs idempotent _process_paid_order (paid + invoice + GREEN activation + commission), audit-logged (admin id, distributor id, prev/new status, reference). Reference mandatory. Super/admin only.
+- AdminOrders UI: "Record Manual Payment" card (Distributor ID + Reference + Note) + All/Paid tabs; Paid list shows distributor_id, method, reference, invoice. Persists in DB (refresh-safe).
+- Product permanent delete: DELETE /api/admin/products/{id}/permanent + trash button in AdminProducts (soft deactivate still available via Power toggle).
+- Fresh start: POST /api/admin/maintenance/reset-data {confirm:"RESET"} (super_admin only) wipes users(non-admin)/orders/payments/commissions/wallets/referrals/activations/withdrawals/kyc/notifications/otp/referral_codes/login_attempts; keeps admins, products, settings. Demo seed gated behind SEED_DEMO=false so wipe stays fresh across restarts. RAN on preview (verified: only admin user remains, 0 orders).
+
 ## Fix (session 6) — admin login broken on production
 - Root cause: production had no ADMIN_PASSCODE env set -> `bool("")` made passcode_ok always False -> every admin login returned "Invalid admin credentials or passcode".
 - Fix: auth_routes.py `ADMIN_PASSCODE = os.environ.get("ADMIN_PASSCODE") or "admin123"`; server.py admin_password/username default to "admin123"/"admin". So the easy creds work even when production env vars are missing. Verified via env-unset simulation.

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Plus, Pencil, Power } from "lucide-react";
+import { Plus, Pencil, Power, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -36,6 +36,7 @@ export default function AdminProducts() {
     } catch (err) { toast.error(apiError(err)); }
   };
   const toggle = async (p) => { try { if (p.is_active) { await API.delete(`/admin/products/${p.id}`); } else { await API.put(`/admin/products/${p.id}`, { ...p, is_active: true }); } load(); } catch (err) { toast.error(apiError(err)); } };
+  const del = async (p) => { if (!window.confirm(`Permanently delete "${p.name}"? This cannot be undone.`)) return; try { await API.delete(`/admin/products/${p.id}/permanent`); toast.success("Product deleted"); load(); } catch (err) { toast.error(apiError(err)); } };
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target?.value ?? e }));
 
   if (!products) return <Skeleton className="h-96 rounded-2xl" />;
@@ -62,6 +63,7 @@ export default function AdminProducts() {
             <div className="mt-4 flex gap-2">
               <Button onClick={() => openEdit(p)} variant="outline" size="sm" className="flex-1 rounded-full border-forest/20 text-forest" data-testid={`edit-${p.sku}`}><Pencil size={14} className="mr-1" /> Edit</Button>
               <Button onClick={() => toggle(p)} variant="outline" size="sm" className={`rounded-full ${p.is_active ? "border-danger/30 text-danger" : "border-brand/30 text-brand"}`} data-testid={`toggle-${p.sku}`}><Power size={14} /></Button>
+              <Button onClick={() => del(p)} variant="outline" size="sm" className="rounded-full border-danger/40 text-danger hover:bg-danger/10" data-testid={`delete-${p.sku}`}><Trash2 size={14} /></Button>
             </div>
           </div>
         ))}

@@ -157,11 +157,12 @@ async def startup():
     # always keep the admin username in sync with env
     await db.users.update_one({"email": admin_email}, {"$set": {"username": admin_username}})
 
-    # demo data (idempotent)
-    try:
-        await seed_demo()
-    except Exception as e:
-        logger.error(f"demo seed error: {e}")
+    # demo data (only when explicitly enabled; keeps production a clean/fresh start)
+    if os.environ.get("SEED_DEMO", "false").lower() == "true":
+        try:
+            await seed_demo()
+        except Exception as e:
+            logger.error(f"demo seed error: {e}")
 
 
 @app.on_event("shutdown")

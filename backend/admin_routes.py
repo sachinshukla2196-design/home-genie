@@ -122,6 +122,17 @@ async def deactivate_product(product_id: str, request: Request, admin: dict = De
     return {"ok": True}
 
 
+@router.delete("/products/{product_id}/permanent")
+async def delete_product_permanent(product_id: str, request: Request, admin: dict = Depends(require_admin)):
+    p = await db.products.find_one({"id": product_id}, {"_id": 0})
+    if not p:
+        raise HTTPException(status_code=404, detail="Product not found.")
+    await db.products.delete_one({"id": product_id})
+    await log_audit(admin, "product_deleted", "product", product_id,
+                    old_value={"sku": p.get("sku"), "name": p.get("name")}, request=request)
+    return {"ok": True}
+
+
 # ---------------- Orders ----------------
 @router.get("/orders")
 async def admin_orders(status: Optional[str] = None, admin: dict = Depends(require_admin)):
@@ -315,6 +326,27 @@ async def gen_referral_code(request: Request, admin: dict = Depends(require_admi
 @router.get("/referral-codes")
 async def list_referral_codes(admin: dict = Depends(require_admin)):
     return await db.referral_codes.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
+
+
+class ResetBody(BaseModel):
+    confirm: str
+
+
+@router.post("/maintenance/reset-data")
+async def reset_data(body: ResetBody, request: Request, admin: dict = Depends(require_admin)):
+    """DANGER: wipes all non-admin data (users, orders, payments, wallets, referrals...). Keeps admins, products, settings."""
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Only the super admin can reset data.")
+    if body.confirm != "RESET":
+        raise HTTPException(status_code=400, detail="Type RESET to confirm.")
+    admin_roles = {"super_admin", "admin", "accounts_admin", "support_admin"}
+    result = {"users": (await db.users.delete_many({"role": {"$nin": list(admin_roles)}})).deleted_count}
+    for coll in ["orders", "payment_transactions", "commissions", "wallets", "wallet_transactions",
+                 "referral_relationships", "activation_records", "withdrawal_requests",
+                 "kyc_records", "notifications", "otp_sessions", "referral_codes", "login_attempts"]:
+        result[coll] = (await db[coll].delete_many({})).deleted_count
+    await log_audit(admin, "data_reset", "system", "all", new_value=result, request=request)
+    return {"message": "All non-admin data cleared. Admins, products and settings preserved.", "deleted": result}
 
 
 class AdminPwBody(BaseModel):
