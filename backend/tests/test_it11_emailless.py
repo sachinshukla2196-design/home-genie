@@ -5,7 +5,7 @@ for the Playwright login test (FIX 2).
 """
 import json
 import os
-import random
+import secrets
 from pathlib import Path
 
 import pytest
@@ -22,7 +22,7 @@ PW = "Test@1234"
 
 
 def rand_mobile():
-    return "9" + "".join(random.choice("0123456789") for _ in range(9))
+    return "9" + "".join(secrets.choice("0123456789") for _ in range(9))
 
 
 @pytest.fixture(scope="module")

@@ -4,7 +4,7 @@ NOTE: users.email has a NON-sparse unique index (server.py:110) so only ONE emai
 ever exist. Approving a 2nd request without an email -> 500 DuplicateKeyError. Documented below.
 """
 import os
-import random
+import secrets
 import pytest
 import requests
 from dotenv import dotenv_values
@@ -20,7 +20,7 @@ PW = "Test@1234"
 
 
 def rand_mobile():
-    return "9" + "".join(random.choice("0123456789") for _ in range(9))
+    return "9" + "".join(secrets.choice("0123456789") for _ in range(9))
 
 
 @pytest.fixture(scope="module")
@@ -204,7 +204,7 @@ class TestSecurity:
 # ---------- DELETE /api/admin/products/{id}/permanent (regression) ----------
 class TestProductPermanentDelete:
     def test_permanent_delete(self, admin):
-        payload = {"sku": f"TESTPD{random.randint(10000, 99999)}", "name": "TEST_Perm Delete Product",
+        payload = {"sku": f"TESTPD{secrets.randbelow(90000) + 10000}", "name": "TEST_Perm Delete Product",
                    "mrp": 299, "selling_price": 199, "stock": 5, "category": "Herbal",
                    "description": "test", "images": ["https://example.com/x.jpg"]}
         cr = admin.post(f"{API}/admin/products", json=payload)
