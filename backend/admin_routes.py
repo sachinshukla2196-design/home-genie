@@ -372,7 +372,7 @@ async def approve_registration_request(req_id: str, request: Request, admin: dic
         "mobile_verified": False, "email_verified": False,
         "sponsor_id": r.get("sponsor_id") or None, "sponsor_user_id": None,
         "address": r.get("address", ""), "state": r.get("state", ""), "city": r.get("city", ""),
-        "pincode": r.get("pincode", ""), "aadhaar_number": "", "kyc_status": "not_started",
+        "pincode": r.get("pincode", ""), "aadhaar_number": r.get("aadhaar_number", ""), "kyc_status": "not_started",
         "profile_complete": bool(r.get("email")), "created_at": now_iso(), "updated_at": now_iso(),
     }
     try:

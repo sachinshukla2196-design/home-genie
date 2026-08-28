@@ -20,7 +20,7 @@ export default function Register() {
   const [done, setDone] = useState(false);
   const [form, setForm] = useState({
     full_name: "", mobile: "", email: "", password: "", confirm_password: "",
-    sponsor_id: params.get("ref") || "", address: "", state: "", city: "", pincode: "",
+    sponsor_id: params.get("ref") || "", aadhaar_number: "", address: "", state: "", city: "", pincode: "",
   });
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target?.value ?? e }));
 
@@ -29,6 +29,8 @@ export default function Register() {
     if (!/^[6-9]\d{9}$/.test(form.mobile.trim())) return toast.error("Enter a valid 10-digit mobile number.");
     if (form.password.length < 6) return toast.error("Password must be at least 6 characters.");
     if (form.password !== form.confirm_password) return toast.error("Passwords do not match.");
+    if (!form.sponsor_id.trim()) return toast.error("Sponsor / Referral ID is required.");
+    if (!/^\d{12}$/.test(form.aadhaar_number.trim())) return toast.error("Enter a valid 12-digit Aadhaar number.");
     setLoading(true);
     try {
       const { data } = await API.post("/auth/register-request", form);
@@ -71,7 +73,10 @@ export default function Register() {
                 <Field label={t("auth.password")} type="password" value={form.password} onChange={set("password")} required testid="reg-password" />
                 <Field label={t("auth.confirmPassword")} type="password" value={form.confirm_password} onChange={set("confirm_password")} required testid="reg-confirm" />
               </div>
-              <Field label={`${t("auth.sponsorId")} (optional)`} value={form.sponsor_id} onChange={set("sponsor_id")} testid="reg-sponsor" />
+              <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+                <Field label={`${t("auth.sponsorId")} *`} value={form.sponsor_id} onChange={set("sponsor_id")} required testid="reg-sponsor" />
+                <Field label={`${t("auth.aadhaar")} *`} value={form.aadhaar_number} onChange={set("aadhaar_number")} required testid="reg-aadhaar" />
+              </div>
               <Field label={`${t("auth.address")} (optional)`} value={form.address} onChange={set("address")} testid="reg-address" />
               <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">
                 <div>

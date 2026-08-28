@@ -107,6 +107,7 @@ class RegRequestBody(BaseModel):
     city: str = ""
     pincode: str = ""
     sponsor_id: str = ""
+    aadhaar_number: str = ""
 
 
 @router.post("/register-request")
@@ -117,6 +118,10 @@ async def register_request(body: RegRequestBody):
         raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number.")
     if body.password != body.confirm_password:
         raise HTTPException(status_code=400, detail="Passwords do not match.")
+    if not (body.sponsor_id or "").strip():
+        raise HTTPException(status_code=400, detail="Sponsor / Referral ID is required.")
+    if not _valid_aadhaar(body.aadhaar_number):
+        raise HTTPException(status_code=400, detail="A valid 12-digit Aadhaar number is required.")
     if await db.users.find_one({"mobile": mobile}):
         raise HTTPException(status_code=400, detail="An account already exists for this mobile number.")
     if await db.registration_requests.find_one({"mobile": mobile, "status": "pending"}):
@@ -128,6 +133,7 @@ async def register_request(body: RegRequestBody):
         "address": body.address.strip(), "state": body.state.strip(),
         "city": body.city.strip(), "pincode": body.pincode.strip(),
         "sponsor_id": (body.sponsor_id or "").strip().upper() or None,
+        "aadhaar_number": body.aadhaar_number.strip(),
         "status": "pending", "created_at": now_iso(),
     }
     await db.registration_requests.insert_one(dict(doc))
