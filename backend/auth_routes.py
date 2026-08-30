@@ -230,6 +230,8 @@ async def login(body: LoginBody, request: Request):
         await db.login_attempts.update_one({"identifier": ident},
                                            {"$inc": {"count": 1}, "$set": {"last": now_iso()}}, upsert=True)
         raise HTTPException(status_code=401, detail="Invalid credentials. Use your Distributor ID / email / mobile and password.")
+    if user.get("blocked"):
+        raise HTTPException(status_code=403, detail="Your account has been blocked. Please contact the admin.")
 
     await db.login_attempts.delete_one({"identifier": ident})
     await log_audit(clean_user(user), "login", "user", user["id"], request=request)

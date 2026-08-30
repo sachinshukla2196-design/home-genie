@@ -380,6 +380,19 @@ async def approve_registration_request(req_id: str, request: Request, admin: dic
     except Exception:
         raise HTTPException(status_code=400, detail="Could not create distributor (possibly a duplicate email or mobile). Please check and try again.")
     await get_or_create_wallet(user["id"])
+    # ₹100 referral bonus credited to the SPONSOR on approval
+    sp_did = r.get("sponsor_id")
+    if sp_did:
+        sponsor = await db.users.find_one({"distributor_id": sp_did})
+        if sponsor:
+            ref_amt = float((await get_settings()).get("referral_commission", 100.0))
+            await get_or_create_wallet(sponsor["id"])
+            await db.wallets.update_one({"user_id": sponsor["id"]},
+                {"$inc": {"available_balance": ref_amt}, "$set": {"updated_at": now_iso()}})
+            await db.wallet_transactions.insert_one({"id": new_id(), "user_id": sponsor["id"],
+                "amount": ref_amt, "type": "credit", "category": "referral",
+                "description": f"Referral bonus for {did}", "reference_id": user["id"], "created_at": now_iso()})
+            await db.users.update_one({"id": user["id"]}, {"$set": {"sponsor_user_id": sponsor["id"]}})
     await db.registration_requests.update_one({"id": req_id},
         {"$set": {"status": "approved", "distributor_id": did, "approved_by": admin["id"], "approved_at": now_iso()}})
     await log_audit(admin, "registration_approved", "user", user["id"], new_value={"distributor_id": did}, request=request)
@@ -395,6 +408,35 @@ async def reject_registration_request(req_id: str, request: Request, admin: dict
         {"$set": {"status": "rejected", "rejected_by": admin["id"], "rejected_at": now_iso()}})
     await log_audit(admin, "registration_rejected", "registration_request", req_id, request=request)
     return {"message": "Request rejected."}
+
+
+class BlockBody(BaseModel):
+    blocked: bool
+
+
+@router.put("/users/{user_id}/block")
+async def block_user(user_id: str, body: BlockBody, request: Request, admin: dict = Depends(require_admin)):
+    u = await db.users.find_one({"id": user_id})
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found.")
+    await db.users.update_one({"id": user_id}, {"$set": {"blocked": body.blocked,
+        "account_status": "blocked" if body.blocked else "active", "updated_at": now_iso()}})
+    await log_audit(admin, "user_blocked" if body.blocked else "user_unblocked", "user", user_id, request=request)
+    return {"ok": True, "blocked": body.blocked}
+
+
+@router.delete("/users/{user_id}")
+async def delete_user(user_id: str, request: Request, admin: dict = Depends(require_admin)):
+    u = await db.users.find_one({"id": user_id})
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found.")
+    if u.get("role") in {"super_admin", "admin", "accounts_admin", "support_admin"}:
+        raise HTTPException(status_code=400, detail="Admin accounts cannot be deleted.")
+    await db.users.delete_one({"id": user_id})
+    await db.wallets.delete_many({"user_id": user_id})
+    await log_audit(admin, "user_deleted", "user", user_id,
+                    old_value={"distributor_id": u.get("distributor_id"), "name": u.get("full_name")}, request=request)
+    return {"ok": True}
 
 
 class AdminPwBody(BaseModel):

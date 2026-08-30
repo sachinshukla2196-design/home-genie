@@ -89,6 +89,11 @@ FastAPI+Mongo+React · Stripe · Email+Password with email OTP (OTP delivery MOC
 - RAZORPAY_KEY_ID="rzp_test_TU6SLmQAw29WNT", RAZORPAY_KEY_SECRET set. Verified: order.create returns real rzp order (order_TU6...), Checkout popup opens (Cards/Netbanking/Wallet/PayLater/UPI), signature verify → _process_paid_order activation.
 - Owner will swap to LIVE keys after Razorpay approves the site.
 
+## Implemented (2026-06 — session 8, fork)
+- Admin User Management fully wired: AdminUsers.js now renders **Block / Unblock / Delete** buttons per user row (confirm popup on all, "Blocked" badge, optimistic UI). Backend endpoints PUT /api/admin/users/{id}/block {blocked} and DELETE /api/admin/users/{id} (removes user+wallet, admin accounts protected).
+- Login refuses blocked users (403) — verified.
+- Referral commission model (BETA): SPONSOR receives ₹100 on admin approval of a registration request (credited directly to sponsor wallet if sponsor_id resolves to a distributor_id); new user created RED + active. Manual payment / paid activation flips RED→GREEN. No double-payment (request flow creates no referral_relationship, so _process_paid_order's commission path is skipped). VERIFIED E2E via curl: approval → sponsor available_balance +100; block→403; delete→ok.
+
 ## Backlog
 - Cosmetic polish (P2): Checkout summary uses hardcoded 5% GST (use server gst_percent); dark-mode 'Activation' badge over product image; /admin-secure-login field fill.
 - Backend hardening (P1): admin "reject UPI claim" path + upi reference validation; admin-login lockout email+IP keying; backport 15-min window to /api/auth/login.

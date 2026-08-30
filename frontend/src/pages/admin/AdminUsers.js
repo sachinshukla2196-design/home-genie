@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Copy, Ticket, Plus, KeyRound, X } from "lucide-react";
+import { Copy, Ticket, Plus, KeyRound, X, Ban, Trash2 } from "lucide-react";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
@@ -44,6 +44,27 @@ export default function AdminUsers() {
       const { data } = await API.post(`/admin/users/${u.id}/reset-password`, {});
       setPwResult(data);
       toast.success("New password generated");
+    } catch (e) { toast.error(apiError(e)); } finally { setBusyId(null); }
+  };
+
+  const toggleBlock = async (u) => {
+    const next = !u.blocked;
+    if (!window.confirm(`${next ? "Block" : "Unblock"} ${u.full_name} (${u.distributor_id})?`)) return;
+    setBusyId(u.id);
+    try {
+      await API.put(`/admin/users/${u.id}/block`, { blocked: next });
+      setUsers((list) => list.map((x) => (x.id === u.id ? { ...x, blocked: next, account_status: next ? "blocked" : "active" } : x)));
+      toast.success(next ? "User blocked" : "User unblocked");
+    } catch (e) { toast.error(apiError(e)); } finally { setBusyId(null); }
+  };
+
+  const deleteUser = async (u) => {
+    if (!window.confirm(`Permanently DELETE ${u.full_name} (${u.distributor_id})? This removes the user and their wallet and cannot be undone.`)) return;
+    setBusyId(u.id);
+    try {
+      await API.delete(`/admin/users/${u.id}`);
+      setUsers((list) => list.filter((x) => x.id !== u.id));
+      toast.success("User deleted");
     } catch (e) { toast.error(apiError(e)); } finally { setBusyId(null); }
   };
 
@@ -134,14 +155,22 @@ export default function AdminUsers() {
                 <td className="p-4 font-medium text-forest">{u.distributor_id}</td>
                 <td className="p-4 text-ink">{u.full_name}</td>
                 <td className="p-4 text-muted2">{u.email}</td>
-                <td className="p-4"><StatusBadge status={u.status} size="sm" /></td>
+                <td className="p-4"><div className="flex items-center gap-1.5"><StatusBadge status={u.status} size="sm" />{u.blocked && <span className="rounded-full bg-danger/10 px-2 py-0.5 text-[10px] font-semibold text-danger" data-testid={`blocked-badge-${u.distributor_id}`}>Blocked</span>}</div></td>
                 <td className="p-4 text-muted2">{u.sponsor_id || "—"}</td>
                 <td className="p-4 capitalize text-muted2">{(u.kyc_status || "").replace("_", " ")}</td>
                 <td className="p-4 text-muted2">{(u.created_at || "").slice(0, 10)}</td>
                 <td className="p-4">
-                  <button onClick={() => resetPw(u)} disabled={busyId === u.id} className="inline-flex items-center gap-1.5 rounded-full border border-forest/25 px-3 py-1.5 text-xs font-semibold text-forest transition-all hover:bg-brand-50 disabled:opacity-50" data-testid={`reset-pw-${u.distributor_id}`}>
-                    <KeyRound size={13} /> {busyId === u.id ? "…" : "Reset Password"}
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    <button onClick={() => resetPw(u)} disabled={busyId === u.id} className="inline-flex items-center gap-1.5 rounded-full border border-forest/25 px-3 py-1.5 text-xs font-semibold text-forest transition-all hover:bg-brand-50 disabled:opacity-50" data-testid={`reset-pw-${u.distributor_id}`}>
+                      <KeyRound size={13} /> {busyId === u.id ? "…" : "Reset Password"}
+                    </button>
+                    <button onClick={() => toggleBlock(u)} disabled={busyId === u.id} className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition-all disabled:opacity-50 ${u.blocked ? "border-forest/25 text-forest hover:bg-brand-50" : "border-gold/40 text-gold hover:bg-gold-light/50"}`} data-testid={`block-toggle-${u.distributor_id}`}>
+                      <Ban size={13} /> {u.blocked ? "Unblock" : "Block"}
+                    </button>
+                    <button onClick={() => deleteUser(u)} disabled={busyId === u.id} className="inline-flex items-center gap-1.5 rounded-full border border-danger/40 px-3 py-1.5 text-xs font-semibold text-danger transition-all hover:bg-danger/10 disabled:opacity-50" data-testid={`delete-user-${u.distributor_id}`}>
+                      <Trash2 size={13} /> Delete
+                    </button>
+                  </div>
                 </td>
               </tr>
             ))}
