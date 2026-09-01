@@ -35,6 +35,13 @@ def new_id() -> str:
     return str(uuid.uuid4())
 
 
+def mask_aadhaar(a: str) -> str:
+    a = (a or "").strip()
+    if len(a) < 4:
+        return ""
+    return "XXXX-XXXX-" + a[-4:]
+
+
 # ---------- passwords ----------
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
@@ -67,6 +74,9 @@ def clean_user(user: dict) -> dict:
     user = dict(user)
     user.pop("_id", None)
     user.pop("password_hash", None)
+    if user.get("aadhaar_number"):
+        user["aadhaar_masked"] = mask_aadhaar(user["aadhaar_number"])
+        user.pop("aadhaar_number", None)
     return user
 
 

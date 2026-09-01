@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Copy, Ticket, Plus, KeyRound, X, Ban, Trash2 } from "lucide-react";
+import { Copy, Ticket, Plus, KeyRound, X, Ban, Trash2, Pencil } from "lucide-react";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,8 @@ export default function AdminUsers() {
   const [genLoading, setGenLoading] = useState(false);
   const [pwResult, setPwResult] = useState(null); // {full_name, distributor_id, password}
   const [busyId, setBusyId] = useState(null);
+  const [editUser, setEditUser] = useState(null);
+  const [editForm, setEditForm] = useState({});
 
   useEffect(() => {
     API.get("/admin/users").then(({ data }) => setUsers(data)).catch(() => setUsers([]));
@@ -25,7 +27,18 @@ export default function AdminUsers() {
 
   const loadReqs = () => API.get("/admin/registration-requests").then(({ data }) => setReqs(data)).catch(() => {});
   const approveReq = async (r) => { try { const { data } = await API.post(`/admin/registration-requests/${r.id}/approve`); toast.success(data.message); loadReqs(); API.get("/admin/users").then(({ data }) => setUsers(data)); } catch (e) { toast.error(apiError(e)); } };
-  const rejectReq = async (r) => { if (!window.confirm(`Reject ${r.full_name}?`)) return; try { await API.post(`/admin/registration-requests/${r.id}/reject`); toast.success("Request rejected"); loadReqs(); } catch (e) { toast.error(apiError(e)); } };
+  const rejectReq = async (r) => { const reason = window.prompt(`Reject ${r.full_name}? Optionally enter a reason:`, ""); if (reason === null) return; try { await API.post(`/admin/registration-requests/${r.id}/reject`, { reason }); toast.success("Request rejected"); loadReqs(); } catch (e) { toast.error(apiError(e)); } };
+
+  const openEdit = (u) => { setEditForm({ full_name: u.full_name || "", email: u.email || "", mobile: u.mobile || "", address: u.address || "", state: u.state || "", city: u.city || "", pincode: u.pincode || "" }); setEditUser(u); };
+  const saveEdit = async () => {
+    setBusyId(editUser.id);
+    try {
+      const { data } = await API.put(`/admin/users/${editUser.id}`, editForm);
+      setUsers((list) => list.map((x) => (x.id === editUser.id ? { ...x, ...data } : x)));
+      toast.success("Profile updated");
+      setEditUser(null);
+    } catch (e) { toast.error(apiError(e)); } finally { setBusyId(null); }
+  };
 
   const generate = async () => {
     setGenLoading(true);
@@ -161,6 +174,9 @@ export default function AdminUsers() {
                 <td className="p-4 text-muted2">{(u.created_at || "").slice(0, 10)}</td>
                 <td className="p-4">
                   <div className="flex flex-wrap gap-2">
+                    <button onClick={() => openEdit(u)} disabled={busyId === u.id} className="inline-flex items-center gap-1.5 rounded-full border border-forest/25 px-3 py-1.5 text-xs font-semibold text-forest transition-all hover:bg-brand-50 disabled:opacity-50" data-testid={`edit-user-${u.distributor_id}`}>
+                      <Pencil size={13} /> Edit
+                    </button>
                     <button onClick={() => resetPw(u)} disabled={busyId === u.id} className="inline-flex items-center gap-1.5 rounded-full border border-forest/25 px-3 py-1.5 text-xs font-semibold text-forest transition-all hover:bg-brand-50 disabled:opacity-50" data-testid={`reset-pw-${u.distributor_id}`}>
                       <KeyRound size={13} /> {busyId === u.id ? "…" : "Reset Password"}
                     </button>
@@ -177,6 +193,33 @@ export default function AdminUsers() {
           </tbody>
         </table>
       </div>
+
+      {editUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4" data-testid="edit-user-modal">
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl">
+            <div className="flex items-center justify-between">
+              <h3 className="font-display text-lg font-medium text-ink">Edit profile — {editUser.distributor_id}</h3>
+              <button onClick={() => setEditUser(null)} className="text-muted2 hover:text-ink" data-testid="edit-user-close"><X size={18} /></button>
+            </div>
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {[["full_name", "Full Name"], ["email", "Email"], ["mobile", "Mobile"], ["pincode", "Pincode"], ["state", "State"], ["city", "City"]].map(([k, label]) => (
+                <label key={k} className="text-sm text-ink">
+                  {label}
+                  <input value={editForm[k] ?? ""} onChange={(e) => setEditForm((f) => ({ ...f, [k]: e.target.value }))} className="mt-1 h-10 w-full rounded-lg border border-brand-50 px-3 focus:outline-none focus:ring-2 focus:ring-brand" data-testid={`edit-field-${k}`} />
+                </label>
+              ))}
+              <label className="text-sm text-ink sm:col-span-2">
+                Address
+                <input value={editForm.address ?? ""} onChange={(e) => setEditForm((f) => ({ ...f, address: e.target.value }))} className="mt-1 h-10 w-full rounded-lg border border-brand-50 px-3 focus:outline-none focus:ring-2 focus:ring-brand" data-testid="edit-field-address" />
+              </label>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setEditUser(null)} className="rounded-full border border-brand-50 px-4 py-2 text-sm font-semibold text-muted2 hover:bg-brand-50/40" data-testid="edit-user-cancel">Cancel</button>
+              <button onClick={saveEdit} disabled={busyId === editUser.id} className="rounded-full bg-forest px-5 py-2 text-sm font-semibold text-white hover:bg-brand disabled:opacity-50" data-testid="edit-user-save">{busyId === editUser.id ? "Saving…" : "Save"}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

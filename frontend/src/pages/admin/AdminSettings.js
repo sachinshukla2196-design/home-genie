@@ -6,14 +6,28 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useI18n } from "@/context/I18nContext";
+import { useAuth } from "@/context/AuthContext";
 import { API, apiError } from "@/lib/api";
 
 export default function AdminSettings() {
   const { t } = useI18n();
+  const { user } = useAuth();
   const [s, setS] = useState(null);
+  const [resetting, setResetting] = useState(false);
+  const isSuper = user?.role === "super_admin";
   const set = (k) => (e) => setS((p) => ({ ...p, [k]: e.target?.value ?? e }));
 
   useEffect(() => { API.get("/admin/settings").then(({ data }) => setS(data)).catch(() => {}); }, []);
+
+  const resetBetaData = async () => {
+    const typed = window.prompt('WARNING: This will permanently delete ALL distributor/customer and transaction data (users, orders, payments, wallets, referrals, KYC, withdrawals). Admin accounts, products and settings are preserved. This action CANNOT be undone.\n\nType RESET to confirm.');
+    if (typed !== "RESET") { if (typed !== null) toast.error("Confirmation text did not match. Nothing was deleted."); return; }
+    setResetting(true);
+    try {
+      const { data } = await API.post("/admin/maintenance/reset-data", { confirm: "RESET" });
+      toast.success(data.message || "Beta data cleared.");
+    } catch (e) { toast.error(apiError(e)); } finally { setResetting(false); }
+  };
 
   const save = async () => {
     try {
@@ -53,6 +67,16 @@ export default function AdminSettings() {
         <F label="Address" value={s.company_address} onChange={set("company_address")} testid="set-company-address" />
       </div>
       <Button onClick={save} className="rounded-full bg-forest hover:bg-brand" data-testid="settings-save">{t("cta.save")}</Button>
+
+      {isSuper && (
+        <div className="space-y-3 rounded-2xl border border-danger/30 bg-danger/5 p-6" data-testid="data-management-card">
+          <h3 className="font-display font-medium text-danger">Data Management — Reset BETA Data</h3>
+          <p className="text-sm text-muted2">Permanently deletes all distributor / customer and transaction data (users, orders, payments, wallets, referrals, KYC, withdrawals, registration requests). <b>Admin accounts, products and company settings are preserved.</b> This cannot be undone.</p>
+          <Button onClick={resetBetaData} disabled={resetting} className="rounded-full bg-danger text-white hover:bg-danger/90" data-testid="reset-beta-data-btn">
+            {resetting ? "Resetting…" : "Reset BETA Data"}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }

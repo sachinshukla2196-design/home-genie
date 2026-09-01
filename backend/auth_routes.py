@@ -54,6 +54,10 @@ def _valid_aadhaar(a: str) -> bool:
     return bool(re.fullmatch(r"\d{12}", (a or "").strip()))
 
 
+def _valid_email(e: str) -> bool:
+    return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", (e or "").strip()))
+
+
 async def _resolve_sponsor(sid_raw: str) -> dict:
     """Referral ID mandatory + must be an ACTIVE (GREEN) distributor, an admin, or an admin-generated code."""
     sid = (sid_raw or "").strip().upper()
@@ -114,21 +118,28 @@ class RegRequestBody(BaseModel):
 async def register_request(body: RegRequestBody):
     """BETA: simple registration request (no OTP). Creates a PENDING request for admin approval."""
     mobile = body.mobile.strip()
+    email = (body.email or "").strip().lower()
     if not _valid_mobile(mobile):
         raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number.")
+    if not _valid_email(email):
+        raise HTTPException(status_code=400, detail="A valid email address is required.")
     if body.password != body.confirm_password:
         raise HTTPException(status_code=400, detail="Passwords do not match.")
-    if not (body.sponsor_id or "").strip():
-        raise HTTPException(status_code=400, detail="Sponsor / Referral ID is required.")
     if not _valid_aadhaar(body.aadhaar_number):
         raise HTTPException(status_code=400, detail="A valid 12-digit Aadhaar number is required.")
+    if not body.state.strip() or not body.city.strip() or not body.pincode.strip():
+        raise HTTPException(status_code=400, detail="State, City and Pincode are required.")
     if await db.users.find_one({"mobile": mobile}):
         raise HTTPException(status_code=400, detail="An account already exists for this mobile number.")
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(status_code=400, detail="An account already exists for this email.")
     if await db.registration_requests.find_one({"mobile": mobile, "status": "pending"}):
         raise HTTPException(status_code=400, detail="A registration request for this mobile is already pending admin approval.")
+    if await db.registration_requests.find_one({"email": email, "status": "pending"}):
+        raise HTTPException(status_code=400, detail="A registration request for this email is already pending admin approval.")
     doc = {
         "id": new_id(), "full_name": body.full_name.strip(), "mobile": mobile,
-        "email": (body.email or "").strip().lower() or None,
+        "email": email,
         "password_hash": hash_password(body.password),
         "address": body.address.strip(), "state": body.state.strip(),
         "city": body.city.strip(), "pincode": body.pincode.strip(),
@@ -297,6 +308,26 @@ async def update_photo(body: PhotoBody, request: Request, user: dict = Depends(g
         raise HTTPException(status_code=400, detail="Image too large. Please choose a smaller photo.")
     await db.users.update_one({"id": user["id"]}, {"$set": {"photo": photo, "updated_at": now_iso()}})
     await log_audit(user, "profile_photo_updated", "user", user["id"], request=request)
+    updated = await db.users.find_one({"id": user["id"]})
+    return clean_user(updated)
+
+
+class ProfileUpdateBody(BaseModel):
+    full_name: Optional[str] = None
+    address: Optional[str] = None
+    state: Optional[str] = None
+    city: Optional[str] = None
+    pincode: Optional[str] = None
+
+
+@router.put("/profile")
+async def update_profile(body: ProfileUpdateBody, request: Request, user: dict = Depends(get_current_user)):
+    """Distributor updates their own permitted profile fields. Identity fields
+    (mobile, email, Aadhaar, distributor_id, status) are NOT editable here."""
+    upd = {k: (v.strip() if isinstance(v, str) else v) for k, v in body.model_dump().items() if v is not None}
+    if upd:
+        await db.users.update_one({"id": user["id"]}, {"$set": {**upd, "updated_at": now_iso()}})
+        await log_audit(user, "profile_updated", "user", user["id"], request=request)
     updated = await db.users.find_one({"id": user["id"]})
     return clean_user(updated)
 

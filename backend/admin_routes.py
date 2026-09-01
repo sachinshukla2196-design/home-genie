@@ -11,7 +11,8 @@ from typing import Optional, List
 from datetime import datetime, timezone
 
 from core import (db, now_iso, new_id, require_admin, get_settings,
-                  add_wallet_transaction, create_notification, log_audit)
+                  add_wallet_transaction, create_notification, log_audit,
+                  clean_user, mask_aadhaar)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -61,6 +62,10 @@ async def admin_users(status: Optional[str] = None, admin: dict = Depends(requir
     if status:
         q["status"] = status
     users = await db.users.find(q, {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(1000)
+    for u in users:
+        if u.get("aadhaar_number"):
+            u["aadhaar_masked"] = mask_aadhaar(u["aadhaar_number"])
+            u.pop("aadhaar_number", None)
     return users
 
 
@@ -69,6 +74,9 @@ async def admin_user_detail(user_id: str, admin: dict = Depends(require_admin)):
     u = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
     if not u:
         raise HTTPException(status_code=404, detail="User not found.")
+    if u.get("aadhaar_number"):
+        u["aadhaar_masked"] = mask_aadhaar(u["aadhaar_number"])
+        u.pop("aadhaar_number", None)
     wallet = await db.wallets.find_one({"user_id": user_id}, {"_id": 0})
     orders = await db.orders.find({"user_id": user_id}, {"_id": 0}).sort("created_at", -1).to_list(50)
     return {"user": u, "wallet": wallet, "orders": orders}
@@ -369,6 +377,7 @@ async def approve_registration_request(req_id: str, request: Request, admin: dic
         "id": new_id(), "distributor_id": did, "full_name": r["full_name"],
         "email": r.get("email") or None, "mobile": r["mobile"], "password_hash": r["password_hash"],
         "role": "distributor", "status": "red", "account_status": "active",
+        "activation_status": "inactive",
         "mobile_verified": False, "email_verified": False,
         "sponsor_id": r.get("sponsor_id") or None, "sponsor_user_id": None,
         "address": r.get("address", ""), "state": r.get("state", ""), "city": r.get("city", ""),
@@ -380,33 +389,40 @@ async def approve_registration_request(req_id: str, request: Request, admin: dic
     except Exception:
         raise HTTPException(status_code=400, detail="Could not create distributor (possibly a duplicate email or mobile). Please check and try again.")
     await get_or_create_wallet(user["id"])
-    # ₹100 referral bonus credited to the SPONSOR on approval
+    # Save the referral relationship permanently. Phase 1: NO commission is paid
+    # here — the ₹100 direct referral is credited in Phase 2 on GREEN activation.
     sp_did = r.get("sponsor_id")
     if sp_did:
         sponsor = await db.users.find_one({"distributor_id": sp_did})
         if sponsor:
-            ref_amt = float((await get_settings()).get("referral_commission", 100.0))
-            await get_or_create_wallet(sponsor["id"])
-            await db.wallets.update_one({"user_id": sponsor["id"]},
-                {"$inc": {"available_balance": ref_amt}, "$set": {"updated_at": now_iso()}})
-            await db.wallet_transactions.insert_one({"id": new_id(), "user_id": sponsor["id"],
-                "amount": ref_amt, "type": "credit", "category": "referral",
-                "description": f"Referral bonus for {did}", "reference_id": user["id"], "created_at": now_iso()})
             await db.users.update_one({"id": user["id"]}, {"$set": {"sponsor_user_id": sponsor["id"]}})
+            if not await db.referral_relationships.find_one({"referred_user_id": user["id"]}):
+                await db.referral_relationships.insert_one({
+                    "id": new_id(), "sponsor_id": sponsor["id"],
+                    "sponsor_distributor_id": sponsor.get("distributor_id"),
+                    "referred_user_id": user["id"], "referred_distributor_id": did,
+                    "commission_paid": False, "created_at": now_iso(),
+                })
     await db.registration_requests.update_one({"id": req_id},
         {"$set": {"status": "approved", "distributor_id": did, "approved_by": admin["id"], "approved_at": now_iso()}})
     await log_audit(admin, "registration_approved", "user", user["id"], new_value={"distributor_id": did}, request=request)
     return {"message": f"Approved. Distributor ID {did} created (RED, active).", "distributor_id": did}
 
 
+class RejectReqBody(BaseModel):
+    reason: str = ""
+
+
 @router.post("/registration-requests/{req_id}/reject")
-async def reject_registration_request(req_id: str, request: Request, admin: dict = Depends(require_admin)):
+async def reject_registration_request(req_id: str, request: Request, body: RejectReqBody = RejectReqBody(), admin: dict = Depends(require_admin)):
     r = await db.registration_requests.find_one({"id": req_id})
     if not r:
         raise HTTPException(status_code=404, detail="Request not found.")
     await db.registration_requests.update_one({"id": req_id},
-        {"$set": {"status": "rejected", "rejected_by": admin["id"], "rejected_at": now_iso()}})
-    await log_audit(admin, "registration_rejected", "registration_request", req_id, request=request)
+        {"$set": {"status": "rejected", "rejection_reason": (body.reason or "").strip(),
+                  "rejected_by": admin["id"], "rejected_at": now_iso()}})
+    await log_audit(admin, "registration_rejected", "registration_request", req_id,
+                    new_value={"reason": (body.reason or "").strip()}, request=request)
     return {"message": "Request rejected."}
 
 
@@ -439,6 +455,38 @@ async def delete_user(user_id: str, request: Request, admin: dict = Depends(requ
     return {"ok": True}
 
 
+class AdminUserUpdate(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    mobile: Optional[str] = None
+    address: Optional[str] = None
+    state: Optional[str] = None
+    city: Optional[str] = None
+    pincode: Optional[str] = None
+    aadhaar_number: Optional[str] = None
+
+
+@router.put("/users/{user_id}")
+async def admin_update_user(user_id: str, body: AdminUserUpdate, request: Request, admin: dict = Depends(require_admin)):
+    """Admin completes/corrects a distributor's profile."""
+    u = await db.users.find_one({"id": user_id})
+    if not u:
+        raise HTTPException(status_code=404, detail="User not found.")
+    upd = {k: (v.strip() if isinstance(v, str) else v) for k, v in body.model_dump().items() if v is not None}
+    if "email" in upd:
+        upd["email"] = upd["email"].lower() or None
+    try:
+        await db.users.update_one({"id": user_id}, {"$set": {**upd, "updated_at": now_iso()}})
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not update (email or mobile may already be in use).")
+    await log_audit(admin, "user_profile_updated", "user", user_id, new_value=list(upd.keys()), request=request)
+    updated = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    if updated.get("aadhaar_number"):
+        updated["aadhaar_masked"] = mask_aadhaar(updated["aadhaar_number"])
+        updated.pop("aadhaar_number", None)
+    return updated
+
+
 class AdminPwBody(BaseModel):
     password: Optional[str] = None
 
@@ -461,6 +509,23 @@ async def admin_reset_password(user_id: str, body: AdminPwBody, request: Request
 @router.get("/audit-logs")
 async def admin_audit(admin: dict = Depends(require_admin)):
     return await db.audit_logs.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+
+
+@router.delete("/audit-logs")
+async def clear_audit_logs(request: Request, admin: dict = Depends(require_admin)):
+    """SUPER ADMIN only: permanently clears audit history and records one
+    immutable system event noting the deletion."""
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Only the super admin can delete audit logs.")
+    count = (await db.audit_logs.delete_many({})).deleted_count
+    ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "")
+    await db.audit_logs.insert_one({
+        "id": new_id(), "user_id": admin.get("id"), "user_email": admin.get("email"),
+        "action": "audit_logs_cleared", "entity": "system", "entity_id": "audit_logs",
+        "old_value": {"deleted_count": count}, "new_value": None,
+        "protected": True, "ip": ip, "created_at": now_iso(),
+    })
+    return {"ok": True, "deleted": count}
 
 
 # ---------------- Reports ----------------

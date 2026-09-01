@@ -100,6 +100,18 @@ FastAPI+Mongo+React · Stripe · Email+Password with email OTP (OTP delivery MOC
 - VERIFIED on preview: deleted a product → restarted backend → product stayed deleted (5→4→4); 0 non-admin users after restart.
 - ACTION FOR OWNER: must REDEPLOY for production (anjaliherbal.life) to pick up this fix; production runs old code until redeploy.
 
+## PHASE 1 (2026-06 — session 9) — Data cleanup + registration + admin approval (PATCH)
+Delivered exactly per owner's "PHASE 1 FINAL COMMAND" (no rebuild, no OTP, no demo data):
+- MANDATORY cleanup run: reset-data wiped all non-admin data (0 users). Demo seeder already permanently disabled (session 8).
+- Reset BETA Data control: AdminSettings.js "Data Management — Reset BETA Data" card (super_admin only), typed-RESET confirm → POST /api/admin/maintenance/reset-data. Preserves admins, products, settings.
+- Audit log delete: DELETE /api/admin/audit-logs (SUPER ADMIN only) — clears logs then writes ONE immutable `audit_logs_cleared` system event (protected:true). UI button on AdminAuditLogs.js (super_admin only), with confirm. VERIFIED: deleted 684 → 1 event remains.
+- Registration fields updated: MANDATORY now = Full Name, Mobile, Email, Aadhaar(12d), Password, State, City, Pincode. Sponsor/Referral ID is OPTIONAL. Backend + Register.js. NO OTP, no mock OTP. Duplicate mobile/email blocked (users + pending requests).
+- Approval workflow: approve → next_distributor_id() ANJxxxxxx, RED, account_status active, activation_status "inactive"; referral relationship saved to referral_relationships (commission_paid:false). Reject stores rejection_reason (optional). **Phase 1 pays NO commission** (₹100 moved to Phase 2 on GREEN activation) — verified 0 commissions on approval.
+- Profile: distributor self-update PUT /api/auth/profile (full_name/address/state/city/pincode; identity fields immutable). Admin complete/correct via PUT /api/admin/users/{id} + Edit modal in AdminUsers.js.
+- Security: Aadhaar MASKED everywhere in API responses (XXXX-XXXX-1234); raw aadhaar_number never returned (clean_user + admin list/detail/update). mask_aadhaar() in core.py.
+- VERIFIED via curl: all validation (missing email/state/city/pincode/aadhaar → 400), sponsor-optional 200, dup mobile/email 400, approve→RED/inactive/masked, login 200 / bad 401, admin edit, reject+reason, self profile update, audit delete. Frontend smoke screenshots OK.
+- NOTE: ₹100-on-approval logic from session 8 was REMOVED to match the refined Phase 2 spec (commission on GREEN activation only).
+
 ## Backlog
 - Cosmetic polish (P2): Checkout summary uses hardcoded 5% GST (use server gst_percent); dark-mode 'Activation' badge over product image; /admin-secure-login field fill.
 - Backend hardening (P1): admin "reject UPI claim" path + upi reference validation; admin-login lockout email+IP keying; backport 15-min window to /api/auth/login.
