@@ -24,8 +24,8 @@ async def admin_dashboard(admin: dict = Depends(require_admin)):
     today = datetime.now(timezone.utc).date().isoformat()
 
     total_users = await db.users.count_documents({"role": {"$in": ["distributor", "customer"]}})
-    red_users = await db.users.count_documents({"status": "red"})
-    green_users = await db.users.count_documents({"status": "green"})
+    red_users = await db.users.count_documents({"status": "red", "role": {"$in": ["distributor", "customer"]}})
+    green_users = await db.users.count_documents({"status": "green", "role": {"$in": ["distributor", "customer"]}})
     pending_kyc = await db.kyc_records.count_documents({"status": "pending"})
     pending_wd = await db.withdrawal_requests.count_documents({"status": {"$in": ["pending", "under_review"]}})
 
@@ -351,11 +351,13 @@ async def reset_data(body: ResetBody, request: Request, admin: dict = Depends(re
     result = {"users": (await db.users.delete_many({"role": {"$nin": list(admin_roles)}})).deleted_count}
     for coll in ["orders", "payment_transactions", "commissions", "wallets", "wallet_transactions",
                  "referral_relationships", "activation_records", "withdrawal_requests",
-                 "kyc_records", "notifications", "otp_sessions", "referral_codes", "login_attempts",
+                 "kyc_records", "notifications", "otp_sessions", "login_attempts",
                  "registration_requests"]:
         result[coll] = (await db[coll].delete_many({})).deleted_count
+    # reference codes are admin config, not customer data — keep them, just reset usage counters
+    await db.referral_codes.update_many({}, {"$set": {"uses": 0}})
     await log_audit(admin, "data_reset", "system", "all", new_value=result, request=request)
-    return {"message": "All non-admin data cleared. Admins, products and settings preserved.", "deleted": result}
+    return {"message": "All distributor/customer & transaction data cleared. Admin accounts, products, settings and Reference IDs are preserved.", "deleted": result}
 
 
 @router.get("/registration-requests")

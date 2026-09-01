@@ -187,6 +187,16 @@ async def _init_db():
     # always keep the admin username in sync with env
     await db.users.update_one({"email": admin_email}, {"$set": {"username": admin_username}})
 
+    # master reference id — a permanent referral code so onboarding can start immediately
+    admin_doc = await db.users.find_one({"email": admin_email})
+    if not await db.referral_codes.find_one({"code": "ANJALI1"}):
+        await db.referral_codes.insert_one({
+            "id": new_id(), "code": "ANJALI1", "active": True, "is_master": True,
+            "label": "Master Reference ID",
+            "created_by": admin_doc["id"] if admin_doc else None,
+            "created_by_name": "System (Master)", "uses": 0, "created_at": now_iso(),
+        })
+
     # demo data seeder is PERMANENTLY DISABLED — demo accounts/orders will never
     # be re-created on restart, regardless of the SEED_DEMO environment variable.
 

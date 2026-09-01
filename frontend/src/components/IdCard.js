@@ -20,7 +20,20 @@ export function IdCard({ user }) {
   }, [refLink]);
 
   const render = async () => {
-    return toPng(cardRef.current, { pixelRatio: 3, cacheBust: true, skipFonts: true, backgroundColor: "#ffffff" });
+    const node = cardRef.current;
+    // wait for QR + photo images to finish loading so the capture is complete
+    const imgs = Array.from(node.querySelectorAll("img"));
+    await Promise.all(imgs.map((img) => (img.complete && img.naturalWidth)
+      ? Promise.resolve()
+      : new Promise((res) => { img.onload = res; img.onerror = res; })));
+    const rect = node.getBoundingClientRect();
+    const opts = {
+      pixelRatio: 3, cacheBust: true, skipFonts: true, backgroundColor: "#ffffff",
+      width: Math.ceil(rect.width), height: Math.ceil(rect.height),
+      style: { width: `${rect.width}px`, height: `${rect.height}px`, margin: "0" },
+    };
+    await toPng(node, opts);        // warm-up pass (html-to-image often renders the 1st pass partially)
+    return await toPng(node, opts); // full, complete capture
   };
 
   const download = async () => {

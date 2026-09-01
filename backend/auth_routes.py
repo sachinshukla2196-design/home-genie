@@ -159,6 +159,15 @@ async def register_request(body: RegRequestBody):
     return {"message": "Your registration request has been submitted. Please wait for Admin approval."}
 
 
+@router.get("/reference-codes")
+async def public_reference_codes():
+    """Public: active admin-created reference codes for the registration dropdown (code + label only)."""
+    codes = await db.referral_codes.find(
+        {"active": True}, {"_id": 0, "code": 1, "label": 1, "is_master": 1}
+    ).sort([("is_master", -1), ("created_at", 1)]).to_list(200)
+    return codes
+
+
 @router.post("/register")
 async def register(body: RegisterBody, request: Request):
     email = body.email.lower().strip()

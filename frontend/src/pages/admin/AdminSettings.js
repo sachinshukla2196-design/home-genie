@@ -20,7 +20,7 @@ export default function AdminSettings() {
   useEffect(() => { API.get("/admin/settings").then(({ data }) => setS(data)).catch(() => {}); }, []);
 
   const resetBetaData = async () => {
-    const typed = window.prompt('WARNING: This will permanently delete ALL distributor/customer and transaction data (users, orders, payments, wallets, referrals, KYC, withdrawals). Admin accounts, products and settings are preserved. This action CANNOT be undone.\n\nType RESET to confirm.');
+    const typed = window.prompt('WARNING: This permanently deletes ALL distributor/customer & transaction data (users, orders, payments, wallets, referrals, KYC, withdrawals, registration requests).\n\nYour ADMIN accounts, products, settings and Reference IDs are NOT deleted — they are always kept.\n\nThis cannot be undone. Type RESET to confirm.');
     if (typed !== "RESET") { if (typed !== null) toast.error("Confirmation text did not match. Nothing was deleted."); return; }
     setResetting(true);
     try {
@@ -71,7 +71,7 @@ export default function AdminSettings() {
       {isSuper && (
         <div className="space-y-3 rounded-2xl border border-danger/30 bg-danger/5 p-6" data-testid="data-management-card">
           <h3 className="font-display font-medium text-danger">Data Management — Reset BETA Data</h3>
-          <p className="text-sm text-muted2">Permanently deletes all distributor / customer and transaction data (users, orders, payments, wallets, referrals, KYC, withdrawals, registration requests). <b>Admin accounts, products and company settings are preserved.</b> This cannot be undone.</p>
+          <p className="text-sm text-muted2">Permanently deletes all distributor / customer and transaction data (users, orders, payments, wallets, referrals, KYC, withdrawals, registration requests). <b>Your admin accounts, products, company settings and Reference IDs are always preserved — never deleted.</b> This cannot be undone.</p>
           <Button onClick={resetBetaData} disabled={resetting} className="rounded-full bg-danger text-white hover:bg-danger/90" data-testid="reset-beta-data-btn">
             {resetting ? "Resetting…" : "Reset BETA Data"}
           </Button>

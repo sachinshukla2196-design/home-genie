@@ -137,6 +137,17 @@ Delivered per owner's "PHASE 2 FINAL COMMAND". Logic already existed in shop_rou
 - Wallet changes only via add_wallet_transaction (backend). Frontend cannot alter balance.
 - VERIFIED E2E via curl: A(GREEN) refers B → B RED/inactive, A=₹0 → B pays ₹1500 → B GREEN/active, A available=₹100 earned=₹100 → REPEAT payment: A STILL ₹100, commissions unchanged → FAILED razorpay verify (bad signature)=400, user stays RED/inactive, no commission → RED cannot withdraw=403. Test data cleaned (0 users).
 
+## SESSION 9 — Master Ref ID, sponsor dropdown, ID-card fix, dashboard counts, reset clarity
+Owner-requested batch (all 6 approved & VERIFIED on preview):
+1. ID CARD "half image" FIXED (components/IdCard.js): render() now waits for QR+photo image load, passes explicit width/height + style to toPng, and does a warm-up + final capture pass. Verified: exported PNG 1260x789 (ratio 1.597 ≈ card 1.6) = full card, ~964KB.
+2. MASTER REFERENCE ID "ANJALI1" (is_master:true, label "Master Reference ID") seeded once in server.py _init_db; permanent, never expires. Onboarding can start immediately.
+3. REGISTRATION SPONSOR = DROPDOWN (Register.js): now a Select populated from public GET /api/auth/reference-codes (active admin-created reference codes + master; code+label+is_master only). Master listed first. Admin creates codes via existing POST /api/admin/referral-codes (AdminUsers "Generate"). Register validation requires a selection. FRONTEND API PATH FIX: must call /auth/reference-codes (API base already has /api).
+4. RESET BETA DATA: no longer deletes referral_codes (admin config) — preserves them, resets uses→0. Warning text (AdminSettings.js prompt + card) clarified: admin accounts, products, settings AND Reference IDs are always preserved. Verified reset keeps ANJALI1 + generated codes.
+5. ADMIN EDIT PROFILE: already built (AdminUsers Edit modal → PUT /api/admin/users/{id}) — confirmed present.
+6. DASHBOARD COUNT BUG FIXED (admin_routes dashboard): red_users/green_users now scoped to role in [distributor,customer] so the super_admin (company root, status green) is no longer counted. This was the "2 green vs 1 green" discrepancy.
+VERIFIED: master reg 200 / invalid 400, dropdown shows master first, dashboard green excludes admin, reset preserves ref codes, ID card export full. Test data cleaned (0 users, ANJALI1 preserved).
+IMPORTANT: production (anjaliherbal.life) still runs OLD code — the Cloudflare 520 the owner saw = backend startup crash on prod; fixed in code (session 9 deploy fix) but REQUIRES REDEPLOY. Admin creds are driven by prod env ADMIN_USERNAME/ADMIN_PASSWORD/ADMIN_PASSCODE (preview: admin/admin123/admin123).
+
 ## Backlog
 - Cosmetic polish (P2): Checkout summary uses hardcoded 5% GST (use server gst_percent); dark-mode 'Activation' badge over product image; /admin-secure-login field fill.
 - Backend hardening (P1): admin "reject UPI claim" path + upi reference validation; admin-login lockout email+IP keying; backport 15-min window to /api/auth/login.
