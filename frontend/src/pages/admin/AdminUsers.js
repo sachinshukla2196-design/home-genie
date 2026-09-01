@@ -51,6 +51,15 @@ export default function AdminUsers() {
 
   const copy = (text) => { navigator.clipboard?.writeText(text); toast.success(`Copied ${text}`); };
 
+  const deleteCode = async (code) => {
+    if (!window.confirm(`Delete reference code ${code}?`)) return;
+    try {
+      await API.delete(`/admin/referral-codes/${code}`);
+      setCodes((cs) => cs.filter((x) => x.code !== code));
+      toast.success("Reference code deleted");
+    } catch (e) { toast.error(apiError(e)); }
+  };
+
   const resetPw = async (u) => {
     setBusyId(u.id);
     try {
@@ -149,11 +158,18 @@ export default function AdminUsers() {
         {codes.length > 0 && (
           <div className="mt-4 flex flex-wrap gap-2">
             {codes.slice(0, 12).map((c) => (
-              <button key={c.code} onClick={() => copy(c.code)} className="group inline-flex items-center gap-2 rounded-full border border-brand-50 bg-brand-50/40 px-3 py-1.5 text-sm font-medium text-forest transition-all hover:-translate-y-0.5 hover:shadow-card" data-testid={`referral-code-${c.code}`}>
-                <span className="font-mono">{c.code}</span>
-                <span className="text-[10px] text-muted2">· {c.uses || 0} used</span>
-                <Copy size={13} className="opacity-60 group-hover:opacity-100" />
-              </button>
+              <div key={c.code} className="group inline-flex items-center gap-2 rounded-full border border-brand-50 bg-brand-50/40 px-3 py-1.5 text-sm font-medium text-forest" data-testid={`referral-code-${c.code}`}>
+                <button onClick={() => copy(c.code)} className="inline-flex items-center gap-2" title="Copy code">
+                  <span className="font-mono">{c.code}{c.is_master ? " ★" : ""}</span>
+                  <span className="text-[10px] text-muted2">· {c.uses || 0} used</span>
+                  <Copy size={13} className="opacity-60 group-hover:opacity-100" />
+                </button>
+                {!c.is_master && (
+                  <button onClick={() => deleteCode(c.code)} className="text-danger/60 transition-colors hover:text-danger" title="Delete code" data-testid={`delete-referral-code-${c.code}`}>
+                    <Trash2 size={13} />
+                  </button>
+                )}
+              </div>
             ))}
           </div>
         )}

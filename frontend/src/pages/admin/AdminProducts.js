@@ -39,6 +39,15 @@ export default function AdminProducts() {
   const del = async (p) => { if (!window.confirm(`Permanently delete "${p.name}"? This cannot be undone.`)) return; try { await API.delete(`/admin/products/${p.id}/permanent`); toast.success("Product deleted"); load(); } catch (err) { toast.error(apiError(err)); } };
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target?.value ?? e }));
 
+  const onImageFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 2_000_000) { toast.error("Image too large. Please choose an image under 2MB."); return; }
+    const reader = new FileReader();
+    reader.onload = () => setForm((f) => ({ ...f, images: [reader.result] }));
+    reader.readAsDataURL(file);
+  };
+
   if (!products) return <Skeleton className="h-96 rounded-2xl" />;
 
   return (
@@ -80,7 +89,18 @@ export default function AdminProducts() {
             <FF label="Name (EN)" value={form.name} onChange={set("name")} testid="pf-name" />
             <FF label="Name (HI)" value={form.name_hi} onChange={set("name_hi")} testid="pf-name-hi" />
             <div><Label className="text-sm">Description (EN)</Label><Textarea value={form.description} onChange={set("description")} className="mt-1.5" data-testid="pf-desc" /></div>
-            <FF label="Image URL" value={form.images[0]} onChange={(e) => setForm((f) => ({ ...f, images: [e.target.value] }))} testid="pf-image" />
+            <div>
+              <Label className="text-sm">Product Image</Label>
+              <div className="mt-1.5 flex items-center gap-3">
+                {form.images?.[0]
+                  ? <img src={form.images[0]} alt="" className="h-16 w-16 rounded-lg border border-brand-50 object-cover" data-testid="pf-image-preview" />
+                  : <div className="flex h-16 w-16 items-center justify-center rounded-lg border border-dashed border-brand-50 text-[10px] text-muted2">No image</div>}
+                <div className="flex-1 space-y-2">
+                  <input type="file" accept="image/*" onChange={onImageFile} className="block w-full text-xs text-muted2 file:mr-2 file:cursor-pointer file:rounded-full file:border-0 file:bg-forest file:px-3 file:py-1.5 file:text-white hover:file:bg-brand" data-testid="pf-image-upload" />
+                  <Input placeholder="…or paste an image URL" value={form.images[0]?.startsWith("data:") ? "" : (form.images[0] || "")} onChange={(e) => setForm((f) => ({ ...f, images: [e.target.value] }))} className="h-9" data-testid="pf-image-url" />
+                </div>
+              </div>
+            </div>
             <div className="grid grid-cols-3 gap-3">
               <FF label="MRP" type="number" value={form.mrp} onChange={set("mrp")} testid="pf-mrp" />
               <FF label="Price" type="number" value={form.selling_price} onChange={set("selling_price")} testid="pf-price" />

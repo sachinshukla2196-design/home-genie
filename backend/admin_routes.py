@@ -336,6 +336,18 @@ async def list_referral_codes(admin: dict = Depends(require_admin)):
     return await db.referral_codes.find({}, {"_id": 0}).sort("created_at", -1).to_list(200)
 
 
+@router.delete("/referral-codes/{code}")
+async def delete_referral_code(code: str, request: Request, admin: dict = Depends(require_admin)):
+    rc = await db.referral_codes.find_one({"code": code})
+    if not rc:
+        raise HTTPException(status_code=404, detail="Reference code not found.")
+    if rc.get("is_master"):
+        raise HTTPException(status_code=400, detail="The master reference ID cannot be deleted.")
+    await db.referral_codes.delete_one({"code": code})
+    await log_audit(admin, "referral_code_deleted", "referral_code", code, request=request)
+    return {"ok": True}
+
+
 class ResetBody(BaseModel):
     confirm: str
 

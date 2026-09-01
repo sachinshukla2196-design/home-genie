@@ -148,6 +148,11 @@ Owner-requested batch (all 6 approved & VERIFIED on preview):
 VERIFIED: master reg 200 / invalid 400, dropdown shows master first, dashboard green excludes admin, reset preserves ref codes, ID card export full. Test data cleaned (0 users, ANJALI1 preserved).
 IMPORTANT: production (anjaliherbal.life) still runs OLD code — the Cloudflare 520 the owner saw = backend startup crash on prod; fixed in code (session 9 deploy fix) but REQUIRES REDEPLOY. Admin creds are driven by prod env ADMIN_USERNAME/ADMIN_PASSWORD/ADMIN_PASSCODE (preview: admin/admin123/admin123).
 
+## SESSION 9b — product image upload + reference-code delete
+- Order/customer data: reset-data (preview) wiped orders/users/transactions (users=0). PRODUCTION untouched — no agent access; only owner's Reset on prod after redeploy affects it.
+- Product image upload: AdminProducts.js Add/Edit dialog now has a file input (reads file → base64 data URL into images[0], 2MB cap) + live preview + optional paste-URL field. Stored in product.images (List[str]); no backend change (ProductBody.images already accepts strings).
+- Reference-code delete: new backend DELETE /api/admin/referral-codes/{code} (blocks deleting is_master → 400). AdminUsers.js code chips now show a Trash2 delete button; master ANJALI1 shows ★ and has NO delete button. VERIFIED: delete normal code ok, delete master → 400.
+
 ## Backlog
 - Cosmetic polish (P2): Checkout summary uses hardcoded 5% GST (use server gst_percent); dark-mode 'Activation' badge over product image; /admin-secure-login field fill.
 - Backend hardening (P1): admin "reject UPI claim" path + upi reference validation; admin-login lockout email+IP keying; backport 15-min window to /api/auth/login.
