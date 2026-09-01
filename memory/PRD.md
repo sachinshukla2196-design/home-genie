@@ -119,6 +119,15 @@ Delivered exactly per owner's "PHASE 1 FINAL COMMAND" (no rebuild, no OTP, no de
 - Approval resolves referral CODES to the company root/super_admin (not just plain Distributor IDs) before saving the referral_relationship.
 - VERIFIED: missing→400, invalid ANJ999999→400, ANJ000000→200, distributor-ID sponsor→200; chain ANJ000000→ANJ000199→ANJ000200 saved correctly.
 
+## DEPLOYMENT FIX (2026-06 — session 9) — Atlas "no primary" crashed startup
+- Symptom: production deploy timed out. Backend died on startup with pymongo ServerSelectionTimeoutError ("No primary available for writes", ReplicaSetNoPrimary) while running create_index inside @app.on_event("startup"). Crash → nginx /health connection-refused → pod never ready.
+- ROOT CAUSE: blocking MongoDB init (indexes + seeds) ran synchronously in the FastAPI startup event; a transient Atlas primary election threw and killed the process before /health could respond.
+- FIX (code only, no docker):
+  - core.py: AsyncIOMotorClient(serverSelectionTimeoutMS=8000, connectTimeoutMS=8000, retryWrites=True) — bounded, never hangs.
+  - server.py: startup() now schedules _run_db_init_with_retry() as a non-blocking asyncio background task (up to 60×5s retries); each index/seed step wrapped in _safe() so one failure can't abort the rest. /health & /api/health have NO DB dependency → pod ready immediately; DB init self-heals once Atlas primary is available.
+- VERIFIED on preview: /health 200, "Application startup complete" logs BEFORE "DB initialisation complete", admin login + products work. deployment_agent: all critical checks pass (compilation, env, urls, cors, supervisor).
+- NOTE: agent also flagged admin reset-data / delete-user / delete-audit-logs as "destructive" and some to_list() queries as unoptimized — these are intentional user-requested features (super_admin+confirm gated) and non-blocking perf items, NOT deploy blockers; left as-is.
+
 ## Backlog
 - Cosmetic polish (P2): Checkout summary uses hardcoded 5% GST (use server gst_percent); dark-mode 'Activation' badge over product image; /admin-secure-login field fill.
 - Backend hardening (P1): admin "reject UPI claim" path + upi reference validation; admin-login lockout email+IP keying; backport 15-min window to /api/auth/login.

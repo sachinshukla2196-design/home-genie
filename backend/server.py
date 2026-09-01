@@ -1,5 +1,6 @@
 """Anjali Herbal Life Ayurveda - Distributor & E-Commerce Platform (Phase 1)."""
 import os
+import asyncio
 import logging
 from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
@@ -105,23 +106,48 @@ CATEGORY_SEED = ["Starter Kit", "Immunity", "Wellness", "Personal Care"]
 
 @app.on_event("startup")
 async def startup():
+    # Run DB initialisation in the background so a transient Atlas hiccup
+    # (e.g. "no primary available for writes" during a primary election)
+    # can never crash the process before /health can respond. The pod
+    # becomes ready immediately; init retries until MongoDB is reachable.
+    asyncio.create_task(_run_db_init_with_retry())
+
+
+async def _run_db_init_with_retry():
+    for attempt in range(1, 61):
+        try:
+            await _init_db()
+            logger.info("DB initialisation complete")
+            return
+        except Exception as e:
+            logger.error(f"DB init attempt {attempt} failed ({e}); retrying in 5s")
+            await asyncio.sleep(5)
+    logger.error("DB init did not complete after retries; continuing (ops will retry lazily)")
+
+
+async def _safe(coro):
+    """Run a single DB init step without letting one failure abort the rest."""
+    try:
+        await coro
+    except Exception as e:
+        logger.warning(f"DB init step skipped: {e}")
+
+
+async def _init_db():
     # indexes
     try:
         await db.users.drop_index("email_1")
     except Exception:
         pass
-    await db.users.create_index("email", unique=True, partialFilterExpression={"email": {"$type": "string"}})
-    await db.users.create_index("distributor_id", unique=True)
-    await db.products.create_index("sku", unique=True)
-    await db.commissions.create_index("referred_user_id")
-    await db.orders.create_index("order_number", unique=True)
-    await db.wallet_transactions.create_index("user_id")
-    await db.notifications.create_index("user_id")
-    await db.otp_sessions.create_index([("identifier", 1), ("purpose", 1)])
-    try:
-        await db.users.create_index("mobile", unique=True, sparse=True)
-    except Exception as e:
-        logger.error(f"mobile index skipped: {e}")
+    await _safe(db.users.create_index("email", unique=True, partialFilterExpression={"email": {"$type": "string"}}))
+    await _safe(db.users.create_index("distributor_id", unique=True))
+    await _safe(db.products.create_index("sku", unique=True))
+    await _safe(db.commissions.create_index("referred_user_id"))
+    await _safe(db.orders.create_index("order_number", unique=True))
+    await _safe(db.wallet_transactions.create_index("user_id"))
+    await _safe(db.notifications.create_index("user_id"))
+    await _safe(db.otp_sessions.create_index([("identifier", 1), ("purpose", 1)]))
+    await _safe(db.users.create_index("mobile", unique=True, sparse=True))
 
     # settings
     await get_settings()

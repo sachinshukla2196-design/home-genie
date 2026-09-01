@@ -18,7 +18,12 @@ load_dotenv(ROOT_DIR / ".env")
 logger = logging.getLogger("anjali")
 
 mongo_url = os.environ["MONGO_URL"]
-client = AsyncIOMotorClient(mongo_url)
+client = AsyncIOMotorClient(
+    mongo_url,
+    serverSelectionTimeoutMS=8000,
+    connectTimeoutMS=8000,
+    retryWrites=True,
+)
 db = client[os.environ["DB_NAME"]]
 
 JWT_SECRET = os.environ.get("JWT_SECRET", "anjali-dev-secret-change-me")
