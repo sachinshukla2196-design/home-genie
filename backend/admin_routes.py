@@ -393,7 +393,11 @@ async def approve_registration_request(req_id: str, request: Request, admin: dic
     # here — the ₹100 direct referral is credited in Phase 2 on GREEN activation.
     sp_did = r.get("sponsor_id")
     if sp_did:
-        sponsor = await db.users.find_one({"distributor_id": sp_did})
+        rc = await db.referral_codes.find_one({"code": sp_did, "active": True})
+        if rc:
+            sponsor = await db.users.find_one({"id": rc.get("created_by")}) or await db.users.find_one({"role": "super_admin"})
+        else:
+            sponsor = await db.users.find_one({"distributor_id": sp_did})
         if sponsor:
             await db.users.update_one({"id": user["id"]}, {"$set": {"sponsor_user_id": sponsor["id"]}})
             if not await db.referral_relationships.find_one({"referred_user_id": user["id"]}):

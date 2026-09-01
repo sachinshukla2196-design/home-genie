@@ -31,6 +31,7 @@ export default function Register() {
     if (form.password.length < 6) return toast.error("Password must be at least 6 characters.");
     if (form.password !== form.confirm_password) return toast.error("Passwords do not match.");
     if (!/^\d{12}$/.test(form.aadhaar_number.trim())) return toast.error("Enter a valid 12-digit Aadhaar number.");
+    if (!form.sponsor_id.trim()) return toast.error("Sponsor / Referral ID is required.");
     if (!form.state || !form.city || !form.pincode.trim()) return toast.error("State, City and Pincode are required.");
     setLoading(true);
     try {
@@ -76,7 +77,7 @@ export default function Register() {
               </div>
               <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
                 <Field label={`${t("auth.aadhaar")} *`} value={form.aadhaar_number} onChange={set("aadhaar_number")} required testid="reg-aadhaar" />
-                <Field label={`${t("auth.sponsorId")} (optional)`} value={form.sponsor_id} onChange={set("sponsor_id")} testid="reg-sponsor" />
+                <Field label={`${t("auth.sponsorId")} *`} value={form.sponsor_id} onChange={set("sponsor_id")} required testid="reg-sponsor" />
               </div>
               <Field label={`${t("auth.address")} (optional)`} value={form.address} onChange={set("address")} testid="reg-address" />
               <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">

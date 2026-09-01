@@ -129,6 +129,14 @@ async def register_request(body: RegRequestBody):
         raise HTTPException(status_code=400, detail="A valid 12-digit Aadhaar number is required.")
     if not body.state.strip() or not body.city.strip() or not body.pincode.strip():
         raise HTTPException(status_code=400, detail="State, City and Pincode are required.")
+    sponsor_raw = (body.sponsor_id or "").strip().upper()
+    if not sponsor_raw:
+        raise HTTPException(status_code=400, detail="Sponsor / Referral ID is required.")
+    sponsor_ok = (sponsor_raw == "ANJ000000"
+                  or await db.referral_codes.find_one({"code": sponsor_raw, "active": True})
+                  or await db.users.find_one({"distributor_id": sponsor_raw}))
+    if not sponsor_ok:
+        raise HTTPException(status_code=400, detail="Invalid referral / sponsor ID. Enter a valid Distributor ID or referral code.")
     if await db.users.find_one({"mobile": mobile}):
         raise HTTPException(status_code=400, detail="An account already exists for this mobile number.")
     if await db.users.find_one({"email": email}):

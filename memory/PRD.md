@@ -112,6 +112,13 @@ Delivered exactly per owner's "PHASE 1 FINAL COMMAND" (no rebuild, no OTP, no de
 - VERIFIED via curl: all validation (missing email/state/city/pincode/aadhaar → 400), sponsor-optional 200, dup mobile/email 400, approve→RED/inactive/masked, login 200 / bad 401, admin edit, reject+reason, self profile update, audit delete. Frontend smoke screenshots OK.
 - NOTE: ₹100-on-approval logic from session 8 was REMOVED to match the refined Phase 2 spec (commission on GREEN activation only).
 
+## PHASE 1 CORRECTION (2026-06 — session 9) — Sponsor mandatory + validated
+- Owner reversed the "sponsor optional" decision: referral MUST be captured from day one to build genealogy/commissions.
+- Sponsor/Referral ID is now MANDATORY again (Register.js required + "*"; backend register-request).
+- Backend VALIDATES the sponsor exists: accepts a real Distributor ID, an active admin referral code, or the company root ANJ000000 (does NOT require GREEN in Phase 1). Invalid/typo sponsor → 400 (prevents orphaned tree).
+- Approval resolves referral CODES to the company root/super_admin (not just plain Distributor IDs) before saving the referral_relationship.
+- VERIFIED: missing→400, invalid ANJ999999→400, ANJ000000→200, distributor-ID sponsor→200; chain ANJ000000→ANJ000199→ANJ000200 saved correctly.
+
 ## Backlog
 - Cosmetic polish (P2): Checkout summary uses hardcoded 5% GST (use server gst_percent); dark-mode 'Activation' badge over product image; /admin-secure-login field fill.
 - Backend hardening (P1): admin "reject UPI claim" path + upi reference validation; admin-login lockout email+IP keying; backport 15-min window to /api/auth/login.
