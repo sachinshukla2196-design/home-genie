@@ -272,7 +272,7 @@ async def _process_paid_order(session_id: str, request: Request = None):
     if qualifies and user.get("status") == "red":
         await db.users.update_one(
             {"id": user["id"], "status": "red"},
-            {"$set": {"status": "green", "activation_date": now_iso(),
+            {"$set": {"status": "green", "activation_status": "active", "activation_date": now_iso(),
                       "activation_order_id": order["id"], "activation_amount": order["total"],
                       "updated_at": now_iso()}},
         )

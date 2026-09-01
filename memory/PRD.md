@@ -128,6 +128,15 @@ Delivered exactly per owner's "PHASE 1 FINAL COMMAND" (no rebuild, no OTP, no de
 - VERIFIED on preview: /health 200, "Application startup complete" logs BEFORE "DB initialisation complete", admin login + products work. deployment_agent: all critical checks pass (compilation, env, urls, cors, supervisor).
 - NOTE: agent also flagged admin reset-data / delete-user / delete-audit-logs as "destructive" and some to_list() queries as unoptimized — these are intentional user-requested features (super_admin+confirm gated) and non-blocking perf items, NOT deploy blockers; left as-is.
 
+## PHASE 2 (2026-06 — session 9) — ₹1,500 activation + GREEN + ₹100 referral (PATCH)
+Delivered per owner's "PHASE 2 FINAL COMMAND". Logic already existed in shop_routes._process_paid_order; only ONE code change needed.
+- CHANGE: GREEN activation now also sets user.activation_status="active" (Phase 1 sets it "inactive"). status→green, activation_status→active, activation_date, activation_order_id, activation_amount, wallet.active=true.
+- Activation qualifies only when order.is_activation_order AND total >= settings.activation_amount (₹1500) AND user is RED. Backend-verified only — GREEN NEVER happens from a frontend "success" claim.
+- Payment paths: Razorpay verify (signature-checked), admin manual (/api/admin/payments/manual), UPI admin-confirm. All funnel through _process_paid_order.
+- ₹100 direct referral commission: paid to the sponsor when the referred distributor activates (sponsor must be GREEN). Immutable: commissions doc (type REFERRAL_COMMISSION) + wallet_transaction (credit to available_balance + total_earned). 3-layer idempotency: order.payment_status=="paid" early-return, existing-commission guard, atomic referral_relationships.commission_paid flag (modified_count==1). No duplicate ₹100 on repeat callbacks/admin actions.
+- Wallet changes only via add_wallet_transaction (backend). Frontend cannot alter balance.
+- VERIFIED E2E via curl: A(GREEN) refers B → B RED/inactive, A=₹0 → B pays ₹1500 → B GREEN/active, A available=₹100 earned=₹100 → REPEAT payment: A STILL ₹100, commissions unchanged → FAILED razorpay verify (bad signature)=400, user stays RED/inactive, no commission → RED cannot withdraw=403. Test data cleaned (0 users).
+
 ## Backlog
 - Cosmetic polish (P2): Checkout summary uses hardcoded 5% GST (use server gst_percent); dark-mode 'Activation' badge over product image; /admin-secure-login field fill.
 - Backend hardening (P1): admin "reject UPI claim" path + upi reference validation; admin-login lockout email+IP keying; backport 15-min window to /api/auth/login.
