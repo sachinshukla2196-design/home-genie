@@ -94,6 +94,12 @@ FastAPI+Mongo+React · Stripe · Email+Password with email OTP (OTP delivery MOC
 - Login refuses blocked users (403) — verified.
 - Referral commission model (BETA): SPONSOR receives ₹100 on admin approval of a registration request (credited directly to sponsor wallet if sponsor_id resolves to a distributor_id); new user created RED + active. Manual payment / paid activation flips RED→GREEN. No double-payment (request flow creates no referral_relationship, so _process_paid_order's commission path is skipped). VERIFIED E2E via curl: approval → sponsor available_balance +100; block→403; delete→ok.
 
+## CRITICAL FIX (2026-06 — session 8, fork) — "deleted data reappears"
+- ROOT CAUSE 1 (products): server.py product seed ran on EVERY startup and re-inserted any seed SKU that was missing → deleted products came back on every pod restart. FIX: seed products ONLY when `db.products.count_documents({}) == 0` (first-time / empty catalogue only). Deleted products now stay deleted.
+- ROOT CAUSE 2 (demo users/orders): demo_seed re-created the whole demo network on restart when SEED_DEMO=true (production still had it on). FIX: demo seeder PERMANENTLY DISABLED in code (removed the seed_demo call + import from server.py) — cannot run regardless of env var.
+- VERIFIED on preview: deleted a product → restarted backend → product stayed deleted (5→4→4); 0 non-admin users after restart.
+- ACTION FOR OWNER: must REDEPLOY for production (anjaliherbal.life) to pick up this fix; production runs old code until redeploy.
+
 ## Backlog
 - Cosmetic polish (P2): Checkout summary uses hardcoded 5% GST (use server gst_percent); dark-mode 'Activation' badge over product image; /admin-secure-login field fill.
 - Backend hardening (P1): admin "reject UPI claim" path + upi reference validation; admin-login lockout email+IP keying; backport 15-min window to /api/auth/login.

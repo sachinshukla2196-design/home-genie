@@ -10,7 +10,6 @@ import auth_routes
 import shop_routes
 import wallet_routes
 import admin_routes
-from demo_seed import seed_demo
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -132,9 +131,10 @@ async def startup():
         if not await db.product_categories.find_one({"name": c}):
             await db.product_categories.insert_one({"id": new_id(), "name": c, "created_at": now_iso()})
 
-    # products
-    for p in PRODUCT_SEED:
-        if not await db.products.find_one({"sku": p["sku"]}):
+    # products — seed ONCE only when the catalogue is empty.
+    # Never re-add products that an admin deleted afterward.
+    if await db.products.count_documents({}) == 0:
+        for p in PRODUCT_SEED:
             doc = dict(p)
             doc.update({"id": new_id(), "created_at": now_iso(), "updated_at": now_iso()})
             await db.products.insert_one(doc)
@@ -161,12 +161,8 @@ async def startup():
     # always keep the admin username in sync with env
     await db.users.update_one({"email": admin_email}, {"$set": {"username": admin_username}})
 
-    # demo data (only when explicitly enabled; keeps production a clean/fresh start)
-    if os.environ.get("SEED_DEMO", "false").lower() == "true":
-        try:
-            await seed_demo()
-        except Exception as e:
-            logger.error(f"demo seed error: {e}")
+    # demo data seeder is PERMANENTLY DISABLED — demo accounts/orders will never
+    # be re-created on restart, regardless of the SEED_DEMO environment variable.
 
 
 @app.on_event("shutdown")
