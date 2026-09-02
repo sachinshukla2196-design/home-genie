@@ -122,12 +122,13 @@ export default function AdminOrders() {
 
       <div className="overflow-x-auto rounded-2xl border border-brand-50 bg-white shadow-card" data-testid={tab === "paid" ? "paid-list" : "orders-list"}>
         <table className="w-full text-sm">
-          <thead><tr className="border-b border-brand-50 text-left text-muted2"><th className="p-4">{t("order.number")}</th><th className="p-4">Distributor</th><th className="p-4 text-right">{t("order.total")}</th><th className="p-4">Payment</th><th className="p-4">Method</th><th className="p-4">Reference ID</th><th className="p-4">{t("order.status")}</th><th className="p-4">Invoice</th><th className="p-4">Action</th></tr></thead>
+          <thead><tr className="border-b border-brand-50 text-left text-muted2"><th className="p-4">{t("order.number")}</th><th className="p-4">Distributor</th><th className="p-4">Date</th><th className="p-4 text-right">{t("order.total")}</th><th className="p-4">Payment</th><th className="p-4">Method</th><th className="p-4">Reference ID</th><th className="p-4">{t("order.status")}</th><th className="p-4">Invoice</th><th className="p-4">Action</th></tr></thead>
           <tbody>
             {shown.map((o) => (
               <tr key={o.id} className="border-b border-brand-50/60 transition-colors hover:bg-brand-50/30" data-testid={`admin-order-${o.order_number}`}>
                 <td className="p-4 font-medium text-ink">{o.order_number}</td>
                 <td className="p-4 font-mono text-forest" data-testid={`order-dist-${o.order_number}`}>{o.distributor_id}</td>
+                <td className="p-4 text-muted2">{(o.created_at || "").slice(0, 10)}</td>
                 <td className="p-4 text-right font-medium text-ink">{money(o.total)}</td>
                 <td className="p-4"><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${o.payment_status === "paid" ? "bg-brand-50 text-brand" : o.payment_status === "claimed" ? "bg-gold-light text-gold" : "bg-danger/10 text-danger"}`}>{o.payment_status}</span>
                   {o.payment_status === "claimed" && <button onClick={() => { setConfirmFor(o); setReference(o.upi_reference || ""); }} className="ml-2 rounded-full bg-forest px-2.5 py-1 text-[11px] font-semibold text-white transition-all hover:bg-brand hover:-translate-y-0.5" data-testid={`upi-confirm-${o.order_number}`}>Confirm UPI</button>}
@@ -148,7 +149,7 @@ export default function AdminOrders() {
                 </td>
               </tr>
             ))}
-            {shown.length === 0 && <tr><td colSpan={9} className="p-8 text-center text-muted2">No orders here yet.</td></tr>}
+            {shown.length === 0 && <tr><td colSpan={10} className="p-8 text-center text-muted2">No orders here yet.</td></tr>}
           </tbody>
         </table>
       </div>

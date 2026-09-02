@@ -157,6 +157,18 @@ IMPORTANT: production (anjaliherbal.life) still runs OLD code — the Cloudflare
 - Backend: DELETE /api/admin/orders/{order_id} — permanently deletes the order + its payment_transactions (super/admin roles). Audited (order_deleted).
 - Frontend: AdminOrders.js Orders table now has an Action column with a red "Delete" button (confirm popup) per row, optimistic removal. VERIFIED via curl: order delete 1→0 ok, non-existent → 404.
 
+## SESSION 10 — Final targeted admin patch
+CHANGED:
+- Registration sponsor: dropdown → MANUAL text input (mandatory). Server-side existence validation preserved (distributor id / admin code / master ANJALI1). Register.js.
+- Orders page: added "Date" column (order created_at). Hard-delete already existed (session 9c) — untouched.
+- Commissions: added RELEASE / HOLD. Backend PUT /api/admin/commissions/{id}/status (action release|hold); double-release blocked (400); updates real status (RELEASED/HELD), audited (commission_released/held). AdminCommissions.js Release/Hold buttons.
+- Reset BETA Data UI card REMOVED from AdminSettings.js (hidden per request; backend endpoint left intact but no UI). No replacement created.
+- KYC admin edit: backend PUT /api/admin/kyc/{user_id}/edit (upserts kyc record, PAN/IFSC uppercased, audited kyc_edited_by_admin). AdminKyc.js Edit button + modal (pan, holder, bank account, ifsc, bank name).
+- ID card: added registered Mobile + RED/GREEN status badge (logo/name/ID already present). IdCard.js. Export full-image fix from session 9 still applies.
+- Landing "Wellness Range": already dynamic from /api/products (removed the slice(0,3) → shows ALL admin products) + added "Purchase Now" button per card → /register. Landing.js.
+SKIPPED (already correct): audit logging (real-time + delete events), hard-delete order (already built), referral relationship logic, KYC structure/masking, payment/wallet/commission calc.
+VERIFIED via curl: commission release→RELEASED, double release→400, hold→HELD; KYC edit upsert + PAN uppercased. Screenshots: Register sponsor=INPUT, landing shows products + Purchase Now. Test data cleaned.
+
 ## Backlog
 - Cosmetic polish (P2): Checkout summary uses hardcoded 5% GST (use server gst_percent); dark-mode 'Activation' badge over product image; /admin-secure-login field fill.
 - Backend hardening (P1): admin "reject UPI claim" path + upi reference validation; admin-login lockout email+IP keying; backport 15-min window to /api/auth/login.

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
@@ -24,11 +24,6 @@ export default function Register() {
   });
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target?.value ?? e }));
 
-  const [refCodes, setRefCodes] = useState([]);
-  useEffect(() => {
-    API.get("/auth/reference-codes").then(({ data }) => setRefCodes(data)).catch(() => {});
-  }, []);
-
   const submit = async (e) => {
     e.preventDefault();
     if (!/^[6-9]\d{9}$/.test(form.mobile.trim())) return toast.error("Enter a valid 10-digit mobile number.");
@@ -36,7 +31,7 @@ export default function Register() {
     if (form.password.length < 6) return toast.error("Password must be at least 6 characters.");
     if (form.password !== form.confirm_password) return toast.error("Passwords do not match.");
     if (!/^\d{12}$/.test(form.aadhaar_number.trim())) return toast.error("Enter a valid 12-digit Aadhaar number.");
-    if (!form.sponsor_id.trim()) return toast.error("Please select a Reference ID.");
+    if (!form.sponsor_id.trim()) return toast.error("Please enter a valid Referral / Sponsor ID.");
     if (!form.state || !form.city || !form.pincode.trim()) return toast.error("State, City and Pincode are required.");
     setLoading(true);
     try {
@@ -82,17 +77,7 @@ export default function Register() {
               </div>
               <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
                 <Field label={`${t("auth.aadhaar")} *`} value={form.aadhaar_number} onChange={set("aadhaar_number")} required testid="reg-aadhaar" />
-                <div>
-                  <Label className="text-sm text-ink">{t("auth.sponsorId")} *</Label>
-                  <Select value={form.sponsor_id} onValueChange={(v) => setForm((f) => ({ ...f, sponsor_id: v }))}>
-                    <SelectTrigger className="mt-1.5 h-11 rounded-lg" data-testid="reg-sponsor"><SelectValue placeholder="Select a Reference ID" /></SelectTrigger>
-                    <SelectContent className="max-h-64">
-                      {refCodes.length === 0
-                        ? <div className="px-3 py-2 text-sm text-muted2">No reference IDs available yet</div>
-                        : refCodes.map((c) => <SelectItem key={c.code} value={c.code}>{c.code}{c.is_master ? " (Master)" : ""}{c.label ? ` — ${c.label}` : ""}</SelectItem>)}
-                    </SelectContent>
-                  </Select>
-                </div>
+                <Field label={`${t("auth.sponsorId")} *`} value={form.sponsor_id} onChange={set("sponsor_id")} required testid="reg-sponsor" />
               </div>
               <Field label={`${t("auth.address")} (optional)`} value={form.address} onChange={set("address")} testid="reg-address" />
               <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">

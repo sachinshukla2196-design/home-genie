@@ -206,6 +206,32 @@ async def admin_commissions(admin: dict = Depends(require_admin)):
     return await db.commissions.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
 
 
+class CommissionActionBody(BaseModel):
+    action: str  # release / hold
+
+
+@router.put("/commissions/{commission_id}/status")
+async def commission_status(commission_id: str, body: CommissionActionBody, request: Request, admin: dict = Depends(require_admin)):
+    c = await db.commissions.find_one({"id": commission_id})
+    if not c:
+        raise HTTPException(status_code=404, detail="Commission not found.")
+    if body.action == "release":
+        if c.get("status") == "RELEASED":
+            raise HTTPException(status_code=400, detail="This commission is already released.")
+        await db.commissions.update_one({"id": commission_id},
+            {"$set": {"status": "RELEASED", "released_at": now_iso(), "released_by": admin["id"]}})
+        await log_audit(admin, "commission_released", "commission", commission_id,
+                        old_value={"status": c.get("status")}, new_value={"status": "RELEASED"}, request=request)
+        return {"ok": True, "status": "RELEASED"}
+    if body.action == "hold":
+        await db.commissions.update_one({"id": commission_id},
+            {"$set": {"status": "HELD", "held_at": now_iso(), "held_by": admin["id"]}})
+        await log_audit(admin, "commission_held", "commission", commission_id,
+                        old_value={"status": c.get("status")}, new_value={"status": "HELD"}, request=request)
+        return {"ok": True, "status": "HELD"}
+    raise HTTPException(status_code=400, detail="Invalid action.")
+
+
 # ---------------- KYC review ----------------
 @router.get("/kyc")
 async def admin_kyc(status: Optional[str] = None, admin: dict = Depends(require_admin)):
@@ -219,6 +245,38 @@ async def admin_kyc(status: Optional[str] = None, admin: dict = Depends(require_
 class KycReview(BaseModel):
     action: str  # verify / reject
     reason: Optional[str] = ""
+
+
+class KycEditBody(BaseModel):
+    pan: Optional[str] = None
+    account_holder_name: Optional[str] = None
+    bank_account: Optional[str] = None
+    ifsc: Optional[str] = None
+    bank_name: Optional[str] = None
+
+
+@router.put("/kyc/{user_id}/edit")
+async def admin_edit_kyc(user_id: str, body: KycEditBody, request: Request, admin: dict = Depends(require_admin)):
+    """Admin completes/corrects a distributor's KYC details. Saved to the real DB, audited."""
+    upd = {k: (v.strip() if isinstance(v, str) else v) for k, v in body.model_dump().items() if v is not None}
+    if "pan" in upd:
+        upd["pan"] = upd["pan"].upper()
+    if "ifsc" in upd:
+        upd["ifsc"] = upd["ifsc"].upper()
+    upd["updated_at"] = now_iso()
+    existing = await db.kyc_records.find_one({"user_id": user_id})
+    if existing:
+        await db.kyc_records.update_one({"user_id": user_id}, {"$set": upd})
+    else:
+        u = await db.users.find_one({"id": user_id})
+        if not u:
+            raise HTTPException(status_code=404, detail="Distributor not found.")
+        upd.update({"id": new_id(), "user_id": user_id, "distributor_id": u.get("distributor_id"),
+                    "status": "pending", "aadhaar": "", "created_at": now_iso(), "submitted_at": now_iso()})
+        await db.kyc_records.insert_one(upd)
+        await db.users.update_one({"id": user_id}, {"$set": {"kyc_status": "pending"}})
+    await log_audit(admin, "kyc_edited_by_admin", "kyc", user_id, new_value=list(upd.keys()), request=request)
+    return {"ok": True}
 
 
 @router.put("/kyc/{user_id}")

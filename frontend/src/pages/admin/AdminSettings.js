@@ -67,16 +67,6 @@ export default function AdminSettings() {
         <F label="Address" value={s.company_address} onChange={set("company_address")} testid="set-company-address" />
       </div>
       <Button onClick={save} className="rounded-full bg-forest hover:bg-brand" data-testid="settings-save">{t("cta.save")}</Button>
-
-      {isSuper && (
-        <div className="space-y-3 rounded-2xl border border-danger/30 bg-danger/5 p-6" data-testid="data-management-card">
-          <h3 className="font-display font-medium text-danger">Data Management — Reset BETA Data</h3>
-          <p className="text-sm text-muted2">Permanently deletes all distributor / customer and transaction data (users, orders, payments, wallets, referrals, KYC, withdrawals, registration requests). <b>Your admin accounts, products, company settings and Reference IDs are always preserved — never deleted.</b> This cannot be undone.</p>
-          <Button onClick={resetBetaData} disabled={resetting} className="rounded-full bg-danger text-white hover:bg-danger/90" data-testid="reset-beta-data-btn">
-            {resetting ? "Resetting…" : "Reset BETA Data"}
-          </Button>
-        </div>
-      )}
     </div>
   );
 }
