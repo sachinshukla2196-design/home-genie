@@ -7,6 +7,7 @@ import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
+import { TreeView } from "@/components/TreeView";
 import { API, apiError } from "@/lib/api";
 
 export default function AdminSettings() {
@@ -14,10 +15,27 @@ export default function AdminSettings() {
   const { user } = useAuth();
   const [s, setS] = useState(null);
   const [resetting, setResetting] = useState(false);
+  const [master, setMaster] = useState(null);
+  const [tree, setTree] = useState(null);
   const isSuper = user?.role === "super_admin";
   const set = (k) => (e) => setS((p) => ({ ...p, [k]: e.target?.value ?? e }));
 
   useEffect(() => { API.get("/admin/settings").then(({ data }) => setS(data)).catch(() => {}); }, []);
+  useEffect(() => {
+    if (user?.role === "super_admin") {
+      API.get("/admin/master").then(({ data }) => setMaster(data)).catch(() => {});
+      API.get("/admin/tree").then(({ data }) => setTree(data)).catch(() => {});
+    }
+  }, [user]);
+
+  const toggleMaster = async () => {
+    try {
+      const { data } = await API.put("/admin/master/status", { active: !master.active });
+      setMaster((m) => ({ ...m, active: data.active }));
+      toast.success(data.active ? "Master ID activated" : "Master ID deactivated");
+    } catch (e) { toast.error(apiError(e)); }
+  };
+  const masterLink = master ? `${window.location.origin}/register?ref=${master.code}` : "";
 
   const resetBetaData = async () => {
     const typed = window.prompt('WARNING: This permanently deletes ALL distributor/customer & transaction data (users, orders, payments, wallets, referrals, KYC, withdrawals, registration requests).\n\nYour ADMIN accounts, products, settings and Reference IDs are NOT deleted — they are always kept.\n\nThis cannot be undone. Type RESET to confirm.');
@@ -67,6 +85,26 @@ export default function AdminSettings() {
         <F label="Address" value={s.company_address} onChange={set("company_address")} testid="set-company-address" />
       </div>
       <Button onClick={save} className="rounded-full bg-forest hover:bg-brand" data-testid="settings-save">{t("cta.save")}</Button>
+
+      {isSuper && master && (
+        <div className="space-y-3 rounded-2xl border border-gold/40 bg-gold-light/30 p-6" data-testid="master-admin-card">
+          <div className="flex items-center justify-between">
+            <h3 className="font-display font-medium text-forest">Master Admin / Root</h3>
+            <button onClick={toggleMaster} className={`rounded-full px-3 py-1 text-xs font-semibold ${master.active ? "bg-brand-50 text-brand" : "bg-danger/10 text-danger"}`} data-testid="master-status-toggle">{master.active ? "ACTIVE" : "INACTIVE"} · tap to toggle</button>
+          </div>
+          <div className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+            <div><div className="text-xs text-muted2">Master ID</div><div className="font-mono font-semibold text-forest">{master.code}</div></div>
+            <div><div className="text-xs text-muted2">Direct Referrals</div><div className="font-semibold">{master.direct_referrals}</div></div>
+            <div><div className="text-xs text-muted2">Network Members</div><div className="font-semibold">{master.network_members}</div></div>
+            <div><div className="text-xs text-muted2">Referral Code</div><button onClick={() => { navigator.clipboard?.writeText(master.code); toast.success("Copied"); }} className="font-mono font-semibold text-forest underline" data-testid="master-copy-code">{master.code}</button></div>
+          </div>
+          <div className="text-xs text-muted2">Referral link: <button onClick={() => { navigator.clipboard?.writeText(masterLink); toast.success("Link copied"); }} className="text-forest underline" data-testid="master-copy-link">{masterLink}</button></div>
+          <div className="mt-2 rounded-xl border border-brand-50 bg-white p-3">
+            <div className="mb-1 text-xs font-semibold text-muted2">Network Tree (root: MST000001)</div>
+            <TreeView tree={tree} testid="admin-network-tree" />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

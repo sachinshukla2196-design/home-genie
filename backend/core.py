@@ -47,6 +47,36 @@ def mask_aadhaar(a: str) -> str:
     return "XXXX-XXXX-" + a[-4:]
 
 
+async def build_referral_tree(root_did: str):
+    """Build a nested referral tree from referral_relationships, rooted at root_did."""
+    rels = await db.referral_relationships.find(
+        {}, {"_id": 0, "sponsor_distributor_id": 1, "referred_distributor_id": 1}).to_list(5000)
+    children = {}
+    for r in rels:
+        children.setdefault(r.get("sponsor_distributor_id"), []).append(r.get("referred_distributor_id"))
+    dids = {root_did}
+    for k, v in children.items():
+        if k:
+            dids.add(k)
+        dids.update(v)
+    users = await db.users.find(
+        {"distributor_id": {"$in": list(dids)}},
+        {"_id": 0, "distributor_id": 1, "full_name": 1, "status": 1}).to_list(5000)
+    info = {u["distributor_id"]: u for u in users}
+    seen = set()
+
+    def node(did):
+        if not did or did in seen:
+            return None
+        seen.add(did)
+        u = info.get(did, {})
+        name = u.get("full_name") or ("Master Root" if str(did).startswith("MST") else "")
+        kids = [n for n in (node(c) for c in children.get(did, [])) if n]
+        return {"distributor_id": did, "name": name, "status": u.get("status"), "children": kids}
+
+    return node(root_did)
+
+
 # ---------- passwords ----------
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")

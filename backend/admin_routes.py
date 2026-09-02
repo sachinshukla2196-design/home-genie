@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 
 from core import (db, now_iso, new_id, require_admin, get_settings,
                   add_wallet_transaction, create_notification, log_audit,
-                  clean_user, mask_aadhaar)
+                  clean_user, mask_aadhaar, build_referral_tree)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -419,6 +419,38 @@ async def delete_referral_code(code: str, request: Request, admin: dict = Depend
     return {"ok": True}
 
 
+class MasterStatusBody(BaseModel):
+    active: bool
+
+
+@router.get("/master")
+async def master_info(admin: dict = Depends(require_admin)):
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin only.")
+    m = await db.referral_codes.find_one({"code": "MST000001"}, {"_id": 0})
+    direct = await db.referral_relationships.count_documents({"sponsor_distributor_id": "MST000001"})
+    network = await db.users.count_documents({"role": "distributor"})
+    return {"code": "MST000001", "active": bool(m.get("active", True)) if m else False,
+            "direct_referrals": direct, "network_members": network}
+
+
+@router.put("/master/status")
+async def master_status(body: MasterStatusBody, request: Request, admin: dict = Depends(require_admin)):
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin only.")
+    await db.referral_codes.update_one({"code": "MST000001"}, {"$set": {"active": body.active}})
+    await log_audit(admin, "master_status_changed", "master", "MST000001",
+                    new_value={"active": body.active}, request=request)
+    return {"ok": True, "active": body.active}
+
+
+@router.get("/tree")
+async def admin_tree(admin: dict = Depends(require_admin)):
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Super admin only.")
+    return await build_referral_tree("MST000001")
+
+
 class ResetBody(BaseModel):
     confirm: str
 
@@ -481,14 +513,17 @@ async def approve_registration_request(req_id: str, request: Request, admin: dic
         rc = await db.referral_codes.find_one({"code": sp_did, "active": True})
         if rc:
             sponsor = await db.users.find_one({"id": rc.get("created_by")}) or await db.users.find_one({"role": "super_admin"})
+            parent_label = rc["code"]  # e.g. MST000001 — the code itself is the tree parent/root
         else:
             sponsor = await db.users.find_one({"distributor_id": sp_did})
+            parent_label = sp_did
         if sponsor:
-            await db.users.update_one({"id": user["id"]}, {"$set": {"sponsor_user_id": sponsor["id"]}})
+            await db.users.update_one({"id": user["id"]},
+                                      {"$set": {"sponsor_user_id": sponsor["id"], "sponsor_distributor_id": parent_label}})
             if not await db.referral_relationships.find_one({"referred_user_id": user["id"]}):
                 await db.referral_relationships.insert_one({
                     "id": new_id(), "sponsor_id": sponsor["id"],
-                    "sponsor_distributor_id": sponsor.get("distributor_id"),
+                    "sponsor_distributor_id": parent_label,
                     "referred_user_id": user["id"], "referred_distributor_id": did,
                     "commission_paid": False, "created_at": now_iso(),
                 })

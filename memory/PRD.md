@@ -169,6 +169,14 @@ CHANGED:
 SKIPPED (already correct): audit logging (real-time + delete events), hard-delete order (already built), referral relationship logic, KYC structure/masking, payment/wallet/commission calc.
 VERIFIED via curl: commission release→RELEASED, double release→400, hold→HELD; KYC edit upsert + PAN uppercased. Screenshots: Register sponsor=INPUT, landing shows products + Purchase Now. Test data cleaned.
 
+## SESSION 11 — Master ID (MST000001) + organic matrix tree
+- MASTER ID: the permanent master referral code is now MST000001 (was ANJALI1). is_master:true, active. server.py seeds it once and enforces a SINGLE master (update_many sets is_master=false on all other codes; ANJALI1 demoted to a normal code, still usable). Deactivating MST000001 blocks new registrations through it (validated).
+- ROOT ATTRIBUTION: on approval, when the sponsor is a referral CODE, the referral_relationship.sponsor_distributor_id and user.sponsor_distributor_id are set to the CODE itself (e.g. MST000001) — so MST000001 is the tree root. Distributor-ID sponsors store that distributor as parent. commission attribution (sponsor_user_id) still points to created_by/super_admin. No commission rules changed.
+- Organic tree: reuses existing referral_relationships (no new table). core.build_referral_tree(root_did) builds a nested tree dynamically (unlimited levels) from sponsor_distributor_id → referred_distributor_id.
+- APIs added (admin, super_admin-gated): GET /api/admin/master (code, active, direct_referrals, network_members), PUT /api/admin/master/status {active} (audited master_status_changed), GET /api/admin/tree (nested tree rooted at MST000001).
+- Frontend: AdminSettings.js "Master Admin / Root" card (super_admin only) — MST000001, ACTIVE/INACTIVE toggle, direct/network counts, copyable code + referral link, and a Network Tree (components/TreeView.js). Distributor downline already viewable on existing Team page (/app/team) — unchanged.
+- VERIFIED via curl: MST000001 active; A registers via MST000001 → parent=MST000001; B registers via A → parent=A(ANJ000208); admin tree MST000001→ANJ000208→ANJ000209; master counts direct 1/network 2; deactivate → register via MST000001 = 400. Test data cleaned.
+
 ## Backlog
 - Cosmetic polish (P2): Checkout summary uses hardcoded 5% GST (use server gst_percent); dark-mode 'Activation' badge over product image; /admin-secure-login field fill.
 - Backend hardening (P1): admin "reject UPI claim" path + upi reference validation; admin-login lockout email+IP keying; backport 15-min window to /api/auth/login.
