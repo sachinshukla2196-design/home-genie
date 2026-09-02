@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
-import { ShieldCheck, X, BadgeIndianRupee } from "lucide-react";
+import { ShieldCheck, X, BadgeIndianRupee, Trash2 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,6 +27,15 @@ export default function AdminOrders() {
   useEffect(() => { load(); }, []);
 
   const change = async (id, status) => { try { await API.put(`/admin/orders/${id}/status`, { status }); toast.success(t("cta.save")); load(); } catch (e) { toast.error(apiError(e)); } };
+
+  const deleteOrder = async (o) => {
+    if (!window.confirm(`Permanently DELETE order ${o.order_number} (${money(o.total)})? This cannot be undone.`)) return;
+    try {
+      await API.delete(`/admin/orders/${o.id}`);
+      setOrders((list) => list.filter((x) => x.id !== o.id));
+      toast.success("Order deleted");
+    } catch (e) { toast.error(apiError(e)); }
+  };
 
   const submitConfirm = async () => {
     const ref = reference.trim();
@@ -113,7 +122,7 @@ export default function AdminOrders() {
 
       <div className="overflow-x-auto rounded-2xl border border-brand-50 bg-white shadow-card" data-testid={tab === "paid" ? "paid-list" : "orders-list"}>
         <table className="w-full text-sm">
-          <thead><tr className="border-b border-brand-50 text-left text-muted2"><th className="p-4">{t("order.number")}</th><th className="p-4">Distributor</th><th className="p-4 text-right">{t("order.total")}</th><th className="p-4">Payment</th><th className="p-4">Method</th><th className="p-4">Reference ID</th><th className="p-4">{t("order.status")}</th><th className="p-4">Invoice</th></tr></thead>
+          <thead><tr className="border-b border-brand-50 text-left text-muted2"><th className="p-4">{t("order.number")}</th><th className="p-4">Distributor</th><th className="p-4 text-right">{t("order.total")}</th><th className="p-4">Payment</th><th className="p-4">Method</th><th className="p-4">Reference ID</th><th className="p-4">{t("order.status")}</th><th className="p-4">Invoice</th><th className="p-4">Action</th></tr></thead>
           <tbody>
             {shown.map((o) => (
               <tr key={o.id} className="border-b border-brand-50/60 transition-colors hover:bg-brand-50/30" data-testid={`admin-order-${o.order_number}`}>
@@ -132,9 +141,14 @@ export default function AdminOrders() {
                   </Select>
                 </td>
                 <td className="p-4 text-muted2">{o.invoice_number || "—"}</td>
+                <td className="p-4">
+                  <button onClick={() => deleteOrder(o)} className="inline-flex items-center gap-1.5 rounded-full border border-danger/40 px-3 py-1.5 text-xs font-semibold text-danger transition-all hover:bg-danger/10" data-testid={`delete-order-${o.order_number}`}>
+                    <Trash2 size={13} /> Delete
+                  </button>
+                </td>
               </tr>
             ))}
-            {shown.length === 0 && <tr><td colSpan={8} className="p-8 text-center text-muted2">No orders here yet.</td></tr>}
+            {shown.length === 0 && <tr><td colSpan={9} className="p-8 text-center text-muted2">No orders here yet.</td></tr>}
           </tbody>
         </table>
       </div>

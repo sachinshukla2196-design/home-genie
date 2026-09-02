@@ -153,6 +153,10 @@ IMPORTANT: production (anjaliherbal.life) still runs OLD code — the Cloudflare
 - Product image upload: AdminProducts.js Add/Edit dialog now has a file input (reads file → base64 data URL into images[0], 2MB cap) + live preview + optional paste-URL field. Stored in product.images (List[str]); no backend change (ProductBody.images already accepts strings).
 - Reference-code delete: new backend DELETE /api/admin/referral-codes/{code} (blocks deleting is_master → 400). AdminUsers.js code chips now show a Trash2 delete button; master ANJALI1 shows ★ and has NO delete button. VERIFIED: delete normal code ok, delete master → 400.
 
+## SESSION 9c — hard delete order
+- Backend: DELETE /api/admin/orders/{order_id} — permanently deletes the order + its payment_transactions (super/admin roles). Audited (order_deleted).
+- Frontend: AdminOrders.js Orders table now has an Action column with a red "Delete" button (confirm popup) per row, optimistic removal. VERIFIED via curl: order delete 1→0 ok, non-existent → 404.
+
 ## Backlog
 - Cosmetic polish (P2): Checkout summary uses hardcoded 5% GST (use server gst_percent); dark-mode 'Activation' badge over product image; /admin-secure-login field fill.
 - Backend hardening (P1): admin "reject UPI claim" path + upi reference validation; admin-login lockout email+IP keying; backport 15-min window to /api/auth/login.

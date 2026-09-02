@@ -171,6 +171,19 @@ async def update_order_status(order_id: str, body: OrderStatusBody, request: Req
     return {"ok": True}
 
 
+@router.delete("/orders/{order_id}")
+async def delete_order(order_id: str, request: Request, admin: dict = Depends(require_admin)):
+    """Permanently delete an order and its related payment transactions."""
+    o = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not o:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    await db.orders.delete_one({"id": order_id})
+    await db.payment_transactions.delete_many({"order_id": order_id})
+    await log_audit(admin, "order_deleted", "order", order_id,
+                    old_value={"order_number": o.get("order_number"), "total": o.get("total")}, request=request)
+    return {"ok": True}
+
+
 # ---------------- Payments ----------------
 @router.get("/payments")
 async def admin_payments(admin: dict = Depends(require_admin)):
