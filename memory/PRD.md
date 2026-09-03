@@ -177,6 +177,15 @@ VERIFIED via curl: commission release→RELEASED, double release→400, hold→H
 - Frontend: AdminSettings.js "Master Admin / Root" card (super_admin only) — MST000001, ACTIVE/INACTIVE toggle, direct/network counts, copyable code + referral link, and a Network Tree (components/TreeView.js). Distributor downline already viewable on existing Team page (/app/team) — unchanged.
 - VERIFIED via curl: MST000001 active; A registers via MST000001 → parent=MST000001; B registers via A → parent=A(ANJ000208); admin tree MST000001→ANJ000208→ANJ000209; master counts direct 1/network 2; deactivate → register via MST000001 = 400. Test data cleaned.
 
+## SESSION 12 — small correction patch
+- Admin Order page: backend admin_orders now enriches each order with user_name (lookup by user_id); AdminOrders.js shows the name under the Distributor ID. (Date already present.)
+- ID card: REMOVED the RED/GREEN status badge. Kept mobile + existing Anjali Herbal Life brand emblem/logo.
+- KYC pending queue: AdminKyc.js now fetches /admin/kyc?status=pending so approved/rejected records leave the active queue (history kept — visible via status=verified/rejected). review_kyc already set status correctly.
+- Homepage "Our Wellness Range": already dynamic from /api/products (active only) — SKIPPED (works in current code; production needs redeploy).
+- AUDIT recurrence ROOT CAUSE + fix: clear_audit_logs re-inserted a marker stamped with the admin's email (sachin.shukla2196@gmail.com) after every clear — that's why the record "reappeared." Fixed: the post-clear system marker now stores user_email="system", user_id=None (no personal email). So cleared logs stay cleared and that email is not auto-recreated. (No seed/startup/trigger recreates audit data.)
+- Hard-delete consistency: verified orders stay deleted (products seed only when empty, demo seeder disabled) — no recreation sources remain.
+- VERIFIED: order user_name shows; audit clear leaves only user_email="system" (no sachin); order hard delete persists (0). KYC pending→0 after approve, verified history kept (re-tested with correct var).
+
 ## Backlog
 - Cosmetic polish (P2): Checkout summary uses hardcoded 5% GST (use server gst_percent); dark-mode 'Activation' badge over product image; /admin-secure-login field fill.
 - Backend hardening (P1): admin "reject UPI claim" path + upi reference validation; admin-login lockout email+IP keying; backport 15-min window to /api/auth/login.

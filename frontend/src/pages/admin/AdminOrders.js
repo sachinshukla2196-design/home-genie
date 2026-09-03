@@ -127,7 +127,7 @@ export default function AdminOrders() {
             {shown.map((o) => (
               <tr key={o.id} className="border-b border-brand-50/60 transition-colors hover:bg-brand-50/30" data-testid={`admin-order-${o.order_number}`}>
                 <td className="p-4 font-medium text-ink">{o.order_number}</td>
-                <td className="p-4 font-mono text-forest" data-testid={`order-dist-${o.order_number}`}>{o.distributor_id}</td>
+                <td className="p-4 font-mono text-forest" data-testid={`order-dist-${o.order_number}`}>{o.distributor_id}<div className="text-[11px] font-sans text-muted2">{o.user_name}</div></td>
                 <td className="p-4 text-muted2">{(o.created_at || "").slice(0, 10)}</td>
                 <td className="p-4 text-right font-medium text-ink">{money(o.total)}</td>
                 <td className="p-4"><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${o.payment_status === "paid" ? "bg-brand-50 text-brand" : o.payment_status === "claimed" ? "bg-gold-light text-gold" : "bg-danger/10 text-danger"}`}>{o.payment_status}</span>

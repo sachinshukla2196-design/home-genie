@@ -15,7 +15,7 @@ export default function AdminKyc() {
   const [edit, setEdit] = useState(null);
   const [form, setForm] = useState({});
   const [busy, setBusy] = useState(false);
-  const load = () => API.get("/admin/kyc").then(({ data }) => setRecs(data)).catch(() => setRecs([]));
+  const load = () => API.get("/admin/kyc?status=pending").then(({ data }) => setRecs(data)).catch(() => setRecs([]));
   useEffect(() => { load(); }, []);
 
   const review = async (uid, action) => {

@@ -117,10 +117,7 @@ export function IdCard({ user }) {
               <div className="mt-2 text-[9px] uppercase tracking-wider text-white/50">Name</div>
               <div className="truncate text-sm font-semibold">{user?.full_name}</div>
               <div className="mt-1.5 text-[10px] text-white/60">Member since {since}</div>
-              <div className="mt-1 flex items-center gap-2 text-[10px] text-white/70">
-                <span>Mob: {user?.mobile || "—"}</span>
-                <span className="rounded-full px-2 py-0.5 text-[9px] font-bold" style={{ background: user?.status === "green" ? "#1e9e5a" : "#c0392b", color: "#fff" }}>{(user?.status || "").toUpperCase()} ID</span>
-              </div>
+              <div className="mt-1 text-[10px] text-white/70">Mob: {user?.mobile || "—"}</div>
             </div>
             {qr && (
               <div className="rounded-lg bg-white p-1.5">

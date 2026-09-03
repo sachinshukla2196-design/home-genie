@@ -147,7 +147,13 @@ async def admin_orders(status: Optional[str] = None, admin: dict = Depends(requi
     q = {}
     if status:
         q["status"] = status
-    return await db.orders.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    orders = await db.orders.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    uids = list({o.get("user_id") for o in orders if o.get("user_id")})
+    users = await db.users.find({"id": {"$in": uids}}, {"_id": 0, "id": 1, "full_name": 1}).to_list(2000)
+    names = {u["id"]: u.get("full_name") for u in users}
+    for o in orders:
+        o["user_name"] = names.get(o.get("user_id"), "")
+    return orders
 
 
 class OrderStatusBody(BaseModel):
@@ -644,7 +650,7 @@ async def clear_audit_logs(request: Request, admin: dict = Depends(require_admin
     count = (await db.audit_logs.delete_many({})).deleted_count
     ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "")
     await db.audit_logs.insert_one({
-        "id": new_id(), "user_id": admin.get("id"), "user_email": admin.get("email"),
+        "id": new_id(), "user_id": None, "user_email": "system",
         "action": "audit_logs_cleared", "entity": "system", "entity_id": "audit_logs",
         "old_value": {"deleted_count": count}, "new_value": None,
         "protected": True, "ip": ip, "created_at": now_iso(),
