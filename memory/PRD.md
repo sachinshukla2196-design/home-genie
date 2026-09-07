@@ -186,6 +186,19 @@ VERIFIED via curl: commission release→RELEASED, double release→400, hold→H
 - Hard-delete consistency: verified orders stay deleted (products seed only when empty, demo seeder disabled) — no recreation sources remain.
 - VERIFIED: order user_name shows; audit clear leaves only user_email="system" (no sachin); order hard delete persists (0). KYC pending→0 after approve, verified history kept (re-tested with correct var).
 
+## SESSION 13 — only Starter Kit product (remove demo products permanently)
+- ROOT CAUSE: PRODUCT_SEED in server.py held 6 demo products; they reseeded when catalogue was empty.
+- FIX: PRODUCT_SEED trimmed to ONLY the Starter Kit (ANJ-STARTER). Permanently deleted the 5 demo + 7 TEST products from DB. Landing.js no longer filters out the activation product, so the Starter Kit shows under "Our Wellness Range".
+- VERIFIED: products = ['ANJ-STARTER'] and remains so after backend restart; homepage shows only Starter Kit (no Tulsi/Aloe/Ashwagandha/Chyawanprash/Hair Oil/TEST).
+
+## SESSION 14 — critical small patch (₹100 on approval, optional email, ID logo, withdrawal min, matrix)
+- ₹100 ON APPROVAL: admin approve now credits ₹100 to the NEW user's own wallet (available + total_earned) immediately, idempotent via wallet_transactions category "signup_bonus" (re-approve returns 400 anyway; no duplicate). User stays RED; ₹1500 RED→GREEN rule unchanged.
+- EMAIL OPTIONAL: register-request no longer requires email; only validates format if provided; duplicate-email checks guarded with `if email`. Stored as email or None. Admin can add email later via existing edit.
+- ID CARD: replaced Leaf emblem with the ORIGINAL brand logo (/brand-logo.jpg, same asset as site Logo). RED/GREEN already removed; shows logo + name + ID + mobile.
+- WITHDRAWAL: removed the minimum-amount check entirely (was ₹500). Any amount within available balance allowed (₹1 works). KYC/green/balance/duplicate checks retained.
+- MATRIX: verified working — MST000001→ANJ000213→ANJ000214 persists via referral_relationships. Root cause of prior "not working" was production running old code; current code stores sponsor_id/sponsor_distributor_id correctly on approval.
+- VERIFIED: register w/o email→approve→₹100 (idempotent), matrix chain, ₹1 withdrawal=200.
+
 ## Backlog
 - Cosmetic polish (P2): Checkout summary uses hardcoded 5% GST (use server gst_percent); dark-mode 'Activation' badge over product image; /admin-secure-login field fill.
 - Backend hardening (P1): admin "reject UPI claim" path + upi reference validation; admin-login lockout email+IP keying; backport 15-min window to /api/auth/login.

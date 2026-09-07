@@ -90,8 +90,8 @@ export function IdCard({ user }) {
         <div className="absolute inset-0 flex flex-col justify-between p-5">
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-2">
-              <div className="flex h-9 w-9 items-center justify-center rounded-full" style={{ background: "linear-gradient(145deg,#176B43,#0B4D2E)", boxShadow: "0 0 0 2px #C9A227" }}>
-                <Leaf size={18} color="#F6EFD5" />
+              <div className="flex items-center justify-center rounded-lg bg-white/95 px-1.5 py-1" style={{ boxShadow: "0 0 0 2px #C9A227" }}>
+                <img src="/brand-logo.jpg" alt="Anjali Herbal Life" crossOrigin="anonymous" style={{ height: 26 }} className="w-auto object-contain" />
               </div>
               <div className="leading-tight">
                 <div className="text-[13px] font-semibold">Anjali <span style={{ color: "#C9A227" }}>Herbal Life</span></div>

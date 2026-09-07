@@ -121,8 +121,8 @@ async def register_request(body: RegRequestBody):
     email = (body.email or "").strip().lower()
     if not _valid_mobile(mobile):
         raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number.")
-    if not _valid_email(email):
-        raise HTTPException(status_code=400, detail="A valid email address is required.")
+    if email and not _valid_email(email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address, or leave it blank.")
     if body.password != body.confirm_password:
         raise HTTPException(status_code=400, detail="Passwords do not match.")
     if not _valid_aadhaar(body.aadhaar_number):
@@ -139,11 +139,11 @@ async def register_request(body: RegRequestBody):
         raise HTTPException(status_code=400, detail="Invalid referral / sponsor ID. Enter a valid Distributor ID or referral code.")
     if await db.users.find_one({"mobile": mobile}):
         raise HTTPException(status_code=400, detail="An account already exists for this mobile number.")
-    if await db.users.find_one({"email": email}):
+    if email and await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="An account already exists for this email.")
     if await db.registration_requests.find_one({"mobile": mobile, "status": "pending"}):
         raise HTTPException(status_code=400, detail="A registration request for this mobile is already pending admin approval.")
-    if await db.registration_requests.find_one({"email": email, "status": "pending"}):
+    if email and await db.registration_requests.find_one({"email": email, "status": "pending"}):
         raise HTTPException(status_code=400, detail="A registration request for this email is already pending admin approval.")
     doc = {
         "id": new_id(), "full_name": body.full_name.strip(), "mobile": mobile,

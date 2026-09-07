@@ -153,10 +153,7 @@ async def request_withdrawal(body: WithdrawBody, request: Request, user: dict = 
     if user.get("status") != "green":
         raise HTTPException(status_code=403, detail="Activate your account (GREEN) to request withdrawals.")
     settings = await get_settings()
-    min_amt = float(settings.get("withdrawal_minimum", 500.0))
-    if body.amount < min_amt:
-        raise HTTPException(status_code=400,
-                            detail=f"Minimum withdrawal is {settings.get('currency_symbol','₹')}{int(min_amt)}.")
+    # No minimum withdrawal amount — user may request any amount within available balance.
     if settings.get("require_kyc_for_withdrawal", True):
         kyc = await db.kyc_records.find_one({"user_id": user["id"]})
         if not kyc or kyc.get("status") != "verified":

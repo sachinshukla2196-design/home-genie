@@ -512,6 +512,14 @@ async def approve_registration_request(req_id: str, request: Request, admin: dic
     except Exception:
         raise HTTPException(status_code=400, detail="Could not create distributor (possibly a duplicate email or mobile). Please check and try again.")
     await get_or_create_wallet(user["id"])
+    # ₹100 welcome credit to the new distributor on approval (idempotent via signup_bonus category)
+    if not await db.wallet_transactions.find_one({"user_id": user["id"], "category": "signup_bonus"}):
+        await db.wallets.update_one({"user_id": user["id"]},
+            {"$inc": {"available_balance": 100.0, "total_earned": 100.0}, "$set": {"updated_at": now_iso()}})
+        await db.wallet_transactions.insert_one({"id": new_id(), "user_id": user["id"],
+            "amount": 100.0, "type": "credit", "category": "signup_bonus",
+            "description": "Welcome credit on account approval", "reference_id": user["id"],
+            "created_at": now_iso()})
     # Save the referral relationship permanently. Phase 1: NO commission is paid
     # here — the ₹100 direct referral is credited in Phase 2 on GREEN activation.
     sp_did = r.get("sponsor_id")

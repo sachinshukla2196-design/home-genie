@@ -18,7 +18,7 @@ export default function Landing() {
   const [settings, setSettings] = useState({ currency_symbol: "₹", activation_amount: 1500, referral_commission: 100 });
 
   useEffect(() => {
-    API.get("/products").then(({ data }) => setProducts(data.filter((p) => !p.is_activation_product))).catch(() => {});
+    API.get("/products").then(({ data }) => setProducts(data)).catch(() => {});
     API.get("/settings/public").then(({ data }) => setSettings((s) => ({ ...s, ...data }))).catch(() => {});
   }, []);
 
