@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { motion } from "framer-motion";
-import { Users, List, Network, Crown } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Users, List, Network, Crown, Layers, ChevronDown } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -8,47 +8,117 @@ import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
 import { API } from "@/lib/api";
 
+const money = (v) => `₹${Number(v || 0).toLocaleString("en-IN")}`;
+
 export default function Team() {
   const { t } = useI18n();
-  const { user } = useAuth();
   const [data, setData] = useState(null);
-  const [view, setView] = useState("matrix");
+  const [view, setView] = useState("levels");
 
-  useEffect(() => { API.get("/team").then(({ data }) => setData(data)).catch(() => setData({ members: [] })); }, []);
+  useEffect(() => { API.get("/team").then(({ data }) => setData(data)).catch(() => setData({ members: [], levels: [] })); }, []);
   if (!data) return <Skeleton className="h-64 rounded-2xl" />;
 
   const members = data.members || [];
+  const levels = data.levels || [];
+  const hasTeam = (data.total ?? members.length) > 0;
+
+  const TABS = [
+    { id: "levels", label: "Levels", icon: Layers },
+    { id: "matrix", label: "Matrix", icon: Network },
+    { id: "list", label: "List", icon: List },
+  ];
 
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-display text-2xl font-semibold text-ink">{t("nav.team")}</h1>
         <div className="flex items-center gap-3">
-          {members.length > 0 && <div className="text-sm text-muted2">{data.total} {t("nav.team").toLowerCase()} · {data.active} active</div>}
+          {hasTeam && <div className="text-sm text-muted2">{data.total} members · {data.active} active</div>}
           <div className="inline-flex items-center rounded-full border border-brand-50 bg-white p-0.5">
-            <button onClick={() => setView("matrix")} className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all ${view === "matrix" ? "bg-forest text-white" : "text-muted2"}`} data-testid="team-view-matrix"><Network size={14} /> Matrix</button>
-            <button onClick={() => setView("list")} className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all ${view === "list" ? "bg-forest text-white" : "text-muted2"}`} data-testid="team-view-list"><List size={14} /> List</button>
+            {TABS.map((tab) => (
+              <button key={tab.id} onClick={() => setView(tab.id)} className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium transition-all ${view === tab.id ? "bg-forest text-white" : "text-muted2"}`} data-testid={`team-view-${tab.id}`}>
+                <tab.icon size={14} /> {tab.label}
+              </button>
+            ))}
           </div>
         </div>
       </div>
 
-      {members.length === 0 ? (
+      {!hasTeam ? (
         <EmptyState icon={Users} title={t("empty.team")} desc={t("landing.step3d")} testid="team-empty" />
+      ) : view === "levels" ? (
+        <LevelsView levels={levels} />
       ) : view === "matrix" ? (
         <MatrixView root={data.root} members={members} />
       ) : (
         <ListView members={members} t={t} />
       )}
 
-      {/* Legend + summary */}
-      {members.length > 0 && (
+      {hasTeam && (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-          <SummaryCard label="Direct Referrals" value={data.total} />
+          <SummaryCard label="Total Team" value={data.total} />
           <SummaryCard label="Active (GREEN)" value={data.active} accent />
-          <SummaryCard label="Pending (RED)" value={data.total - data.active} />
-          <SummaryCard label="Level" value="1" sub="Phase 1" />
+          <SummaryCard label="Total Income" value={money(data.total_income)} />
+          <SummaryCard label="Levels Reached" value={levels.filter((l) => l.count > 0).length} sub="of 8" />
         </div>
       )}
+    </div>
+  );
+}
+
+function LevelsView({ levels }) {
+  const active = levels.filter((l) => l.count > 0);
+  const [open, setOpen] = useState(active.length ? active[0].level : null);
+  if (!active.length) return null;
+  return (
+    <div className="space-y-3" data-testid="team-levels">
+      {active.map((lvl) => {
+        const isOpen = open === lvl.level;
+        return (
+          <div key={lvl.level} className="overflow-hidden rounded-2xl border border-brand-50 bg-white shadow-card" data-testid={`level-block-${lvl.level}`}>
+            <button
+              onClick={() => setOpen(isOpen ? null : lvl.level)}
+              className="flex w-full items-center gap-4 px-5 py-4 text-left transition-colors hover:bg-brand-50/40"
+              data-testid={`level-toggle-${lvl.level}`}
+            >
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-forest font-display text-sm font-bold text-white">L{lvl.level}</span>
+              <div className="min-w-0 flex-1">
+                <div className="font-display text-base font-semibold text-ink">Level {lvl.level}</div>
+                <div className="text-xs text-muted2">{lvl.count} member{lvl.count !== 1 ? "s" : ""} · {lvl.active} active</div>
+              </div>
+              <div className="text-right">
+                <div className="font-display text-sm font-semibold text-brand" data-testid={`level-income-${lvl.level}`}>{money(lvl.income)}</div>
+                <div className="text-[10px] uppercase tracking-wide text-muted2">income</div>
+              </div>
+              <ChevronDown size={18} className={`shrink-0 text-muted2 transition-transform ${isOpen ? "rotate-180" : ""}`} />
+            </button>
+            <AnimatePresence initial={false}>
+              {isOpen && (
+                <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.2 }} className="overflow-hidden border-t border-brand-50">
+                  <div className="divide-y divide-brand-50/60">
+                    {lvl.members.map((m) => (
+                      <div key={m.distributor_id} className="flex items-center gap-3 px-5 py-3" data-testid={`level-${lvl.level}-member-${m.distributor_id}`}>
+                        {m.photo
+                          ? <img src={m.photo} alt="" className="h-9 w-9 rounded-full object-cover" />
+                          : <div className={`flex h-9 w-9 items-center justify-center rounded-full text-[11px] font-bold text-white ${m.status === "green" ? "bg-forest" : "bg-danger"}`}>{(m.full_name || "U").slice(0, 2).toUpperCase()}</div>}
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-medium text-ink">{m.full_name}</div>
+                          <div className="text-xs text-forest">{m.distributor_id}</div>
+                        </div>
+                        <StatusBadge status={m.status} size="sm" />
+                        <div className="hidden text-right sm:block">
+                          <div className="text-xs font-semibold text-brand">{money(m.income)}</div>
+                          <div className="text-[10px] text-muted2">{m.downline_count ?? 0} downline</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -57,12 +127,9 @@ function MatrixView({ root, members }) {
   return (
     <div className="overflow-x-auto rounded-2xl border border-brand-50 bg-gradient-to-b from-brand-50/40 to-white p-6 shadow-card">
       <div className="flex min-w-max flex-col items-center">
-        {/* Root */}
         <NodeCard node={{ ...root, isRoot: true }} index={0} />
-        {/* connector */}
         <div className="h-8 w-px bg-brand/30" />
         <div className="relative flex items-start gap-6">
-          {/* horizontal line across children */}
           {members.length > 1 && <div className="absolute left-0 right-0 top-0 h-px bg-brand/30" />}
           {members.map((m, i) => (
             <div key={m.distributor_id} className="flex flex-col items-center">

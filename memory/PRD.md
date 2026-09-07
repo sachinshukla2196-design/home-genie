@@ -209,6 +209,14 @@ VERIFIED via curl: commission release→RELEASED, double release→400, hold→H
 - P2: 8-level genealogy, level/rank income, business volume, bonuses (schema reserve fields already isolated)
 - P3: native apps, push notifications, AI analytics, loyalty, subscriptions
 
+## Phase 3 (Sep 2026) — DONE
+- KYC user→admin flow: confirmed already complete (Kyc.js submit → AdminKyc.js verify/reject; drops from pending queue).
+- Withdrawal NO minimum: confirmed (amount>0, up to available balance, needs GREEN + verified KYC). No minimum enforced.
+- 8-LEVEL TEAM HIERARCHY: `GET /api/team` now does BFS down 8 levels from the user via referral_relationships (dedup via `seen`, halts at level 8). Returns `levels[]` (level, count, active, income, members[]) + totals (total, active, total_income, direct). Backward-compatible `members`=level 1.
+- INCOME PER LEVEL: per-member income = sum of `commissions` where sponsor_id=user & referred_user_id=member; summed per level. (Current payout logic only credits direct sponsor, so income concentrates at L1 — accurate to existing rules, no new commission logic added.)
+- FRONTEND Team.js: new default "Levels" accordion view (collapsible L1–L8, header shows count/active/income, expandable member rows w/ income+downline). Matrix & List views retained. Summary cards: Total Team, Active, Total Income, Levels Reached (of 8).
+- VERIFIED: backend BFS (10-level chain seeded → returns exactly 8, income at L1=₹100); frontend accordion desktop+mobile (no overflow), expand/collapse, summary cards. Temp test data cleaned up.
+
 ## Notes
 - Auth is JWT Bearer in localStorage (`anj_token`); CORS `*` with credentials off.
 - Payment finalization is webhook-independent (status poll calls Stripe get_checkout_status) for preview reliability.

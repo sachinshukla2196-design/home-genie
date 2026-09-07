@@ -48,33 +48,89 @@ async def referral_info(user: dict = Depends(get_current_user)):
     }
 
 
+MAX_TEAM_LEVEL = 8
+
+
 @router.get("/team")
 async def team(user: dict = Depends(get_current_user)):
-    rels = await db.referral_relationships.find({"sponsor_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(500)
-    referred_ids = [r["referred_user_id"] for r in rels]
+    """8-level team hierarchy (Level 1 → Level 8) built from referral_relationships,
+    with team size and income earned by the current user attributed to each level."""
+    seen = {user["id"]}
+    frontier = [user["id"]]
+    level_rels = {}  # level -> list of relationship docs (deduped)
+    for lvl in range(1, MAX_TEAM_LEVEL + 1):
+        if not frontier:
+            break
+        rels = await db.referral_relationships.find(
+            {"sponsor_id": {"$in": frontier}}, {"_id": 0}).to_list(10000)
+        new_rels, next_frontier = [], []
+        for r in rels:
+            rid = r.get("referred_user_id")
+            if not rid or rid in seen:
+                continue
+            seen.add(rid)
+            new_rels.append(r)
+            next_frontier.append(rid)
+        if not new_rels:
+            break
+        level_rels[lvl] = new_rels
+        frontier = next_frontier
+
+    all_ids = [r["referred_user_id"] for rels in level_rels.values() for r in rels]
     users_map = {u["id"]: u for u in await db.users.find(
-        {"id": {"$in": referred_ids}},
+        {"id": {"$in": all_ids}},
         {"_id": 0, "id": 1, "full_name": 1, "distributor_id": 1, "status": 1,
-         "created_at": 1, "city": 1, "state": 1, "photo": 1}).to_list(len(referred_ids) or 1)}
+         "created_at": 1, "city": 1, "state": 1, "photo": 1}).to_list(len(all_ids) or 1)}
+
+    # income earned by this user, grouped per member they were credited for
+    income_by_member = {}
+    comms = await db.commissions.find(
+        {"sponsor_id": user["id"]}, {"_id": 0, "referred_user_id": 1, "amount": 1}).to_list(5000)
+    for c in comms:
+        rid = c.get("referred_user_id")
+        income_by_member[rid] = income_by_member.get(rid, 0.0) + c.get("amount", 0.0)
+
+    # direct downline count for each member
     downline_map = {}
-    if referred_ids:
+    if all_ids:
         agg = await db.referral_relationships.aggregate([
-            {"$match": {"sponsor_id": {"$in": referred_ids}}},
+            {"$match": {"sponsor_id": {"$in": all_ids}}},
             {"$group": {"_id": "$sponsor_id", "c": {"$sum": 1}}},
-        ]).to_list(len(referred_ids))
+        ]).to_list(len(all_ids))
         downline_map = {g["_id"]: g["c"] for g in agg}
-    out = []
-    for r in rels:
-        u = users_map.get(r["referred_user_id"])
-        if u:
-            u = {k: v for k, v in u.items() if k != "id"}
-            out.append({**u, "commission_paid": r.get("commission_paid", False),
-                        "joined_at": r.get("created_at"),
-                        "downline_count": downline_map.get(r["referred_user_id"], 0)})
+
+    levels_out, total_members, total_active, total_income = [], 0, 0, 0.0
+    for lvl in range(1, MAX_TEAM_LEVEL + 1):
+        rels = level_rels.get(lvl, [])
+        members, lvl_income = [], 0.0
+        for r in sorted(rels, key=lambda x: x.get("created_at") or "", reverse=True):
+            u = users_map.get(r["referred_user_id"])
+            if not u:
+                continue
+            inc = income_by_member.get(r["referred_user_id"], 0.0)
+            lvl_income += inc
+            members.append({
+                "full_name": u.get("full_name"), "distributor_id": u.get("distributor_id"),
+                "status": u.get("status"), "photo": u.get("photo"),
+                "city": u.get("city"), "state": u.get("state"),
+                "joined_at": r.get("created_at"),
+                "commission_paid": r.get("commission_paid", False),
+                "downline_count": downline_map.get(r["referred_user_id"], 0),
+                "income": inc,
+            })
+        active = sum(1 for m in members if m["status"] == "green")
+        total_members += len(members)
+        total_active += active
+        total_income += lvl_income
+        levels_out.append({"level": lvl, "count": len(members), "active": active,
+                           "income": lvl_income, "members": members})
+
     root = {"full_name": user.get("full_name"), "distributor_id": user.get("distributor_id"),
             "status": user.get("status"), "photo": user.get("photo")}
-    return {"root": root, "members": out, "total": len(out),
-            "active": sum(1 for m in out if m.get("status") == "green")}
+    l1 = levels_out[0]["members"] if levels_out else []
+    return {"root": root, "levels": levels_out, "members": l1,
+            "total": total_members, "active": total_active,
+            "direct": len(l1), "total_income": total_income}
 
 
 # ---------------- KYC ----------------
