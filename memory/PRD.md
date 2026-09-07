@@ -217,6 +217,15 @@ VERIFIED via curl: commission release→RELEASED, double release→400, hold→H
 - FRONTEND Team.js: new default "Levels" accordion view (collapsible L1–L8, header shows count/active/income, expandable member rows w/ income+downline). Matrix & List views retained. Summary cards: Total Team, Active, Total Income, Levels Reached (of 8).
 - VERIFIED: backend BFS (10-level chain seeded → returns exactly 8, income at L1=₹100); frontend accordion desktop+mobile (no overflow), expand/collapse, summary cards. Temp test data cleaned up.
 
+## Purchase Level Commission (Sep 2026) — DONE
+- ADDED: `_distribute_purchase_commission()` in shop_routes.py, called at the END of `_process_paid_order` for EVERY paid order (all payment paths route through it). ₹100 direct referral left completely untouched.
+- Depth-based fixed % from buyer: L1=0, L2=15, L3=5, L4=5, L5=5, L6=4, L7=4, L8=3, L9=3 (LEVEL_COMMISSION_PCT).
+- Base = order.subtotal (product value EXCLUDING GST). Walks real sponsor chain via referral_relationships (referred_user_id→sponsor_id) up to 9 levels.
+- Only GREEN uplines paid; non-green uplines skipped (₹0) and NOT redistributed (positional level preserved).
+- Type = PURCHASE_LEVEL_COMMISSION (separate from REFERRAL_COMMISSION). Idempotent via atomic order claim (`purchase_commission_paid` flag) → retries/refresh/webhook never duplicate.
+- No new tables/APIs/UI: reuses commissions + wallet_transactions; AdminCommissions renders type generically.
+- VERIFIED: A→B→C→D chain (base 1000): L1=0, L2=15%=150, L3=5%=50; non-green upline skipped & not redistributed; 2nd run = no duplicate (exactly 2 rows); base excludes GST.
+
 ## Notes
 - Auth is JWT Bearer in localStorage (`anj_token`); CORS `*` with credentials off.
 - Payment finalization is webhook-independent (status poll calls Stripe get_checkout_status) for preview reliability.

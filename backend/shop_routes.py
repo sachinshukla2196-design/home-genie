@@ -331,6 +331,75 @@ async def _process_paid_order(session_id: str, request: Request = None):
                                         new_value={"amount": commission_amount, "sponsor": sponsor.get("distributor_id")},
                                         request=request)
 
+    # ---- Product purchase level commission (separate from the ₹100 direct referral) ----
+    await _distribute_purchase_commission(order, user, settings, request)
+
+
+# Fixed depth-based purchase commission percentages (Level 1 = immediate sponsor).
+# These are SEPARATE from the ₹100 direct referral reward and never mix with it.
+LEVEL_COMMISSION_PCT = {1: 0.0, 2: 15.0, 3: 5.0, 4: 5.0, 5: 5.0, 6: 4.0, 7: 4.0, 8: 3.0, 9: 3.0}
+
+
+async def _distribute_purchase_commission(order, buyer, settings, request=None):
+    """Pay level-wise purchase commission on a PAID order, up the real sponsor chain.
+    - Base = order subtotal (product value EXCLUDING GST).
+    - Level is positional depth from the buyer (L1 = immediate sponsor).
+    - Only GREEN/active uplines are paid; skipped uplines are NOT redistributed.
+    - Idempotent: an order is claimed atomically so retries/refresh never duplicate.
+    """
+    claim = await db.orders.update_one(
+        {"id": order["id"], "purchase_commission_paid": {"$ne": True}},
+        {"$set": {"purchase_commission_paid": True, "updated_at": now_iso()}},
+    )
+    if claim.modified_count != 1:
+        return  # already processed
+    base = float(order.get("subtotal", 0) or 0)  # product value excluding GST
+    if base <= 0:
+        return
+    sym = settings.get("currency_symbol", "₹")
+    current_id = buyer["id"]
+    for level in range(1, 10):
+        rel = await db.referral_relationships.find_one({"referred_user_id": current_id})
+        if not rel or not rel.get("sponsor_id"):
+            break
+        sponsor_id = rel["sponsor_id"]
+        pct = LEVEL_COMMISSION_PCT.get(level, 0.0)
+        if pct > 0:
+            sponsor = await db.users.find_one({"id": sponsor_id})
+            if sponsor and sponsor.get("status") == "green":
+                amount = round(base * pct / 100.0, 2)
+                if amount > 0:
+                    comm = {
+                        "id": new_id(), "sponsor_id": sponsor_id,
+                        "sponsor_distributor_id": sponsor.get("distributor_id"),
+                        "referred_user_id": buyer["id"],
+                        "referred_distributor_id": buyer.get("distributor_id"),
+                        "type": "PURCHASE_LEVEL_COMMISSION", "level": level, "percent": pct,
+                        "amount": amount, "base_amount": base,
+                        "reference_order_id": order["id"], "status": "CREDITED",
+                        "description": f"Level {level} purchase commission ({pct:g}%) on order "
+                                       f"{order.get('order_number')} by {buyer.get('distributor_id')}",
+                        "created_at": now_iso(),
+                    }
+                    await db.commissions.insert_one(dict(comm))
+                    await add_wallet_transaction(
+                        sponsor_id, "PURCHASE_LEVEL_COMMISSION", amount, "CREDITED",
+                        reference=order["id"],
+                        description=f"L{level} purchase commission on {order.get('order_number')} "
+                                    f"({buyer.get('distributor_id')})",
+                        direction="credit",
+                    )
+                    await create_notification(
+                        sponsor_id, "commission",
+                        f"You earned {sym}{amount:g}",
+                        f"Level {level} purchase commission credited for order {order.get('order_number')}.",
+                        f"आपने {sym}{amount:g} कमाए",
+                        f"ऑर्डर {order.get('order_number')} पर लेवल {level} खरीद कमीशन क्रेडिट हुआ।")
+                    await log_audit(None, "purchase_commission_credited", "commission", comm["id"],
+                                    new_value={"amount": amount, "level": level,
+                                               "sponsor": sponsor.get("distributor_id")}, request=request)
+        current_id = sponsor_id
+
 
 @router.get("/payments/status/{session_id}")
 async def payment_status(session_id: str, request: Request):
