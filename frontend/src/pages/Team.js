@@ -1,9 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Users, List, Network, Crown, Layers, ChevronDown } from "lucide-react";
+import { toast } from "sonner";
+import { Users, List, Network, Crown, Layers, ChevronDown, Copy, MessageCircle, Share2 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Button } from "@/components/ui/button";
 import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
 import { API } from "@/lib/api";
@@ -12,6 +14,7 @@ const money = (v) => `₹${Number(v || 0).toLocaleString("en-IN")}`;
 
 export default function Team() {
   const { t } = useI18n();
+  const { user } = useAuth();
   const [data, setData] = useState(null);
   const [view, setView] = useState("levels");
 
@@ -44,6 +47,8 @@ export default function Team() {
         </div>
       </div>
 
+      <InviteCard user={user} t={t} />
+
       {!hasTeam ? (
         <EmptyState icon={Users} title={t("empty.team")} desc={t("landing.step3d")} testid="team-empty" />
       ) : view === "levels" ? (
@@ -62,6 +67,28 @@ export default function Team() {
           <SummaryCard label="Levels Reached" value={levels.filter((l) => l.count > 0).length} sub="of 8" />
         </div>
       )}
+    </div>
+  );
+}
+
+function InviteCard({ user, t }) {
+  const link = `${window.location.origin}/register?ref=${user?.distributor_id || ""}`;
+  const text = `Join Anjali Herbal Life Ayurveda with my referral ID ${user?.distributor_id}. Register here: ${link}`;
+  const msg = encodeURIComponent(text);
+  const copy = () => { navigator.clipboard.writeText(link); toast.success(t("referral.copied") || "Link copied"); };
+  return (
+    <div className="rounded-2xl border border-brand-50 bg-gradient-to-r from-forest to-brand p-5 text-white shadow-card" data-testid="team-invite-card">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-gold-light"><Share2 size={14} /> Invite &amp; grow your team</div>
+          <div className="mt-1 text-sm text-white/85">Your ID: <span className="font-display text-base font-semibold text-white" data-testid="invite-distributor-id">{user?.distributor_id || "—"}</span></div>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button onClick={copy} size="sm" className="rounded-full bg-white/15 text-white hover:bg-white/25" data-testid="invite-copy-link"><Copy size={14} className="mr-1.5" /> Copy link</Button>
+          <a href={`https://wa.me/?text=${msg}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 rounded-full bg-white px-4 py-2 text-sm font-medium text-forest hover:bg-white/90" data-testid="invite-whatsapp"><MessageCircle size={15} /> WhatsApp</a>
+          <a href={`sms:?body=${msg}`} className="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-4 py-2 text-sm font-medium text-white hover:bg-white/25" data-testid="invite-sms"><Share2 size={15} /> SMS</a>
+        </div>
+      </div>
     </div>
   );
 }
