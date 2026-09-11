@@ -109,6 +109,7 @@ export function ForgotPassword() {
     <Shell title="Forgot password" sub="We'll email you a reset code">
       <div className="mt-8 space-y-4">
         <Field label={t("auth.email")} type="email" value={email} onChange={(e) => setEmail(e.target.value)} testid="forgot-email" />
+        <p className="text-xs text-muted2" data-testid="forgot-no-email-note">No email on your account? Please contact the admin to reset your password.</p>
         {step === 2 && <>
           <Field label="Reset code (from email)" value={otp} onChange={(e) => setOtp(e.target.value)} testid="forgot-otp" />
           <Field label="New password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} testid="forgot-password" />

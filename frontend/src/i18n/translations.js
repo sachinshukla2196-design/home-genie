@@ -59,6 +59,7 @@ export const translations = {
     "dash.incomeOverview": "Income Overview (7 days)", "dash.quickActions": "Quick Actions",
     "dash.recentOrders": "Recent Orders", "dash.recentTxns": "Recent Transactions",
     "dash.rankSoon": "Coming in Phase 2",
+    "dash.currentRank": "Current Rank", "dash.nextRank": "Next Rank", "dash.topRank": "Top Rank",
 
     "qa.shop": "Shop Products", "qa.share": "Share Referral", "qa.orders": "My Orders",
     "qa.wallet": "My Wallet", "qa.team": "My Team", "qa.kyc": "KYC", "qa.support": "Support",
@@ -158,6 +159,7 @@ export const translations = {
     "dash.incomeOverview": "आय अवलोकन (7 दिन)", "dash.quickActions": "त्वरित क्रियाएँ",
     "dash.recentOrders": "हाल के ऑर्डर", "dash.recentTxns": "हाल के लेनदेन",
     "dash.rankSoon": "फेज़ 2 में आ रहा है",
+    "dash.currentRank": "वर्तमान रैंक", "dash.nextRank": "अगली रैंक", "dash.topRank": "सर्वोच्च रैंक",
 
     "qa.shop": "उत्पाद खरीदें", "qa.share": "रेफ़रल शेयर करें", "qa.orders": "मेरे ऑर्डर",
     "qa.wallet": "मेरा वॉलेट", "qa.team": "मेरी टीम", "qa.kyc": "केवाईसी", "qa.support": "सहायता",

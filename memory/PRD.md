@@ -226,6 +226,16 @@ VERIFIED via curl: commission release→RELEASED, double release→400, hold→H
 - No new tables/APIs/UI: reuses commissions + wallet_transactions; AdminCommissions renders type generically.
 - VERIFIED: A→B→C→D chain (base 1000): L1=0, L2=15%=150, L3=5%=50; non-green upline skipped & not redistributed; 2nd run = no duplicate (exactly 2 rows); base excludes GST.
 
+## Compensation + User-ID Patch (Sep 2026) — DONE
+- ₹100 BUG FIX: admin approve (`admin_routes.approve_registration_request`) NO LONGER credits ₹100 to the NEW user (removed `signup_bonus`). ₹100 DIRECT REFERRAL REWARD now credited ONLY to the immediate direct sponsor (`rel.sponsor_id`) as REFERRAL_COMMISSION, idempotent (guard on existing REFERRAL_COMMISSION + relationship `commission_paid=True`), never cascades. shop_routes activation referral block now skips (guard already present) → no double-pay.
+- PURCHASE COMMISSION: unchanged calc (depth L1=0,L2=15,L3=5,L4=5,L5=5,L6=4,L7=4,L8=3,L9=3; base=subtotal excl GST). Descriptions/notifications now use RANK NAMES + % + base for wallet display.
+- RANK/BV PROGRESS: new `compute_rank()` + RANK_TIERS in wallet_routes; `/dashboard` returns `rank` from personal BV = sum of user's PAID order subtotals (excl GST). Dashboard.js shows a progress bar (Current Rank, Next Rank, BV x/y, %) + rank stat card.
+- RANK NAMES (UI): Team accordion shows Executive/Sr. Executive/... (GD/BD/AD/CD/PD/MD/RD/DD/MDD badges); "Level N" removed; tab "Ranks", "Ranks Reached of 8". Backend keeps numeric levels internally.
+- FORGOT PASSWORD: already email-based (`/auth/forgot/send`), no mobile OTP in that flow; added no-email helper note (contact admin) on ForgotPassword page. Admin reset (`/admin/users/{id}/reset-password`) covers no-email accounts.
+- WITHDRAWAL: unchanged, no minimum.
+- VERIFIED: approve → new user ₹0, sponsor ₹100, no signup_bonus, REFERRAL_COMMISSION to sponsor, relationship commission_paid=True, re-approve=400 (idempotent). Rank compute matches spec (BV 12500 → Executive 62.5%). Dashboard bar + Team rank names render (desktop+mobile, no overflow).
+- LEGACY NOTE: users approved under OLD code may still hold a `signup_bonus` ₹100 on their own wallet — not auto-deleted (financial data); fix is forward-only.
+
 ## Notes
 - Auth is JWT Bearer in localStorage (`anj_token`); CORS `*` with credentials off.
 - Payment finalization is webhook-independent (status poll calls Stripe get_checkout_status) for preview reliability.

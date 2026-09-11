@@ -338,6 +338,9 @@ async def _process_paid_order(session_id: str, request: Request = None):
 # Fixed depth-based purchase commission percentages (Level 1 = immediate sponsor).
 # These are SEPARATE from the ₹100 direct referral reward and never mix with it.
 LEVEL_COMMISSION_PCT = {1: 0.0, 2: 15.0, 3: 5.0, 4: 5.0, 5: 5.0, 6: 4.0, 7: 4.0, 8: 3.0, 9: 3.0}
+# User-facing rank/designation names by depth (backend keeps numeric levels internally).
+RANK_NAME = {1: "Executive", 2: "Sr. Executive", 3: "Asst. Organizer", 4: "Organizer",
+             5: "Sr. Organizer", 6: "Manager", 7: "Sr. Manager", 8: "Area Manager", 9: "Sr. Area Manager"}
 
 
 async def _distribute_purchase_commission(order, buyer, settings, request=None):
@@ -375,26 +378,27 @@ async def _distribute_purchase_commission(order, buyer, settings, request=None):
                         "referred_user_id": buyer["id"],
                         "referred_distributor_id": buyer.get("distributor_id"),
                         "type": "PURCHASE_LEVEL_COMMISSION", "level": level, "percent": pct,
+                        "rank": RANK_NAME.get(level, f"Level {level}"),
                         "amount": amount, "base_amount": base,
                         "reference_order_id": order["id"], "status": "CREDITED",
-                        "description": f"Level {level} purchase commission ({pct:g}%) on order "
-                                       f"{order.get('order_number')} by {buyer.get('distributor_id')}",
+                        "description": f"{RANK_NAME.get(level, f'Level {level}')} purchase commission ({pct:g}%) "
+                                       f"on order {order.get('order_number')} by {buyer.get('distributor_id')}",
                         "created_at": now_iso(),
                     }
                     await db.commissions.insert_one(dict(comm))
                     await add_wallet_transaction(
                         sponsor_id, "PURCHASE_LEVEL_COMMISSION", amount, "CREDITED",
                         reference=order["id"],
-                        description=f"L{level} purchase commission on {order.get('order_number')} "
-                                    f"({buyer.get('distributor_id')})",
+                        description=f"Purchase commission • {RANK_NAME.get(level, f'Level {level}')} ({pct:g}%) • "
+                                    f"base ₹{base:g} • order {order.get('order_number')} ({buyer.get('distributor_id')})",
                         direction="credit",
                     )
                     await create_notification(
                         sponsor_id, "commission",
                         f"You earned {sym}{amount:g}",
-                        f"Level {level} purchase commission credited for order {order.get('order_number')}.",
+                        f"{RANK_NAME.get(level, f'Level {level}')} purchase commission ({pct:g}%) credited on order {order.get('order_number')}.",
                         f"आपने {sym}{amount:g} कमाए",
-                        f"ऑर्डर {order.get('order_number')} पर लेवल {level} खरीद कमीशन क्रेडिट हुआ।")
+                        f"ऑर्डर {order.get('order_number')} पर {RANK_NAME.get(level, f'Level {level}')} खरीद कमीशन क्रेडिट हुआ।")
                     await log_audit(None, "purchase_commission_credited", "commission", comm["id"],
                                     new_value={"amount": amount, "level": level,
                                                "sponsor": sponsor.get("distributor_id")}, request=request)

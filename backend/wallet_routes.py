@@ -10,6 +10,36 @@ from core import (db, now_iso, new_id, get_current_user, get_settings, get_or_cr
 router = APIRouter(prefix="/api", tags=["distributor"])
 
 
+# ---------------- Rank / BV ----------------
+# BV = the distributor's own accumulated business volume (product value excl GST of their PAID orders).
+RANK_TIERS = [
+    ("Executive", 0, 20000),
+    ("Sr. Executive", 20000, 40000),
+    ("Asst. Organizer", 40000, 80000),
+    ("Organizer", 80000, 160000),
+    ("Sr. Organizer", 160000, 320000),
+    ("Manager", 320000, 640000),
+    ("Sr. Manager", 640000, 1280000),
+    ("Area Manager", 1280000, 2560000),
+    ("Sr. Area Manager", 2560000, 5120000),
+    ("Zonal Manager", 5120000, 10000000),
+]
+
+
+def compute_rank(bv) -> dict:
+    bv = float(bv or 0)
+    for i, (name, lo, hi) in enumerate(RANK_TIERS):
+        nxt = RANK_TIERS[i + 1] if i + 1 < len(RANK_TIERS) else None
+        if bv < hi or nxt is None:
+            span = (hi - lo) or 1
+            prog = round(min(100.0, max(0.0, (bv - lo) / span * 100.0)), 1)
+            return {"current": name, "current_bv": bv,
+                    "next": nxt[0] if nxt else None, "next_bv": hi if nxt else None,
+                    "progress": prog, "is_max": nxt is None}
+    return {"current": RANK_TIERS[0][0], "current_bv": bv, "next": RANK_TIERS[1][0],
+            "next_bv": RANK_TIERS[0][2], "progress": 0.0, "is_max": False}
+
+
 def _mask(val: str, keep: int = 4) -> str:
     if not val:
         return ""
@@ -283,6 +313,12 @@ async def dashboard(user: dict = Depends(get_current_user)):
     txns = await db.wallet_transactions.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(5)
     notif = await db.notifications.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(5)
 
+    # Personal BV = product value (excl GST) of this distributor's PAID orders → rank
+    paid_orders = await db.orders.find({"user_id": user["id"], "payment_status": "paid"},
+                                       {"_id": 0, "subtotal": 1}).to_list(5000)
+    personal_bv = sum(float(o.get("subtotal", 0) or 0) for o in paid_orders)
+    rank = compute_rank(personal_bv)
+
     # 7-day income series
     series = []
     for i in range(6, -1, -1):
@@ -304,4 +340,5 @@ async def dashboard(user: dict = Depends(get_current_user)):
         "recent_transactions": txns,
         "notifications": notif,
         "income_series": series,
+        "rank": rank,
     }

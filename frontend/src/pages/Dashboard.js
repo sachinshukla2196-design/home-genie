@@ -77,6 +77,29 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* Rank / BV progress */}
+      {d.rank && (
+        <div className="rounded-2xl border border-brand-50 bg-white p-5 shadow-card" data-testid="rank-progress">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="text-xs uppercase tracking-wide text-muted2">{t("dash.currentRank")}</div>
+              <div className="font-display text-lg font-semibold text-forest" data-testid="rank-current">{d.rank.current}</div>
+            </div>
+            <div className="text-right">
+              <div className="text-xs uppercase tracking-wide text-muted2">{d.rank.is_max ? t("dash.topRank") : t("dash.nextRank")}</div>
+              <div className="font-display text-lg font-semibold text-gold" data-testid="rank-next">{d.rank.is_max ? "★" : d.rank.next}</div>
+            </div>
+          </div>
+          <div className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-brand-50">
+            <motion.div initial={{ width: 0 }} animate={{ width: `${d.rank.progress}%` }} transition={{ duration: 0.7 }} className="h-full rounded-full bg-forest" data-testid="rank-bar" />
+          </div>
+          <div className="mt-2 flex items-center justify-between text-xs text-muted2">
+            <span data-testid="rank-bv">BV {Number(d.rank.current_bv).toLocaleString("en-IN")}{!d.rank.is_max && ` / ${Number(d.rank.next_bv).toLocaleString("en-IN")}`}</span>
+            <span className="font-semibold text-forest">{d.rank.progress}%</span>
+          </div>
+        </div>
+      )}
+
       {/* Stat cards */}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard testid="stat-wallet" icon={Wallet} accent="brand" label={t("dash.walletBalance")} value={money(d.wallet.available_balance)} sub={`${t("wallet.pending")}: ${money(d.wallet.pending_balance)}`} index={0} />
@@ -86,7 +109,7 @@ export default function Dashboard() {
         <StatCard testid="stat-referrals" icon={Share2} accent="brand" label={t("dash.referralCount")} value={d.stats.referral_count} index={4} />
         <StatCard testid="stat-team" icon={Users} accent="gold" label={t("dash.activeTeam")} value={d.stats.active_team} index={5} />
         <StatCard testid="stat-withdrawn" icon={Wallet} accent="ink" label={t("wallet.withdrawn")} value={money(d.wallet.total_withdrawn)} index={6} />
-        <StatCard testid="stat-rank" icon={TrendingUp} accent="gold" label={t("dash.rank")} value="—" sub={t("dash.rankSoon")} index={7} />
+        <StatCard testid="stat-rank" icon={TrendingUp} accent="gold" label={t("dash.rank")} value={d.rank?.current || "—"} sub={d.rank ? (d.rank.is_max ? t("dash.topRank") : `${t("dash.nextRank")}: ${d.rank.next}`) : t("dash.rankSoon")} index={7} />
       </div>
 
       <div className="grid gap-6 lg:grid-cols-3">

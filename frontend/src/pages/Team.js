@@ -11,6 +11,9 @@ import { useAuth } from "@/context/AuthContext";
 import { API } from "@/lib/api";
 
 const money = (v) => `₹${Number(v || 0).toLocaleString("en-IN")}`;
+// User-facing rank/designation names by depth (backend keeps numeric levels internally).
+const RANK_NAMES = { 1: "Executive", 2: "Sr. Executive", 3: "Asst. Organizer", 4: "Organizer", 5: "Sr. Organizer", 6: "Manager", 7: "Sr. Manager", 8: "Area Manager", 9: "Sr. Area Manager" };
+const RANK_ABBR = { 1: "GD", 2: "BD", 3: "AD", 4: "CD", 5: "PD", 6: "MD", 7: "RD", 8: "DD", 9: "MDD" };
 
 export default function Team() {
   const { t } = useI18n();
@@ -26,7 +29,7 @@ export default function Team() {
   const hasTeam = (data.total ?? members.length) > 0;
 
   const TABS = [
-    { id: "levels", label: "Levels", icon: Layers },
+    { id: "levels", label: "Ranks", icon: Layers },
     { id: "matrix", label: "Matrix", icon: Network },
     { id: "list", label: "List", icon: List },
   ];
@@ -64,7 +67,7 @@ export default function Team() {
           <SummaryCard label="Total Team" value={data.total} />
           <SummaryCard label="Active (GREEN)" value={data.active} accent />
           <SummaryCard label="Total Income" value={money(data.total_income)} />
-          <SummaryCard label="Levels Reached" value={levels.filter((l) => l.count > 0).length} sub="of 8" />
+          <SummaryCard label="Ranks Reached" value={levels.filter((l) => l.count > 0).length} sub="of 8" />
         </div>
       )}
     </div>
@@ -108,9 +111,9 @@ function LevelsView({ levels }) {
               className="flex w-full items-center gap-4 px-5 py-4 text-left transition-colors hover:bg-brand-50/40"
               data-testid={`level-toggle-${lvl.level}`}
             >
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-forest font-display text-sm font-bold text-white">L{lvl.level}</span>
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-forest font-display text-xs font-bold text-white">{RANK_ABBR[lvl.level] || lvl.level}</span>
               <div className="min-w-0 flex-1">
-                <div className="font-display text-base font-semibold text-ink">Level {lvl.level}</div>
+                <div className="font-display text-base font-semibold text-ink">{RANK_NAMES[lvl.level] || `Rank ${lvl.level}`}</div>
                 <div className="text-xs text-muted2">{lvl.count} member{lvl.count !== 1 ? "s" : ""} · {lvl.active} active</div>
               </div>
               <div className="text-right">

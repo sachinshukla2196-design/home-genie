@@ -512,16 +512,10 @@ async def approve_registration_request(req_id: str, request: Request, admin: dic
     except Exception:
         raise HTTPException(status_code=400, detail="Could not create distributor (possibly a duplicate email or mobile). Please check and try again.")
     await get_or_create_wallet(user["id"])
-    # ₹100 welcome credit to the new distributor on approval (idempotent via signup_bonus category)
-    if not await db.wallet_transactions.find_one({"user_id": user["id"], "category": "signup_bonus"}):
-        await db.wallets.update_one({"user_id": user["id"]},
-            {"$inc": {"available_balance": 100.0, "total_earned": 100.0}, "$set": {"updated_at": now_iso()}})
-        await db.wallet_transactions.insert_one({"id": new_id(), "user_id": user["id"],
-            "amount": 100.0, "type": "credit", "category": "signup_bonus",
-            "description": "Welcome credit on account approval", "reference_id": user["id"],
-            "created_at": now_iso()})
-    # Save the referral relationship permanently. Phase 1: NO commission is paid
-    # here — the ₹100 direct referral is credited in Phase 2 on GREEN activation.
+    # IMPORTANT: the new distributor receives NO ₹100 here. The ₹100 DIRECT REFERRAL
+    # REWARD belongs ONLY to the immediate/direct sponsor and is credited below.
+    settings = await get_settings()
+    referral_reward = float(settings.get("referral_commission", 100.0))
     sp_did = r.get("sponsor_id")
     if sp_did:
         rc = await db.referral_codes.find_one({"code": sp_did, "active": True})
@@ -539,8 +533,30 @@ async def approve_registration_request(req_id: str, request: Request, admin: dic
                     "id": new_id(), "sponsor_id": sponsor["id"],
                     "sponsor_distributor_id": parent_label,
                     "referred_user_id": user["id"], "referred_distributor_id": did,
-                    "commission_paid": False, "created_at": now_iso(),
+                    "commission_paid": True, "commission_paid_at": now_iso(), "created_at": now_iso(),
                 })
+            # ---- ₹100 DIRECT REFERRAL REWARD → immediate sponsor ONLY (idempotent) ----
+            if not await db.commissions.find_one({"referred_user_id": user["id"], "type": "REFERRAL_COMMISSION"}):
+                comm = {
+                    "id": new_id(), "sponsor_id": sponsor["id"],
+                    "sponsor_distributor_id": sponsor.get("distributor_id") or parent_label,
+                    "referred_user_id": user["id"], "referred_distributor_id": did,
+                    "type": "REFERRAL_COMMISSION", "amount": referral_reward, "status": "CREDITED",
+                    "description": f"Direct referral reward for {did}", "created_at": now_iso(),
+                }
+                await db.commissions.insert_one(dict(comm))
+                await add_wallet_transaction(sponsor["id"], "REFERRAL_COMMISSION", referral_reward, "CREDITED",
+                                             reference=user["id"],
+                                             description=f"Direct referral reward: {did} joined under you",
+                                             direction="credit")
+                await create_notification(sponsor["id"], "commission",
+                                          f"You earned ₹{int(referral_reward)}",
+                                          f"Direct referral reward credited — {did} joined using your referral ID.",
+                                          f"आपने ₹{int(referral_reward)} कमाए",
+                                          f"डायरेक्ट रेफरल रिवार्ड — {did} आपकी रेफरल आईडी से जुड़ा।")
+                await log_audit(None, "direct_referral_reward", "commission", comm["id"],
+                                new_value={"amount": referral_reward,
+                                           "sponsor": sponsor.get("distributor_id") or parent_label}, request=request)
     await db.registration_requests.update_one({"id": req_id},
         {"$set": {"status": "approved", "distributor_id": did, "approved_by": admin["id"], "approved_at": now_iso()}})
     await log_audit(admin, "registration_approved", "user", user["id"], new_value={"distributor_id": did}, request=request)
