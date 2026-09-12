@@ -236,6 +236,13 @@ VERIFIED via curl: commission release→RELEASED, double release→400, hold→H
 - VERIFIED: approve → new user ₹0, sponsor ₹100, no signup_bonus, REFERRAL_COMMISSION to sponsor, relationship commission_paid=True, re-approve=400 (idempotent). Rank compute matches spec (BV 12500 → Executive 62.5%). Dashboard bar + Team rank names render (desktop+mobile, no overflow).
 - LEGACY NOTE: users approved under OLD code may still hold a `signup_bonus` ₹100 on their own wallet — not auto-deleted (financial data); fix is forward-only.
 
+## Final Surgical Patch #2 (Sep 2026) — DONE
+- FORGOT PASSWORD → ADMIN-ONLY REQUEST: removed OTP/email-reset. `/auth/forgot/send` now takes {identifier} (Distributor ID or mobile), creates a `password_reset_requests` doc (idempotent per user), no OTP/email/SMS. `/auth/forgot/reset` removed (404). New admin endpoints: GET `/admin/password-reset-requests`, POST `/admin/password-reset-requests/{id}/dismiss`. Existing admin reset-password now auto-resolves matching pending requests. Frontend ForgotPassword page = single identifier field → "request sent"; AdminUsers shows a "Password Reset Requests" panel with Reset/Dismiss.
+- RANK CODES: RANK_TIERS/compute_rank now include codes (GD/BD/AD/CD/PD/MD/RD/DD/MDD/ZM). New `GET /api/rank` returns code/current/next_code/next/current_bv/next_bv/progress/is_max from personal BV (paid-order subtotals excl GST).
+- PROFILE: shows "STATUS | CODE — Designation" next to RED/GREEN badge, plus a BV progress bar (Current Rank, Next Rank, BV x/y, %). No page redesign.
+- ITEMS ALREADY DONE (unchanged): ₹100 to direct sponsor only (idempotent), depth-based purchase commission (base excl GST, GREEN-only, no redistribution), wallet display w/ rank names, no-minimum withdrawal, Dashboard BV bar, Team rank names.
+- VERIFIED: forgot by DID & mobile (idempotent, pending=1), admin list shows it, admin reset auto-resolves (pending=0), unknown id=404, old reset route=404, /api/rank=GD Executive. Backend imports clean; frontend compiled.
+
 ## Notes
 - Auth is JWT Bearer in localStorage (`anj_token`); CORS `*` with credentials off.
 - Payment finalization is webhook-independent (status poll calls Stripe get_checkout_status) for preview reliability.

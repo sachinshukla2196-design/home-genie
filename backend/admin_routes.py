@@ -654,9 +654,23 @@ async def admin_reset_password(user_id: str, body: AdminPwBody, request: Request
     if len(new_pw) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
     await db.users.update_one({"id": user_id}, {"$set": {"password_hash": hash_password(new_pw), "updated_at": now_iso()}})
+    await db.password_reset_requests.update_many({"user_id": user_id, "status": "pending"},
+        {"$set": {"status": "resolved", "resolved_by": admin["id"], "resolved_at": now_iso()}})
     await log_audit(admin, "admin_reset_password", "user", user_id, request=request)
     return {"message": "Password reset successfully.", "password": new_pw,
             "distributor_id": u.get("distributor_id"), "email": u.get("email"), "full_name": u.get("full_name")}
+
+
+@router.get("/password-reset-requests")
+async def list_password_reset_requests(admin: dict = Depends(require_admin)):
+    return await db.password_reset_requests.find({"status": "pending"}, {"_id": 0}).sort("created_at", -1).to_list(500)
+
+
+@router.post("/password-reset-requests/{req_id}/dismiss")
+async def dismiss_password_reset_request(req_id: str, request: Request, admin: dict = Depends(require_admin)):
+    await db.password_reset_requests.update_one({"id": req_id},
+        {"$set": {"status": "dismissed", "resolved_by": admin["id"], "resolved_at": now_iso()}})
+    return {"ok": True}
 
 
 # ---------------- Audit logs ----------------

@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useRef, useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { Mail, Phone, MapPin, LifeBuoy, Camera, Loader2, Trash2 } from "lucide-react";
@@ -36,6 +36,8 @@ export default function Profile() {
   const { user, logout, refresh } = useAuth();
   const fileRef = useRef(null);
   const [uploading, setUploading] = useState(false);
+  const [rank, setRank] = useState(null);
+  useEffect(() => { API.get("/rank").then(({ data }) => setRank(data)).catch(() => {}); }, []);
   const initials = (user?.full_name || "U").slice(0, 2).toUpperCase();
 
   const onPick = () => fileRef.current?.click();
@@ -80,7 +82,7 @@ export default function Profile() {
           </div>
           <div>
             <div className="font-display text-xl font-semibold text-ink">{user?.full_name}</div>
-            <div className="mt-1 flex items-center gap-2 text-sm"><span className="font-semibold text-forest" data-testid="profile-distributor-id">{user?.distributor_id}</span><StatusBadge status={user?.status} size="sm" /></div>
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-sm"><span className="font-semibold text-forest" data-testid="profile-distributor-id">{user?.distributor_id}</span><StatusBadge status={user?.status} size="sm" />{rank && <span className="rounded-full bg-brand-50 px-2 py-0.5 text-xs font-semibold text-forest" data-testid="profile-rank">{rank.code} — {rank.current}</span>}</div>
             <div className="mt-2 flex items-center gap-3">
               <button onClick={onPick} className="text-xs font-medium text-brand hover:underline" data-testid="change-photo-link">{user?.photo ? "Change photo" : "Add photo"}</button>
               {user?.photo && <button onClick={removePhoto} className="inline-flex items-center gap-1 text-xs font-medium text-danger hover:underline" data-testid="remove-photo-link"><Trash2 size={12} /> Remove</button>}
@@ -94,6 +96,17 @@ export default function Profile() {
         </div>
         {user?.sponsor_id && <div className="mt-4 rounded-lg bg-brand-50 px-4 py-2.5 text-sm text-forest">Sponsor: <b>{user.sponsor_id}</b></div>}
       </motion.div>
+
+      {rank && (
+        <div className="rounded-2xl border border-brand-50 bg-white p-5 shadow-card" data-testid="profile-rank-progress">
+          <div className="flex items-center justify-between">
+            <div><div className="text-xs uppercase tracking-wide text-muted2">Current Rank</div><div className="font-display text-lg font-semibold text-forest">{rank.code} — {rank.current}</div></div>
+            <div className="text-right"><div className="text-xs uppercase tracking-wide text-muted2">{rank.is_max ? "Top Rank" : "Next Rank"}</div><div className="font-display text-lg font-semibold text-gold">{rank.is_max ? "★" : `${rank.next_code} — ${rank.next}`}</div></div>
+          </div>
+          <div className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-brand-50"><div className="h-full rounded-full bg-forest" style={{ width: `${rank.progress}%` }} data-testid="profile-rank-bar" /></div>
+          <div className="mt-2 flex items-center justify-between text-xs text-muted2"><span data-testid="profile-rank-bv">BV {Number(rank.current_bv).toLocaleString("en-IN")}{!rank.is_max && ` / ${Number(rank.next_bv).toLocaleString("en-IN")}`}</span><span className="font-semibold text-forest">{rank.progress}%</span></div>
+        </div>
+      )}
 
       <IdCard user={user} />
 

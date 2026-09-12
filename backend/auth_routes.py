@@ -389,37 +389,27 @@ async def login_otp_verify(body: MobileOtpBody, request: Request):
     return {"token": create_token(user["id"]), "user": clean_user(user)}
 
 
+class ForgotRequestBody(BaseModel):
+    identifier: str
+
+
 @router.post("/forgot/send")
-async def forgot_send(body: EmailBody):
-    email = body.email.lower().strip()
-    user = await db.users.find_one({"email": email})
+async def forgot_request(body: ForgotRequestBody):
+    """Admin-only password recovery: the user submits a request and an admin resets the
+    password manually. NO OTP, NO SMS, NO email reset, NO external service."""
+    ident = (body.identifier or "").strip()
+    if not ident:
+        raise HTTPException(status_code=400, detail="Enter your Distributor ID or registered mobile number.")
+    user = await db.users.find_one({"$or": [{"distributor_id": ident.upper()}, {"mobile": ident}]})
     if not user:
-        raise HTTPException(status_code=404, detail="No account found for this email.")
-    res = await otp_create(email, "forgot")
-    if res.get("dev_otp"):
-        html = email_shell("Reset your password", f"""
-      <p style="color:#66736B;font-size:14px;">Use the code below to reset your Anjali Herbal Life password. It expires shortly.</p>
-      <div style="margin:20px 0;text-align:center;">
-        <span style="display:inline-block;background:#EAF5ED;color:#0B4D2E;font-size:30px;font-weight:bold;letter-spacing:8px;padding:14px 24px;border-radius:12px;">{res['dev_otp']}</span>
-      </div>""")
-        try:
-            await send_email(email, "Your Anjali Herbal Life password reset code", html)
-        except Exception:
-            pass
-    return {"message": "A reset code has been sent to your email.", **res}
-
-
-@router.post("/forgot/reset")
-async def forgot_reset(body: ForgotResetBody, request: Request):
-    email = body.email.lower().strip()
-    user = await db.users.find_one({"email": email})
-    if not user:
-        raise HTTPException(status_code=404, detail="No account found for this email.")
-    await otp_verify(email, "forgot", body.otp)
-    await db.users.update_one({"id": user["id"]},
-                              {"$set": {"password_hash": hash_password(body.password), "updated_at": now_iso()}})
-    await log_audit(clean_user(user), "password_reset", "user", user["id"], request=request)
-    return {"message": "Password updated. Please log in."}
+        raise HTTPException(status_code=404, detail="No account found for that Distributor ID / mobile number.")
+    if not await db.password_reset_requests.find_one({"user_id": user["id"], "status": "pending"}):
+        await db.password_reset_requests.insert_one({
+            "id": new_id(), "user_id": user["id"], "distributor_id": user.get("distributor_id"),
+            "full_name": user.get("full_name"), "mobile": user.get("mobile"),
+            "status": "pending", "created_at": now_iso(),
+        })
+    return {"message": "Your request has been sent to the admin. Our team will reset your password and contact you shortly."}
 
 
 @router.put("/change-mobile/send")

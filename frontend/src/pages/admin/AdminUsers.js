@@ -13,6 +13,7 @@ export default function AdminUsers() {
   const [filter, setFilter] = useState("");
   const [codes, setCodes] = useState([]);
   const [reqs, setReqs] = useState([]);
+  const [pwReqs, setPwReqs] = useState([]);
   const [genLoading, setGenLoading] = useState(false);
   const [pwResult, setPwResult] = useState(null); // {full_name, distributor_id, password}
   const [busyId, setBusyId] = useState(null);
@@ -23,7 +24,22 @@ export default function AdminUsers() {
     API.get("/admin/users").then(({ data }) => setUsers(data)).catch(() => setUsers([]));
     API.get("/admin/referral-codes").then(({ data }) => setCodes(data)).catch(() => {});
     API.get("/admin/registration-requests").then(({ data }) => setReqs(data)).catch(() => {});
+    API.get("/admin/password-reset-requests").then(({ data }) => setPwReqs(data)).catch(() => {});
   }, []);
+
+  const loadPwReqs = () => API.get("/admin/password-reset-requests").then(({ data }) => setPwReqs(data)).catch(() => {});
+  const resetForReq = async (r) => {
+    setBusyId(r.id);
+    try {
+      const { data } = await API.post(`/admin/users/${r.user_id}/reset-password`, {});
+      setPwResult(data); setPwReqs((l) => l.filter((x) => x.id !== r.id));
+      toast.success("New password generated");
+    } catch (e) { toast.error(apiError(e)); } finally { setBusyId(null); }
+  };
+  const dismissPwReq = async (r) => {
+    try { await API.post(`/admin/password-reset-requests/${r.id}/dismiss`); setPwReqs((l) => l.filter((x) => x.id !== r.id)); toast.success("Request dismissed"); }
+    catch (e) { toast.error(apiError(e)); }
+  };
 
   const loadReqs = () => API.get("/admin/registration-requests").then(({ data }) => setReqs(data)).catch(() => {});
   const approveReq = async (r) => { try { const { data } = await API.post(`/admin/registration-requests/${r.id}/approve`); toast.success(data.message); loadReqs(); API.get("/admin/users").then(({ data }) => setUsers(data)); } catch (e) { toast.error(apiError(e)); } };
@@ -109,6 +125,25 @@ export default function AdminUsers() {
             <span className="ml-2 text-xs text-muted2">Share this with the distributor. They can log in and change it.</span>
           </div>
           <button onClick={() => setPwResult(null)} className="text-muted2 hover:text-ink" data-testid="pw-reset-dismiss"><X size={18} /></button>
+        </div>
+      )}
+
+      {/* Password reset requests */}
+      {pwReqs.length > 0 && (
+        <div className="rounded-2xl border border-gold/40 bg-gold-light/30 p-6 shadow-card" data-testid="password-reset-requests-card">
+          <h3 className="font-display text-lg font-medium text-ink">Password Reset Requests</h3>
+          <p className="text-xs text-muted2">Distributors who forgot their password. Reset it and share the new password with them (no OTP/email).</p>
+          <div className="mt-4 space-y-2">
+            {pwReqs.map((r) => (
+              <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-brand-50 bg-white p-3" data-testid={`pw-req-${r.distributor_id}`}>
+                <div className="text-sm"><span className="font-semibold text-forest">{r.distributor_id}</span> · <span className="text-ink">{r.full_name}</span> · <span className="font-mono text-muted2">{r.mobile}</span><span className="ml-2 text-xs text-muted2">{(r.created_at || "").slice(0, 10)}</span></div>
+                <div className="flex gap-2">
+                  <button onClick={() => resetForReq(r)} disabled={busyId === r.id} className="rounded-full bg-forest px-3 py-1 text-xs font-semibold text-white hover:bg-brand disabled:opacity-50" data-testid={`pw-req-reset-${r.distributor_id}`}>{busyId === r.id ? "…" : "Reset Password"}</button>
+                  <button onClick={() => dismissPwReq(r)} className="rounded-full border border-danger/40 px-3 py-1 text-xs font-semibold text-danger hover:bg-danger/10" data-testid={`pw-req-dismiss-${r.distributor_id}`}>Dismiss</button>
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
