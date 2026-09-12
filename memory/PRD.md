@@ -243,6 +243,11 @@ VERIFIED via curl: commission release→RELEASED, double release→400, hold→H
 - ITEMS ALREADY DONE (unchanged): ₹100 to direct sponsor only (idempotent), depth-based purchase commission (base excl GST, GREEN-only, no redistribution), wallet display w/ rank names, no-minimum withdrawal, Dashboard BV bar, Team rank names.
 - VERIFIED: forgot by DID & mobile (idempotent, pending=1), admin list shows it, admin reset auto-resolves (pending=0), unknown id=404, old reset route=404, /api/rank=GD Executive. Backend imports clean; frontend compiled.
 
+## Bug Fix — Login 500 (Sep 2026) — DONE
+- ROOT CAUSE: `mask_aadhaar()` in core.py did `(a or "").strip()`; when a user's `aadhaar_number` was stored as a NUMBER (int) instead of a string (some production/migrated records, e.g. Anj000071), `.strip()` threw AttributeError → HTTP 500 on EVERY successful login (and any admin user list / profile that masks aadhaar) for that user. Preview users had string aadhaar so it never reproduced there.
+- FIX: `a = str(a or "").strip()` — one-line defensive cast. Covers login, /me, admin users list/detail, profile update, change-mobile (all go through clean_user/mask_aadhaar).
+- VERIFIED: reproduced 500 with a numeric-aadhaar user on preview, then after fix login returns 200 with `aadhaar_masked: XXXX-XXXX-1234`; unit-checked int/str/None/short inputs.
+
 ## Notes
 - Auth is JWT Bearer in localStorage (`anj_token`); CORS `*` with credentials off.
 - Payment finalization is webhook-independent (status poll calls Stripe get_checkout_status) for preview reliability.

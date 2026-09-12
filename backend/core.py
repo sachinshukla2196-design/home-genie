@@ -41,7 +41,7 @@ def new_id() -> str:
 
 
 def mask_aadhaar(a: str) -> str:
-    a = (a or "").strip()
+    a = str(a or "").strip()
     if len(a) < 4:
         return ""
     return "XXXX-XXXX-" + a[-4:]
