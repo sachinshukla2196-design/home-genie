@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { toast } from "sonner";
 import { Copy, Ticket, Plus, KeyRound, X, Ban, Trash2, Pencil } from "lucide-react";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -106,9 +106,12 @@ export default function AdminUsers() {
     } catch (e) { toast.error(apiError(e)); } finally { setBusyId(null); }
   };
 
-  if (!users) return <Skeleton className="h-96 rounded-2xl" />;
+  const filtered = useMemo(
+    () => (users || []).filter((u) => !filter || u.full_name?.toLowerCase().includes(filter.toLowerCase()) || u.distributor_id?.toLowerCase().includes(filter.toLowerCase()) || u.email?.toLowerCase().includes(filter.toLowerCase())),
+    [users, filter]
+  );
 
-  const filtered = users.filter((u) => !filter || u.full_name?.toLowerCase().includes(filter.toLowerCase()) || u.distributor_id?.toLowerCase().includes(filter.toLowerCase()) || u.email?.toLowerCase().includes(filter.toLowerCase()));
+  if (!users) return <Skeleton className="h-96 rounded-2xl" />;
 
   return (
     <div className="space-y-6">
