@@ -89,15 +89,8 @@ async def send_otp(body: SendOtp, request: Request):
     if not _valid_mobile(mobile):
         raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number.")
     await _resolve_sponsor(body.sponsor_id)
-    res = await otp_create(mobile, "register")
-    if res.get("dev_otp"):
-        html = email_shell("Verify your mobile", f"""
-      <p style="color:#66736B;font-size:14px;">Use the code below to verify your mobile and complete registration. It expires shortly.</p>
-      <div style="margin:20px 0;text-align:center;">
-        <span style="display:inline-block;background:#EAF5ED;color:#0B4D2E;font-size:30px;font-weight:bold;letter-spacing:8px;padding:14px 24px;border-radius:12px;">{res['dev_otp']}</span>
-      </div>""")
-        await send_email(email, "Your Anjali Herbal Life OTP", html)
-    return {"message": "OTP sent to your mobile.", **res}
+    await otp_create(mobile, "register")
+    return {"message": "OTP sent to your mobile."}
 
 
 class RegRequestBody(BaseModel):
@@ -372,10 +365,13 @@ class ForgotResetBody(BaseModel):
 @router.post("/login-otp/send")
 async def login_otp_send(body: MobileBody):
     mobile = body.mobile.strip()
-    if not await db.users.find_one({"mobile": mobile}):
+    user = await db.users.find_one({"mobile": mobile})
+    if not user:
         raise HTTPException(status_code=404, detail="No account found for this mobile number.")
-    res = await otp_create(mobile, "login")
-    return {"message": "OTP sent to your mobile.", **res}
+    if user.get("role") in ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="Admins must sign in with the secure admin login.")
+    await otp_create(mobile, "login")
+    return {"message": "OTP sent to your mobile."}
 
 
 @router.post("/login-otp/verify")
@@ -384,6 +380,8 @@ async def login_otp_verify(body: MobileOtpBody, request: Request):
     user = await db.users.find_one({"mobile": mobile})
     if not user:
         raise HTTPException(status_code=404, detail="No account found for this mobile number.")
+    if user.get("role") in ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="Admins must sign in with the secure admin login.")
     await otp_verify(mobile, "login", body.otp)
     await log_audit(clean_user(user), "login_otp", "user", user["id"], request=request)
     return {"token": create_token(user["id"]), "user": clean_user(user)}
@@ -420,8 +418,8 @@ async def change_mobile_send(body: MobileBody, user: dict = Depends(get_current_
     other = await db.users.find_one({"mobile": new_mobile})
     if other and other["id"] != user["id"]:
         raise HTTPException(status_code=400, detail="This mobile number is already attached to another account.")
-    res = await otp_create(new_mobile, "change")
-    return {"message": "OTP sent to the new mobile number.", **res}
+    await otp_create(new_mobile, "change")
+    return {"message": "OTP sent to the new mobile number."}
 
 
 @router.put("/change-mobile/verify")

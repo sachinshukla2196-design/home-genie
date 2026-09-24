@@ -228,11 +228,101 @@ async def razorpay_verify(body: RzpVerifyBody, request: Request, user: dict = De
             "razorpay_signature": body.razorpay_signature})
     except Exception:
         raise HTTPException(status_code=400, detail="Payment verification failed.")
+    # Trusted-source verification: fetch the payment from Razorpay and confirm it is
+    # captured/authorized for the exact amount we created the order for.
+    tx = await db.payment_transactions.find_one({"session_id": body.razorpay_order_id}, {"_id": 0})
+    if not tx:
+        raise HTTPException(status_code=404, detail="Payment record not found.")
+    try:
+        pay = client.payment.fetch(body.razorpay_payment_id)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Could not verify payment with the gateway.")
+    expected_paise = int(round(float(tx["amount"]) * 100))
+    if pay.get("order_id") != body.razorpay_order_id:
+        raise HTTPException(status_code=400, detail="Payment does not match this order.")
+    if int(pay.get("amount", 0)) != expected_paise:
+        raise HTTPException(status_code=400, detail="Payment amount mismatch.")
+    if pay.get("status") not in ("captured", "authorized"):
+        raise HTTPException(status_code=400, detail="Payment is not captured yet.")
     await db.payment_transactions.update_one({"session_id": body.razorpay_order_id},
         {"$set": {"razorpay_payment_id": body.razorpay_payment_id, "updated_at": now_iso()}})
     await _process_paid_order(body.razorpay_order_id, request)
     tx = await db.payment_transactions.find_one({"session_id": body.razorpay_order_id}, {"_id": 0})
     return {"message": "Payment successful", "order_id": tx.get("order_id") if tx else None}
+
+
+@router.post("/webhook/razorpay")
+async def razorpay_webhook(request: Request):
+    """Server-authoritative Razorpay webhook. Validates HMAC, is idempotent per event,
+    and converges on the same _process_paid_order state machine as the client verify."""
+    secret = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
+    if not secret:
+        raise HTTPException(status_code=503, detail="Webhook not configured.")
+    raw = await request.body()
+    sig = request.headers.get("X-Razorpay-Signature", "")
+    import hmac as _hmac, hashlib as _hashlib, json as _json
+    expected = _hmac.new(secret.encode(), raw, _hashlib.sha256).hexdigest()
+    if not _hmac.compare_digest(expected, sig):
+        raise HTTPException(status_code=400, detail="Invalid signature")
+    try:
+        event = _json.loads(raw.decode())
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    event_id = request.headers.get("X-Razorpay-Event-Id") or event.get("id") or ""
+    if event_id:
+        seen = await db.webhook_events.find_one({"event_id": event_id})
+        if seen:
+            return {"status": "duplicate"}
+        await db.webhook_events.insert_one({"event_id": event_id, "provider": "razorpay",
+                                            "type": event.get("event"), "created_at": now_iso()})
+    etype = event.get("event", "")
+    if etype in ("payment.captured", "order.paid"):
+        entity = (event.get("payload", {}).get("payment", {}) or {}).get("entity", {}) or {}
+        rzp_order_id = entity.get("order_id")
+        if not rzp_order_id:
+            order_ent = (event.get("payload", {}).get("order", {}) or {}).get("entity", {}) or {}
+            rzp_order_id = order_ent.get("id")
+        if rzp_order_id:
+            tx = await db.payment_transactions.find_one({"session_id": rzp_order_id})
+            if tx:
+                await _process_paid_order(rzp_order_id, request)
+    return {"status": "ok"}
+
+
+async def reverse_order_financials(order_id: str, actor: dict = None, request: Request = None):
+    """Auditable refund/clawback: reverse product commissions + ₹100 referral reward
+    tied to a refunded order. Never deletes history — marks originals REVERSED and
+    writes clawback ledger entries. Idempotent via an atomic claim on the order."""
+    claim = await db.orders.update_one(
+        {"id": order_id, "payment_status": "paid", "financials_reversed": {"$ne": True}},
+        {"$set": {"financials_reversed": True, "updated_at": now_iso()}})
+    if claim.modified_count != 1:
+        return {"reversed": 0}
+    order = await db.orders.find_one({"id": order_id})
+    n = 0
+    comms = await db.commissions.find(
+        {"reference_order_id": order_id, "status": "CREDITED",
+         "type": {"$in": ["PURCHASE_LEVEL_COMMISSION", "REFERRAL_COMMISSION"]}}).to_list(1000)
+    for c in comms:
+        await db.commissions.update_one({"id": c["id"]},
+            {"$set": {"status": "REVERSED", "reversed_at": now_iso()}})
+        await add_wallet_transaction(
+            c["sponsor_id"], "COMMISSION_CLAWBACK", float(c["amount"]), "CLAWBACK",
+            reference=order_id, direction="debit",
+            description=f"Clawback of {c.get('type')} on refunded order {order.get('order_number')}")
+        n += 1
+    # If the refunded order was the activation order, revert the account to RED.
+    if order and order.get("is_activation_order"):
+        buyer = await db.users.find_one({"id": order["user_id"]})
+        if buyer and buyer.get("activation_order_id") == order_id:
+            await db.users.update_one({"id": buyer["id"]},
+                {"$set": {"status": "red", "activation_status": "inactive",
+                          "activation_order_id": None, "updated_at": now_iso()}})
+            await db.activation_records.update_many({"order_id": order_id},
+                {"$set": {"status": "reversed", "updated_at": now_iso()}})
+    await log_audit(actor, "order_financials_reversed", "order", order_id,
+                    new_value={"reversed_entries": n}, request=request)
+    return {"reversed": n}
 
 
 async def _process_paid_order(session_id: str, request: Request = None):
@@ -335,9 +425,10 @@ async def _process_paid_order(session_id: str, request: Request = None):
     await _distribute_purchase_commission(order, user, settings, request)
 
 
-# Fixed depth-based purchase commission percentages (Level 1 = immediate sponsor).
-# These are SEPARATE from the ₹100 direct referral reward and never mix with it.
-LEVEL_COMMISSION_PCT = {1: 0.0, 2: 15.0, 3: 5.0, 4: 5.0, 5: 5.0, 6: 4.0, 7: 4.0, 8: 3.0, 9: 3.0}
+# Depth-based TEAM SALES commission. Depth 1 = the buyer's IMMEDIATE sponsor.
+# Base = product value EXCLUDING GST. Total pool = 70%.
+# SEPARATE from the ₹100 direct referral reward — the two never mix.
+LEVEL_COMMISSION_PCT = {1: 20.0, 2: 12.0, 3: 10.0, 4: 8.0, 5: 6.0, 6: 5.0, 7: 4.0, 8: 3.0, 9: 2.0}
 # User-facing rank/designation names by depth (backend keeps numeric levels internally).
 RANK_NAME = {1: "Executive", 2: "Sr. Executive", 3: "Asst. Organizer", 4: "Organizer",
              5: "Sr. Organizer", 6: "Manager", 7: "Sr. Manager", 8: "Area Manager", 9: "Sr. Area Manager"}
@@ -350,6 +441,10 @@ async def _distribute_purchase_commission(order, buyer, settings, request=None):
     - Only GREEN/active uplines are paid; skipped uplines are NOT redistributed.
     - Idempotent: an order is claimed atomically so retries/refresh never duplicate.
     """
+    # Activation orders pay ONLY the ₹100 direct referral reward (handled elsewhere).
+    # Depth-based TEAM SALES commission applies to genuine PRODUCT purchases only.
+    if order.get("is_activation_order"):
+        return
     claim = await db.orders.update_one(
         {"id": order["id"], "purchase_commission_paid": {"$ne": True}},
         {"$set": {"purchase_commission_paid": True, "updated_at": now_iso()}},

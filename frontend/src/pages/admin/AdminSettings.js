@@ -14,7 +14,6 @@ export default function AdminSettings() {
   const { t } = useI18n();
   const { user } = useAuth();
   const [s, setS] = useState(null);
-  const [resetting, setResetting] = useState(false);
   const [master, setMaster] = useState(null);
   const [tree, setTree] = useState(null);
   const isSuper = user?.role === "super_admin";
@@ -37,21 +36,11 @@ export default function AdminSettings() {
   };
   const masterLink = master ? `${window.location.origin}/register?ref=${master.code}` : "";
 
-  const resetBetaData = async () => {
-    const typed = window.prompt('WARNING: This permanently deletes ALL distributor/customer & transaction data (users, orders, payments, wallets, referrals, KYC, withdrawals, registration requests).\n\nYour ADMIN accounts, products, settings and Reference IDs are NOT deleted — they are always kept.\n\nThis cannot be undone. Type RESET to confirm.');
-    if (typed !== "RESET") { if (typed !== null) toast.error("Confirmation text did not match. Nothing was deleted."); return; }
-    setResetting(true);
-    try {
-      const { data } = await API.post("/admin/maintenance/reset-data", { confirm: "RESET" });
-      toast.success(data.message || "Beta data cleared.");
-    } catch (e) { toast.error(apiError(e)); } finally { setResetting(false); }
-  };
-
   const save = async () => {
     try {
       await API.put("/admin/settings", {
         activation_amount: parseFloat(s.activation_amount), activation_product_sku: s.activation_product_sku,
-        referral_commission: parseFloat(s.referral_commission), withdrawal_minimum: parseFloat(s.withdrawal_minimum),
+        referral_commission: parseFloat(s.referral_commission),
         require_kyc_for_withdrawal: s.require_kyc_for_withdrawal, gst_percent: parseFloat(s.gst_percent),
         company_name: s.company_name, company_email: s.company_email, company_phone: s.company_phone, company_address: s.company_address,
       });
@@ -70,7 +59,6 @@ export default function AdminSettings() {
           <F label="Activation Amount (₹)" type="number" value={s.activation_amount} onChange={set("activation_amount")} testid="set-activation-amount" />
           <F label="Activation Product SKU" value={s.activation_product_sku} onChange={set("activation_product_sku")} testid="set-activation-sku" />
           <F label="Referral Commission (₹)" type="number" value={s.referral_commission} onChange={set("referral_commission")} testid="set-referral" />
-          <F label="Withdrawal Minimum (₹)" type="number" value={s.withdrawal_minimum} onChange={set("withdrawal_minimum")} testid="set-wd-min" />
           <F label="GST %" type="number" value={s.gst_percent} onChange={set("gst_percent")} testid="set-gst" />
         </div>
         <label className="flex items-center justify-between rounded-lg border border-brand-50 p-3 text-sm"><span>Require KYC for withdrawal</span><Switch checked={s.require_kyc_for_withdrawal} onCheckedChange={(v) => setS((p) => ({ ...p, require_kyc_for_withdrawal: v }))} data-testid="set-kyc-req" /></label>

@@ -1,33 +1,71 @@
-"""Lightweight provider abstraction (BETA mock providers).
-Switchable via env without touching business logic. Production blocks mocks."""
+"""Production OTP: server-generated secure OTP, delivered ONLY via a real SMS
+provider (MSG91). No mock, no test OTP, no dev OTP, no OTP in API responses or
+logs. If the SMS provider is not configured, OTP flows FAIL SAFELY (503)."""
 import os
+import re
+import hmac
 import hashlib
 import secrets
+import logging
+import httpx
 from datetime import datetime, timezone, timedelta
 from fastapi import HTTPException
-from core import db, now_iso, JWT_SECRET
+from core import db, now_iso
 
-APP_ENV = os.environ.get("APP_ENV", "production")
-OTP_PROVIDER = os.environ.get("OTP_PROVIDER", "mock")
+logger = logging.getLogger("anjali")
+
 OTP_TTL = int(os.environ.get("OTP_TTL_SECONDS", "300"))
 OTP_MAX_ATTEMPTS = int(os.environ.get("OTP_MAX_ATTEMPTS", "5"))
-OTP_RESEND_COOLDOWN = int(os.environ.get("OTP_RESEND_COOLDOWN", "30"))
-TEST_NUMBERS = set(x.strip() for x in os.environ.get("OTP_TEST_NUMBERS", "9999999999").split(",") if x.strip())
-TEST_OTP = "123456"
+OTP_RESEND_COOLDOWN = int(os.environ.get("OTP_RESEND_COOLDOWN", "60"))
+OTP_PEPPER = os.environ.get("OTP_PEPPER", "")
+
+MSG91_AUTH_KEY = os.environ.get("MSG91_AUTH_KEY", "")
+MSG91_SENDER_ID = os.environ.get("MSG91_SENDER_ID", "")
+MSG91_TEMPLATE_ID = os.environ.get("MSG91_TEMPLATE_ID", "")
+MSG91_BASE_URL = os.environ.get("MSG91_BASE_URL", "https://control.msg91.com")
 
 
-def is_test_number(m: str) -> bool:
-    return (m or "").strip() in TEST_NUMBERS
+def sms_configured() -> bool:
+    return bool(MSG91_AUTH_KEY and MSG91_SENDER_ID and MSG91_TEMPLATE_ID)
+
+
+def _normalize_mobile(m: str) -> str:
+    p = re.sub(r"\D", "", (m or ""))
+    if len(p) == 10:
+        p = "91" + p
+    return p
 
 
 def _hash(code: str) -> str:
-    return hashlib.sha256(f"{code}:{JWT_SECRET}".encode()).hexdigest()
+    return hmac.new(OTP_PEPPER.encode(), (code or "").strip().encode(), hashlib.sha256).hexdigest()
+
+
+async def _send_sms_otp(mobile: str, code: str) -> None:
+    """Deliver OTP via MSG91 Flow API. Never logs the code or provider secrets."""
+    if not sms_configured():
+        raise HTTPException(status_code=503, detail="OTP service is not configured. Please contact support.")
+    payload = {
+        "flow_id": MSG91_TEMPLATE_ID,
+        "sender": MSG91_SENDER_ID,
+        "recipients": [{"mobiles": _normalize_mobile(mobile), "OTP": code}],
+    }
+    url = MSG91_BASE_URL.rstrip("/") + "/api/v5/flow/"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            resp = await client.post(url, json=payload,
+                                     headers={"authkey": MSG91_AUTH_KEY, "Content-Type": "application/json"})
+        data = resp.json()
+    except (httpx.HTTPError, ValueError):
+        raise HTTPException(status_code=503, detail="Could not send OTP right now. Please try again shortly.")
+    if resp.status_code >= 400 or str(data.get("type")) != "success":
+        logger.error("MSG91 send rejected (status=%s)", resp.status_code)
+        raise HTTPException(status_code=503, detail="Could not send OTP right now. Please try again shortly.")
 
 
 async def otp_create(identifier: str, purpose: str) -> dict:
-    # Production must use a real provider; mock is blocked.
-    if APP_ENV == "production" and OTP_PROVIDER == "mock":
-        raise HTTPException(status_code=503, detail="OTP service is not configured.")
+    """Generate + store a hashed single-use OTP and deliver it via SMS. Returns NO code."""
+    if not sms_configured():
+        raise HTTPException(status_code=503, detail="OTP service is not configured. Please contact support.")
     last = await db.otp_sessions.find_one({"identifier": identifier, "purpose": purpose}, sort=[("created_at", -1)])
     if last:
         try:
@@ -37,8 +75,7 @@ async def otp_create(identifier: str, purpose: str) -> dict:
             raise
         except Exception:
             pass
-    code = TEST_OTP if is_test_number(identifier) else f"{secrets.randbelow(1000000):06d}"
-    # invalidate any prior pending OTP for this identifier/purpose (non-destructive)
+    code = f"{secrets.randbelow(1000000):06d}"
     await db.otp_sessions.update_many(
         {"identifier": identifier, "purpose": purpose, "used": False},
         {"$set": {"used": True}})
@@ -47,10 +84,15 @@ async def otp_create(identifier: str, purpose: str) -> dict:
         "expires_at": (datetime.now(timezone.utc) + timedelta(seconds=OTP_TTL)).isoformat(),
         "attempts": 0, "used": False, "created_at": now_iso(),
     })
-    print(f"[OTP:{purpose}] {identifier} -> {code}")  # dev/admin log only
-    # dev_otp exposed only in non-production beta, and never for approved test numbers
-    dev = None if (APP_ENV == "production" or is_test_number(identifier)) else code
-    return {"dev_otp": dev, "test_number": is_test_number(identifier)}
+    try:
+        await _send_sms_otp(identifier, code)
+    except HTTPException:
+        # never leave a usable OTP behind after a delivery failure
+        await db.otp_sessions.update_many(
+            {"identifier": identifier, "purpose": purpose, "used": False},
+            {"$set": {"used": True}})
+        raise
+    return {"sent": True}
 
 
 async def otp_verify(identifier: str, purpose: str, code: str) -> bool:
@@ -68,8 +110,8 @@ async def otp_verify(identifier: str, purpose: str, code: str) -> bool:
         raise
     except Exception:
         pass
-    if _hash((code or "").strip()) != rec["code_hash"]:
-        await db.otp_sessions.update_one({"_id": rec["_id"]}, {"$inc": {"attempts": 1}})
+    await db.otp_sessions.update_one({"_id": rec["_id"]}, {"$inc": {"attempts": 1}})
+    if not hmac.compare_digest(_hash(code), rec["code_hash"]):
         raise HTTPException(status_code=400, detail="Invalid OTP.")
     await db.otp_sessions.update_one({"_id": rec["_id"]}, {"$set": {"used": True}})
     return True

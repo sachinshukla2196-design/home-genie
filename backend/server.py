@@ -53,10 +53,13 @@ app.include_router(shop_routes.router)
 app.include_router(wallet_routes.router)
 app.include_router(admin_routes.router)
 
+_cors = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip() and o.strip() != "*"]
+if not _cors:
+    raise RuntimeError("CORS_ORIGINS is not configured with explicit production origin(s).")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=_cors,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -122,23 +125,27 @@ async def _init_db():
     # settings
     await get_settings()
 
-    # categories
-    for c in CATEGORY_SEED:
-        if not await db.product_categories.find_one({"name": c}):
-            await db.product_categories.insert_one({"id": new_id(), "name": c, "created_at": now_iso()})
+    # products & categories — ONE-TIME bootstrap only. After the first successful
+    # bootstrap a flag is set so deleted products/categories NEVER reappear on restart.
+    boot = await db.business_settings.find_one({"id": "catalogue_bootstrap"})
+    if not boot:
+        for c in CATEGORY_SEED:
+            if not await db.product_categories.find_one({"name": c}):
+                await db.product_categories.insert_one({"id": new_id(), "name": c, "created_at": now_iso()})
+        if await db.products.count_documents({}) == 0:
+            for p in PRODUCT_SEED:
+                doc = dict(p)
+                doc.update({"id": new_id(), "created_at": now_iso(), "updated_at": now_iso()})
+                await db.products.insert_one(doc)
+        await db.business_settings.insert_one({"id": "catalogue_bootstrap", "done_at": now_iso()})
 
-    # products — seed ONCE only when the catalogue is empty.
-    # Never re-add products that an admin deleted afterward.
-    if await db.products.count_documents({}) == 0:
-        for p in PRODUCT_SEED:
-            doc = dict(p)
-            doc.update({"id": new_id(), "created_at": now_iso(), "updated_at": now_iso()})
-            await db.products.insert_one(doc)
-
-    # admin seed
-    admin_email = os.environ.get("ADMIN_EMAIL", "admin@anjaliherballife.in").lower()
-    admin_password = os.environ.get("ADMIN_PASSWORD") or "admin123"
+    # admin seed — password comes strictly from the environment (no hardcoded fallback)
+    admin_email = os.environ.get("ADMIN_EMAIL", "").lower()
+    admin_password = os.environ.get("ADMIN_PASSWORD")
     admin_username = os.environ.get("ADMIN_USERNAME") or "admin"
+    if not admin_email or not admin_password:
+        logger.error("ADMIN_EMAIL / ADMIN_PASSWORD not configured; skipping admin seed.")
+        return
     existing = await db.users.find_one({"email": admin_email})
     if not existing:
         await db.users.insert_one({

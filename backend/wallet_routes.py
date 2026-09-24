@@ -256,15 +256,17 @@ async def request_withdrawal(body: WithdrawBody, request: Request, user: dict = 
         kyc = await db.kyc_records.find_one({"user_id": user["id"]})
         if not kyc or kyc.get("status") != "verified":
             raise HTTPException(status_code=400, detail="Complete and verify your KYC before withdrawing.")
-    wallet = await get_or_create_wallet(user["id"])
-    if body.amount > wallet["available_balance"]:
+    await get_or_create_wallet(user["id"])
+    # Atomic conditional debit: only succeeds if available_balance >= amount.
+    moved = await db.wallets.update_one(
+        {"user_id": user["id"], "available_balance": {"$gte": body.amount}},
+        {"$inc": {"available_balance": -body.amount, "pending_balance": body.amount},
+         "$set": {"updated_at": now_iso()}})
+    if moved.modified_count != 1:
         raise HTTPException(status_code=400, detail="Insufficient available balance.")
-
-    # move to pending (debit available, add pending) via ledger
-    await add_wallet_transaction(user["id"], "WITHDRAWAL", body.amount, "DEBITED",
+    # informational ledger entry (aggregates already moved atomically above)
+    await add_wallet_transaction(user["id"], "WITHDRAWAL", body.amount, "HELD",
                                  description="Withdrawal request (held)", direction="debit")
-    await add_wallet_transaction(user["id"], "WITHDRAWAL", body.amount, "PENDING",
-                                 description="Withdrawal pending admin review")
     req_no = new_id()[:8].upper()
     wr = {
         "id": new_id(), "request_number": f"WD{req_no}", "user_id": user["id"],

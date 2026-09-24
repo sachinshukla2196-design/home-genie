@@ -48,9 +48,8 @@ export function LoginOtp() {
   const send = async () => {
     setLoading(true);
     try {
-      const { data } = await API.post("/auth/login-otp/send", { mobile });
-      if (data.dev_otp) { setOtp(data.dev_otp); toast.info(`Demo OTP: ${data.dev_otp}`, { duration: 8000 }); }
-      else toast.success(data.test_number ? "Use test OTP 123456" : "OTP sent to your mobile");
+      await API.post("/auth/login-otp/send", { mobile });
+      toast.success("OTP sent to your mobile");
       setStep(2);
     } catch (e) { toast.error(apiError(e)); } finally { setLoading(false); }
   };

@@ -169,6 +169,11 @@ async def update_order_status(order_id: str, body: OrderStatusBody, request: Req
     if not o:
         raise HTTPException(status_code=404, detail="Order not found.")
     await db.orders.update_one({"id": order_id}, {"$set": {"status": body.status, "updated_at": now_iso()}})
+    # Refund → auditable reversal of all commissions & referral reward tied to this order.
+    if body.status == "refunded" and o.get("payment_status") == "paid":
+        import shop_routes
+        await shop_routes.reverse_order_financials(order_id, admin, request)
+        await db.orders.update_one({"id": order_id}, {"$set": {"payment_status": "refunded", "updated_at": now_iso()}})
     await create_notification(o["user_id"], "order", "Order update",
                               f"Your order {o['order_number']} is now {body.status}.",
                               "ऑर्डर अपडेट", f"आपका ऑर्डर {o['order_number']} अब {body.status} है।")
@@ -339,20 +344,20 @@ async def review_withdrawal(wd_id: str, body: WithdrawalReview, request: Request
         new_status = "approved"
     elif body.action == "mark_paid":
         new_status = "paid"
-        # clear pending balance
+        # settle: clear the held pending amount and record it as withdrawn
         await db.wallets.update_one({"user_id": wr["user_id"]},
-                                    {"$inc": {"pending_balance": -wr["amount"]},
+                                    {"$inc": {"pending_balance": -wr["amount"], "total_withdrawn": wr["amount"]},
                                      "$set": {"updated_at": now_iso()}})
-        await add_wallet_transaction(wr["user_id"], "WITHDRAWAL", wr["amount"], "REVERSED",
+        await add_wallet_transaction(wr["user_id"], "WITHDRAWAL", wr["amount"], "PAID",
                                      description="Withdrawal paid", direction="debit")
     elif body.action == "reject":
         new_status = "rejected"
-        # refund held amount back to available
+        # return the held amount to available balance
         await db.wallets.update_one({"user_id": wr["user_id"]},
                                     {"$inc": {"available_balance": wr["amount"], "pending_balance": -wr["amount"]},
                                      "$set": {"updated_at": now_iso()}})
-        await add_wallet_transaction(wr["user_id"], "ADJUSTMENT", wr["amount"], "CREDITED",
-                                     description="Withdrawal rejected - amount refunded", direction="credit")
+        await add_wallet_transaction(wr["user_id"], "WITHDRAWAL", wr["amount"], "REJECTED",
+                                     description="Withdrawal rejected - amount returned", direction="credit")
     else:
         raise HTTPException(status_code=400, detail="Invalid action.")
 
@@ -378,7 +383,6 @@ class SettingsBody(BaseModel):
     activation_amount: Optional[float] = None
     activation_product_sku: Optional[str] = None
     referral_commission: Optional[float] = None
-    withdrawal_minimum: Optional[float] = None
     require_kyc_for_withdrawal: Optional[bool] = None
     gst_percent: Optional[float] = None
     company_name: Optional[str] = None
@@ -461,26 +465,6 @@ class ResetBody(BaseModel):
     confirm: str
 
 
-@router.post("/maintenance/reset-data")
-async def reset_data(body: ResetBody, request: Request, admin: dict = Depends(require_admin)):
-    """DANGER: wipes all non-admin data (users, orders, payments, wallets, referrals...). Keeps admins, products, settings."""
-    if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Only the super admin can reset data.")
-    if body.confirm != "RESET":
-        raise HTTPException(status_code=400, detail="Type RESET to confirm.")
-    admin_roles = {"super_admin", "admin", "accounts_admin", "support_admin"}
-    result = {"users": (await db.users.delete_many({"role": {"$nin": list(admin_roles)}})).deleted_count}
-    for coll in ["orders", "payment_transactions", "commissions", "wallets", "wallet_transactions",
-                 "referral_relationships", "activation_records", "withdrawal_requests",
-                 "kyc_records", "notifications", "otp_sessions", "login_attempts",
-                 "registration_requests"]:
-        result[coll] = (await db[coll].delete_many({})).deleted_count
-    # reference codes are admin config, not customer data — keep them, just reset usage counters
-    await db.referral_codes.update_many({}, {"$set": {"uses": 0}})
-    await log_audit(admin, "data_reset", "system", "all", new_value=result, request=request)
-    return {"message": "All distributor/customer & transaction data cleared. Admin accounts, products, settings and Reference IDs are preserved.", "deleted": result}
-
-
 @router.get("/registration-requests")
 async def list_registration_requests(admin: dict = Depends(require_admin)):
     return await db.registration_requests.find({}, {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(500)
@@ -512,10 +496,9 @@ async def approve_registration_request(req_id: str, request: Request, admin: dic
     except Exception:
         raise HTTPException(status_code=400, detail="Could not create distributor (possibly a duplicate email or mobile). Please check and try again.")
     await get_or_create_wallet(user["id"])
-    # IMPORTANT: the new distributor receives NO ₹100 here. The ₹100 DIRECT REFERRAL
-    # REWARD belongs ONLY to the immediate/direct sponsor and is credited below.
-    settings = await get_settings()
-    referral_reward = float(settings.get("referral_commission", 100.0))
+    # IMPORTANT: NO ₹100 is paid at approval. The ₹100 DIRECT REFERRAL REWARD is paid
+    # exactly once — only when this distributor completes the qualifying paid activation
+    # (GREEN) — via the single authoritative _process_paid_order().
     sp_did = r.get("sponsor_id")
     if sp_did:
         rc = await db.referral_codes.find_one({"code": sp_did, "active": True})
@@ -533,30 +516,8 @@ async def approve_registration_request(req_id: str, request: Request, admin: dic
                     "id": new_id(), "sponsor_id": sponsor["id"],
                     "sponsor_distributor_id": parent_label,
                     "referred_user_id": user["id"], "referred_distributor_id": did,
-                    "commission_paid": True, "commission_paid_at": now_iso(), "created_at": now_iso(),
+                    "commission_paid": False, "created_at": now_iso(),
                 })
-            # ---- ₹100 DIRECT REFERRAL REWARD → immediate sponsor ONLY (idempotent) ----
-            if not await db.commissions.find_one({"referred_user_id": user["id"], "type": "REFERRAL_COMMISSION"}):
-                comm = {
-                    "id": new_id(), "sponsor_id": sponsor["id"],
-                    "sponsor_distributor_id": sponsor.get("distributor_id") or parent_label,
-                    "referred_user_id": user["id"], "referred_distributor_id": did,
-                    "type": "REFERRAL_COMMISSION", "amount": referral_reward, "status": "CREDITED",
-                    "description": f"Direct referral reward for {did}", "created_at": now_iso(),
-                }
-                await db.commissions.insert_one(dict(comm))
-                await add_wallet_transaction(sponsor["id"], "REFERRAL_COMMISSION", referral_reward, "CREDITED",
-                                             reference=user["id"],
-                                             description=f"Direct referral reward: {did} joined under you",
-                                             direction="credit")
-                await create_notification(sponsor["id"], "commission",
-                                          f"You earned ₹{int(referral_reward)}",
-                                          f"Direct referral reward credited — {did} joined using your referral ID.",
-                                          f"आपने ₹{int(referral_reward)} कमाए",
-                                          f"डायरेक्ट रेफरल रिवार्ड — {did} आपकी रेफरल आईडी से जुड़ा।")
-                await log_audit(None, "direct_referral_reward", "commission", comm["id"],
-                                new_value={"amount": referral_reward,
-                                           "sponsor": sponsor.get("distributor_id") or parent_label}, request=request)
     await db.registration_requests.update_one({"id": req_id},
         {"$set": {"status": "approved", "distributor_id": did, "approved_by": admin["id"], "approved_at": now_iso()}})
     await log_audit(admin, "registration_approved", "user", user["id"], new_value={"distributor_id": did}, request=request)

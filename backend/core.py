@@ -26,7 +26,9 @@ client = AsyncIOMotorClient(
 )
 db = client[os.environ["DB_NAME"]]
 
-JWT_SECRET = os.environ.get("JWT_SECRET", "anjali-dev-secret-change-me")
+JWT_SECRET = os.environ.get("JWT_SECRET")
+if not JWT_SECRET or JWT_SECRET == "anjali-dev-secret-change-me":
+    raise RuntimeError("JWT_SECRET is not configured. Set a strong JWT_SECRET in the environment.")
 JWT_ALGO = "HS256"
 
 ADMIN_ROLES = {"super_admin", "admin", "accounts_admin", "support_admin"}
@@ -175,7 +177,6 @@ DEFAULT_SETTINGS = {
     "activation_amount": 1500.0,
     "activation_product_sku": "ANJ-STARTER",
     "referral_commission": 100.0,
-    "withdrawal_minimum": 500.0,
     "require_kyc_for_withdrawal": True,
     "gst_percent": 5.0,
     "currency": "INR",
@@ -238,6 +239,9 @@ async def add_wallet_transaction(user_id: str, txn_type: str, amount: float, sta
         inc = {"pending_balance": amount}
     elif status == "DEBITED" and direction == "debit":
         inc = {"available_balance": -amount, "total_withdrawn": amount}
+    elif status == "CLAWBACK" and direction == "debit":
+        # refund/reversal of a previously credited commission
+        inc = {"available_balance": -amount, "total_earned": -amount}
     if inc:
         await db.wallets.update_one({"user_id": user_id},
                                     {"$inc": inc, "$set": {"updated_at": now_iso()}})

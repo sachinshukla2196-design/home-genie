@@ -149,7 +149,6 @@ export default function Checkout() {
           <Button type="submit" disabled={loading} className="mt-6 w-full rounded-full bg-forest hover:bg-brand" data-testid="place-order-btn">
             <CreditCard size={16} className="mr-1.5" /> {loading ? t("common.loading") : t("checkout.placeOrder")}
           </Button>
-          <p className="mt-3 text-center text-xs text-muted2">Test card: 4242 4242 4242 4242</p>
           <div className="mt-4 border-t border-brand-50 pt-4">
             <div className="mb-2 text-center text-xs font-medium uppercase tracking-wide text-muted2">or pay directly</div>
             <Button type="button" onClick={razorpayPay} disabled={loading} className="mb-2 w-full rounded-full bg-forest hover:bg-brand" data-testid="razorpay-pay-btn">

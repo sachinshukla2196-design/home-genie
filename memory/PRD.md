@@ -248,6 +248,18 @@ VERIFIED via curl: commission release→RELEASED, double release→400, hold→H
 - FIX: `a = str(a or "").strip()` — one-line defensive cast. Covers login, /me, admin users list/detail, profile update, change-mobile (all go through clean_user/mask_aadhaar).
 - VERIFIED: reproduced 500 with a numeric-aadhaar user on preview, then after fix login returns 200 with `aadhaar_masked: XXXX-XXXX-1234`; unit-checked int/str/None/short inputs.
 
+## PRODUCTION CONVERSION (Sep 2026) — DONE (self-verified; testing_agent in progress)
+- **70% TEAM COMMISSION**: LEVEL_COMMISSION_PCT now D1=20,D2=12,D3=10,D4=8,D5=6,D6=5,D7=4,D8=3,D9=2 (=70%). Depth 1 = immediate sponsor. Base = subtotal (excl GST). Applies to PRODUCT (non-activation) orders only. Idempotent (atomic order claim), RED uplines skipped without depth shift. Forensic-verified on 10-deep chain (total ₹700), idempotency, GST base ₹1000, RED-upline, wallet reconcile — all PASS.
+- **₹100 REFERRAL**: now paid ONCE at GREEN activation only (immediate sponsor, sponsor must be GREEN), via single authoritative _process_paid_order. REMOVED from admin approval (approve sets relationship commission_paid=False). Activation order pays ₹100 ONLY (no team commission). Verified: sponsor +₹100, new user ₹0, idempotent.
+- **REAL OTP (MSG91)**: providers.py rewritten — secure random OTP, hashed (HMAC+OTP_PEPPER), single-use, expiry, attempts, resend cooldown; delivered via MSG91 Flow API. NO mock/test/dev OTP; OTP never in API response/logs. Fails safe 503 if MSG91 creds missing. Admins blocked from login-otp.
+- **SECURITY**: JWT_SECRET rotated + fail-fast (no dev fallback). ADMIN_PASSWORD/PASSCODE rotated to strong random (admin123 revoked). CORS from env explicit origin (no `*`), allow_credentials=True. APP_ENV=production.
+- **RAZORPAY**: verify now checks signature + client.payment.fetch status(captured/authorized) + amount + order match. NEW webhook POST /api/webhook/razorpay (HMAC via RAZORPAY_WEBHOOK_SECRET, idempotent via webhook_events). Both converge on _process_paid_order.
+- **REFUND/REVERSAL**: shop_routes.reverse_order_financials — order status→refunded claws back purchase + referral commissions (originals marked REVERSED, CLAWBACK ledger debit; new add_wallet_transaction "CLAWBACK" branch subtracts available+total_earned), reverts GREEN→RED if activation order. Idempotent. Verified 9 reversed + idempotent.
+- **WITHDRAWAL**: atomic conditional debit (available_balance $gte amount); clean lifecycle (HELD→PAID/REJECTED) with correct aggregate moves (fixed prior double-credit-on-reject + total_withdrawn timing). No minimum (removed withdrawal_minimum from settings + UI).
+- **DATA CLEANUP**: deleted DEMO01-10, RANKTOP, RANKM01/02/03/05, and their orders/commissions/wallets/referrals/txns/notifications (report generated). Kept admin + ANJ000215/216/219/220 + MST000001. demo_seed.py deleted. Catalogue reseed made ONE-TIME (catalogue_bootstrap flag) — deleted products/categories never reappear.
+- **BACKDOORS**: /api/admin/maintenance/reset-data REMOVED (404). Removed "Reset BETA Data" + withdrawal_minimum + "Test card 4242" + dev_otp UI.
+- **CONFIGURATION REQUIRED (user action, marked, not faked)**: MSG91_AUTH_KEY/SENDER_ID/TEMPLATE_ID (real SMS); RAZORPAY_WEBHOOK_SECRET (from Razorpay dashboard); Razorpay LIVE keys when going live; real production CORS domain.
+
 ## Notes
-- Auth is JWT Bearer in localStorage (`anj_token`); CORS `*` with credentials off.
+- Auth is JWT Bearer in localStorage (`anj_token`); CORS now explicit origin from env, credentials on.
 - Payment finalization is webhook-independent (status poll calls Stripe get_checkout_status) for preview reliability.
