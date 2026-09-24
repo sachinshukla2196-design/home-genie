@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="11" time="63.177" timestamp="2026-09-24T23:30:19.402028+00:00" hostname="agent-env-ac253022-640d-4f54-97ff-96191d0a0e2a"><testcase classname="tests.test_production_hardening.TestAdminLogin" name="test_new_creds_ok" time="0.371" /><testcase classname="tests.test_production_hardening.TestAdminLogin" name="test_old_creds_rejected" time="0.348" /><testcase classname="tests.test_production_hardening.TestOtp" name="test_login_otp_send_unconfigured_returns_503_no_otp_leak" time="0.789" /><testcase classname="tests.test_production_hardening.TestOtp" name="test_admin_otp_blocked_403" time="0.132" /><testcase classname="tests.test_production_hardening.TestResetBackdoor" name="test_reset_data_removed" time="0.140" /><testcase classname="tests.test_production_hardening.TestRegistrationApprovalNoRupee100" name="test_approve_does_not_pay_100" time="0.837" /><testcase classname="tests.test_production_hardening.TestActivationRupee100" name="test_activation_pays_100_once" time="2.574" /><testcase classname="tests.test_production_hardening.TestProductLevelCommission" name="test_l1_l2_commission_20_12" time="4.016" /><testcase classname="tests.test_production_hardening.TestProductLevelCommission" name="test_activation_order_did_not_create_purchase_commission" time="0.251" /><testcase classname="tests.test_production_hardening.TestWithdrawal" name="test_withdrawal_flow" time="30.400"><failure message="requests.exceptions.ConnectTimeout: HTTPSConnectionPool(host='anjali-ayurveda-mvp.preview.emergentagent.com', port=443): Max retries exceeded with url: /api/admin/registration-requests (Caused by ConnectTimeoutError(&lt;HTTPSConnection(host='anjali-ayurveda-mvp.preview.emergentagent.com', port=443) at 0xfb8b7d8f6110&gt;, 'Connection to anjali-ayurveda-mvp.preview.emergentagent.com timed out. (connect timeout=15)'))">/root/.venv/lib/python3.11/site-packages/urllib3/connection.py:204: in _new_conn
+    sock = connection.create_connection(
+/root/.venv/lib/python3.11/site-packages/urllib3/util/connection.py:85: in create_connection
+    raise err
+/root/.venv/lib/python3.11/site-packages/urllib3/util/connection.py:73: in create_connection
+    sock.connect(sa)
+E   TimeoutError: timed out
+
+The above exception was the direct cause of the following exception:
+/root/.venv/lib/python3.11/site-packages/urllib3/connectionpool.py:788: in urlopen
+    response = self._make_request(
+/root/.venv/lib/python3.11/site-packages/urllib3/connectionpool.py:488: in _make_request
+    raise new_e
+/root/.venv/lib/python3.11/site-packages/urllib3/connectionpool.py:464: in _make_request
+    self._validate_conn(conn)
+/root/.venv/lib/python3.11/site-packages/urllib3/connectionpool.py:1106: in _validate_conn
+    conn.connect()
+/root/.venv/lib/python3.11/site-packages/urllib3/connection.py:759: in connect
+    self.sock = sock = self._new_conn()
+                       ^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/urllib3/connection.py:213: in _new_conn
+    raise ConnectTimeoutError(
+E   urllib3.exceptions.ConnectTimeoutError: (&lt;HTTPSConnection(host='anjali-ayurveda-mvp.preview.emergentagent.com', port=443) at 0xfb8b7d8f6110&gt;, 'Connection to anjali-ayurveda-mvp.preview.emergentagent.com timed out. (connect timeout=15)')
+
+The above exception was the direct cause of the following exception:
+/root/.venv/lib/python3.11/site-packages/requests/adapters.py:696: in send
+    resp = conn.urlopen(
+/root/.venv/lib/python3.11/site-packages/urllib3/connectionpool.py:842: in urlopen
+    retries = retries.increment(
+/root/.venv/lib/python3.11/site-packages/urllib3/util/retry.py:543: in increment
+    raise MaxRetryError(_pool, url, reason) from reason  # type: ignore[arg-type]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   urllib3.exceptions.MaxRetryError: HTTPSConnectionPool(host='anjali-ayurveda-mvp.preview.emergentagent.com', port=443): Max retries exceeded with url: /api/admin/registration-requests (Caused by ConnectTimeoutError(&lt;HTTPSConnection(host='anjali-ayurveda-mvp.preview.emergentagent.com', port=443) at 0xfb8b7d8f6110&gt;, 'Connection to anjali-ayurveda-mvp.preview.emergentagent.com timed out. (connect timeout=15)'))
+
+During handling of the above exception, another exception occurred:
+tests/test_production_hardening.py:327: in test_withdrawal_flow
+    sponsor_did, sponsor_uid, _, sponsor_tok = _create_and_activate(admin_h, MASTER_ID)
+                                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_production_hardening.py:108: in _create_and_activate
+    req = _find_pending_req(admin_h, body["mobile"])
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/test_production_hardening.py:78: in _find_pending_req
+    r = requests.get(f"{API}/admin/registration-requests", headers=admin_h, timeout=15)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:87: in get
+    return request("get", url, params=params, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/api.py:71: in request
+    return session.request(method=method, url=url, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:651: in request
+    resp = self.send(prep, **send_kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/sessions.py:784: in send
+    r = adapter.send(request, **kwargs)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/root/.venv/lib/python3.11/site-packages/requests/adapters.py:717: in send
+    raise ConnectTimeout(e, request=request)
+E   requests.exceptions.ConnectTimeout: HTTPSConnectionPool(host='anjali-ayurveda-mvp.preview.emergentagent.com', port=443): Max retries exceeded with url: /api/admin/registration-requests (Caused by ConnectTimeoutError(&lt;HTTPSConnection(host='anjali-ayurveda-mvp.preview.emergentagent.com', port=443) at 0xfb8b7d8f6110&gt;, 'Connection to anjali-ayurveda-mvp.preview.emergentagent.com timed out. (connect timeout=15)'))</failure></testcase><testcase classname="tests.test_production_hardening.TestRefundClawback" name="test_refund_reverses_commissions" time="23.178" /></testsuite></testsuites>

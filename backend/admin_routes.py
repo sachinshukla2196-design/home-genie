@@ -340,10 +340,18 @@ async def review_withdrawal(wd_id: str, body: WithdrawalReview, request: Request
     sym = settings.get("currency_symbol", "₹")
 
     new_status = None
-    if body.action == "approve":
-        new_status = "approved"
-    elif body.action == "mark_paid":
-        new_status = "paid"
+    if body.action not in ("approve", "mark_paid", "reject"):
+        raise HTTPException(status_code=400, detail="Invalid action.")
+    target = {"approve": "approved", "mark_paid": "paid", "reject": "rejected"}[body.action]
+    # Atomically claim the transition from a non-terminal state — makes the review
+    # idempotent so a double approve/pay/reject can never double-modify the wallet.
+    claimed = await db.withdrawal_requests.update_one(
+        {"id": wd_id, "status": {"$in": ["pending", "under_review", "approved"]}},
+        {"$set": {"status": target, "admin_note": body.note, "updated_at": now_iso()}})
+    if claimed.modified_count != 1:
+        raise HTTPException(status_code=400, detail="This withdrawal has already been finalised.")
+    new_status = target
+    if body.action == "mark_paid":
         # settle: clear the held pending amount and record it as withdrawn
         await db.wallets.update_one({"user_id": wr["user_id"]},
                                     {"$inc": {"pending_balance": -wr["amount"], "total_withdrawn": wr["amount"]},
@@ -351,19 +359,13 @@ async def review_withdrawal(wd_id: str, body: WithdrawalReview, request: Request
         await add_wallet_transaction(wr["user_id"], "WITHDRAWAL", wr["amount"], "PAID",
                                      description="Withdrawal paid", direction="debit")
     elif body.action == "reject":
-        new_status = "rejected"
         # return the held amount to available balance
         await db.wallets.update_one({"user_id": wr["user_id"]},
                                     {"$inc": {"available_balance": wr["amount"], "pending_balance": -wr["amount"]},
                                      "$set": {"updated_at": now_iso()}})
         await add_wallet_transaction(wr["user_id"], "WITHDRAWAL", wr["amount"], "REJECTED",
                                      description="Withdrawal rejected - amount returned", direction="credit")
-    else:
-        raise HTTPException(status_code=400, detail="Invalid action.")
 
-    await db.withdrawal_requests.update_one({"id": wd_id},
-                                            {"$set": {"status": new_status, "admin_note": body.note,
-                                                      "updated_at": now_iso()}})
     await create_notification(wr["user_id"], "withdrawal", f"Withdrawal {new_status}",
                               f"Your withdrawal of {sym}{int(wr['amount'])} is now {new_status}.",
                               f"निकासी {new_status}",
