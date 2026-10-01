@@ -2,7 +2,6 @@ import React, { useRef, useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { Mail, Phone, MapPin, LifeBuoy, Camera, Loader2, Trash2 } from "lucide-react";
-import { StatusBadge } from "@/components/StatusBadge";
 import { IdCard } from "@/components/IdCard";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/context/I18nContext";
@@ -85,7 +84,7 @@ export default function Profile() {
           </div>
           <div>
             <div className="font-display text-xl font-semibold text-ink">{user?.full_name}</div>
-            <div className="mt-1 flex flex-wrap items-center gap-2 text-sm"><span className="font-semibold text-forest" data-testid="profile-distributor-id">{user?.distributor_id}</span><StatusBadge status={user?.status} size="sm" />{rank && <span className="rounded-full bg-brand-50 px-2 py-0.5 text-xs font-semibold text-forest" data-testid="profile-rank">{rank.code} — {rank.current}</span>}</div>
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-sm"><span className="font-semibold text-forest" data-testid="profile-distributor-id">{user?.distributor_id}</span>{rank && <span className="rounded-full bg-brand-50 px-2 py-0.5 text-xs font-semibold text-forest" data-testid="profile-rank">Rank: {rank.code}</span>}</div>
             <div className="mt-2 flex items-center gap-3">
               <button onClick={onPick} className="text-xs font-medium text-brand hover:underline" data-testid="change-photo-link">{user?.photo ? "Change photo" : "Add photo"}</button>
               {user?.photo && <button onClick={removePhoto} className="inline-flex items-center gap-1 text-xs font-medium text-danger hover:underline" data-testid="remove-photo-link"><Trash2 size={12} /> Remove</button>}

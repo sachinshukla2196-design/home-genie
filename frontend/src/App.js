@@ -41,6 +41,7 @@ import AdminCommissions from "@/pages/admin/AdminCommissions";
 import AdminReports from "@/pages/admin/AdminReports";
 import AdminSettings from "@/pages/admin/AdminSettings";
 import AdminAuditLogs from "@/pages/admin/AdminAuditLogs";
+import Legal from "@/pages/Legal";
 
 function App() {
   return (
@@ -57,6 +58,7 @@ function App() {
                 <Route path="/register" element={<Register />} />
                 <Route path="/login-otp" element={<LoginOtp />} />
                 <Route path="/forgot" element={<ForgotPassword />} />
+                <Route path="/legal/:slug" element={<Legal />} />
                 <Route path="/payment/success" element={<ProtectedRoute><PaymentSuccess /></ProtectedRoute>} />
                 <Route path="/payment/cancel" element={<ProtectedRoute><PaymentCancel /></ProtectedRoute>} />
 

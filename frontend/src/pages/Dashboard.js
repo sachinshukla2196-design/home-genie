@@ -7,7 +7,6 @@ import {
 } from "lucide-react";
 import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 import { StatCard } from "@/components/StatCard";
-import { StatusBadge } from "@/components/StatusBadge";
 import { EmptyState } from "@/components/EmptyState";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -50,7 +49,6 @@ export default function Dashboard() {
           <h1 className="font-display text-2xl font-semibold text-ink">{t("dash.greeting")}, {user?.full_name?.split(" ")[0]}</h1>
           <div className="mt-1 flex items-center gap-2 text-sm text-muted2">
             <span className="font-semibold text-forest">{user?.distributor_id}</span>
-            <StatusBadge status={user?.status} size="sm" />
           </div>
         </div>
       </div>

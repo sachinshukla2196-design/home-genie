@@ -3,7 +3,6 @@ import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 import { Users, List, Network, Crown, Layers, ChevronDown, Copy, MessageCircle, Share2 } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
-import { StatusBadge } from "@/components/StatusBadge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/context/I18nContext";
@@ -12,7 +11,7 @@ import { API } from "@/lib/api";
 
 const money = (v) => `₹${Number(v || 0).toLocaleString("en-IN")}`;
 // User-facing rank/designation names by depth (backend keeps numeric levels internally).
-const RANK_NAMES = { 1: "Executive", 2: "Sr. Executive", 3: "Asst. Organizer", 4: "Organizer", 5: "Sr. Organizer", 6: "Manager", 7: "Sr. Manager", 8: "Area Manager", 9: "Sr. Area Manager" };
+
 const RANK_ABBR = { 1: "GD", 2: "BD", 3: "AD", 4: "CD", 5: "PD", 6: "MD", 7: "RD", 8: "DD", 9: "MDD" };
 
 export default function Team() {
@@ -65,7 +64,7 @@ export default function Team() {
       {hasTeam && (
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
           <SummaryCard label="Total Team" value={data.total} />
-          <SummaryCard label="Active (GREEN)" value={data.active} accent />
+          <SummaryCard label="Active" value={data.active} accent />
           <SummaryCard label="Total Income" value={money(data.total_income)} />
           <SummaryCard label="Ranks Reached" value={levels.filter((l) => l.count > 0).length} sub="of 8" />
         </div>
@@ -113,7 +112,7 @@ function LevelsView({ levels }) {
             >
               <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-forest font-display text-xs font-bold text-white">{RANK_ABBR[lvl.level] || lvl.level}</span>
               <div className="min-w-0 flex-1">
-                <div className="font-display text-base font-semibold text-ink">{RANK_NAMES[lvl.level] || `Rank ${lvl.level}`}</div>
+                <div className="font-display text-base font-semibold text-ink">{`Depth ${lvl.level}`}</div>
                 <div className="text-xs text-muted2">{lvl.count} member{lvl.count !== 1 ? "s" : ""} · {lvl.active} active</div>
               </div>
               <div className="text-right">
@@ -135,7 +134,6 @@ function LevelsView({ levels }) {
                           <div className="truncate text-sm font-medium text-ink">{m.full_name}</div>
                           <div className="text-xs text-forest">{m.distributor_id}</div>
                         </div>
-                        <StatusBadge status={m.status} size="sm" />
                         <div className="hidden text-right sm:block">
                           <div className="text-xs font-semibold text-brand">{money(m.income)}</div>
                           <div className="text-[10px] text-muted2">{m.downline_count ?? 0} downline</div>
@@ -189,9 +187,6 @@ function NodeCard({ node, index }) {
       <div className="mt-2 truncate text-sm font-semibold text-ink">{node.full_name}</div>
       <div className="text-xs font-medium text-forest">{node.distributor_id}</div>
       <div className="mt-2 flex items-center justify-center gap-1.5">
-        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${green ? "bg-brand-50 text-brand" : "bg-danger/10 text-danger"}`}>
-          <span className={`h-1.5 w-1.5 rounded-full ${green ? "bg-brand" : "bg-danger"}`} />{green ? "GREEN" : "RED"}
-        </span>
         {!node.isRoot && node.downline_count > 0 && (
           <span className="rounded-full bg-gold-light px-2 py-0.5 text-[10px] font-semibold text-gold">+{node.downline_count}</span>
         )}
@@ -217,7 +212,6 @@ function ListView({ members, t }) {
                 </div>
               </td>
               <td className="p-4 text-forest">{m.distributor_id}</td>
-              <td className="p-4"><StatusBadge status={m.status} size="sm" /></td>
               <td className="p-4 text-muted2">{m.downline_count ?? 0}</td>
               <td className="p-4 text-muted2">{[m.city, m.state].filter(Boolean).join(", ") || "—"}</td>
               <td className="p-4 text-muted2">{(m.joined_at || "").slice(0, 10)}</td>

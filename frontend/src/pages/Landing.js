@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
 import { API } from "@/lib/api";
+import { LEGAL_LINKS } from "@/pages/Legal";
 
 export default function Landing() {
   const { t, lang } = useI18n();
@@ -150,6 +151,9 @@ export default function Landing() {
       <footer className="border-t border-brand-50 bg-white py-8">
         <div className="mx-auto flex max-w-7xl flex-col items-center justify-between gap-4 px-4 text-sm text-muted2 sm:flex-row lg:px-8">
           <Logo size="sm" />
+          <nav className="flex flex-wrap justify-center gap-x-4 gap-y-1 text-xs" data-testid="legal-links">
+            {LEGAL_LINKS.map(([slug, label]) => <Link key={slug} to={`/legal/${slug}`} className="hover:text-forest hover:underline" data-testid={`legal-link-${slug}`}>{label}</Link>)}
+          </nav>
           <span>© {new Date().getFullYear()} {t("brand.full")}</span>
         </div>
       </footer>

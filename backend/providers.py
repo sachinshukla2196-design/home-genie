@@ -19,6 +19,7 @@ OTP_MAX_ATTEMPTS = int(os.environ.get("OTP_MAX_ATTEMPTS", "5"))
 OTP_RESEND_COOLDOWN = int(os.environ.get("OTP_RESEND_COOLDOWN", "60"))
 OTP_PEPPER = os.environ.get("OTP_PEPPER", "")
 
+MSG91_ENABLED = os.environ.get("MSG91_ENABLED", "false").strip().lower() == "true"
 MSG91_AUTH_KEY = os.environ.get("MSG91_AUTH_KEY", "")
 MSG91_SENDER_ID = os.environ.get("MSG91_SENDER_ID", "")
 MSG91_TEMPLATE_ID = os.environ.get("MSG91_TEMPLATE_ID", "")
@@ -26,7 +27,12 @@ MSG91_BASE_URL = os.environ.get("MSG91_BASE_URL", "https://control.msg91.com")
 
 
 def sms_configured() -> bool:
-    return bool(MSG91_AUTH_KEY and MSG91_SENDER_ID and MSG91_TEMPLATE_ID)
+    return MSG91_ENABLED and bool(MSG91_AUTH_KEY and MSG91_SENDER_ID and MSG91_TEMPLATE_ID)
+
+
+OTP_UNAVAILABLE = HTTPException(status_code=503, detail={
+    "code": "OTP_SERVICE_UNAVAILABLE",
+    "message": "OTP verification is temporarily unavailable. Please try again later."})
 
 
 def _normalize_mobile(m: str) -> str:
@@ -43,7 +49,7 @@ def _hash(code: str) -> str:
 async def _send_sms_otp(mobile: str, code: str) -> None:
     """Deliver OTP via MSG91 Flow API. Never logs the code or provider secrets."""
     if not sms_configured():
-        raise HTTPException(status_code=503, detail="OTP service is not configured. Please contact support.")
+        raise OTP_UNAVAILABLE
     payload = {
         "flow_id": MSG91_TEMPLATE_ID,
         "sender": MSG91_SENDER_ID,
@@ -65,7 +71,7 @@ async def _send_sms_otp(mobile: str, code: str) -> None:
 async def otp_create(identifier: str, purpose: str) -> dict:
     """Generate + store a hashed single-use OTP and deliver it via SMS. Returns NO code."""
     if not sms_configured():
-        raise HTTPException(status_code=503, detail="OTP service is not configured. Please contact support.")
+        raise OTP_UNAVAILABLE
     last = await db.otp_sessions.find_one({"identifier": identifier, "purpose": purpose}, sort=[("created_at", -1)])
     if last:
         try:
@@ -96,6 +102,8 @@ async def otp_create(identifier: str, purpose: str) -> dict:
 
 
 async def otp_verify(identifier: str, purpose: str, code: str) -> bool:
+    if not sms_configured():
+        raise OTP_UNAVAILABLE
     rec = await db.otp_sessions.find_one({"identifier": identifier, "purpose": purpose}, sort=[("created_at", -1)])
     if not rec:
         raise HTTPException(status_code=400, detail="Please request an OTP first.")

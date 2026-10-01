@@ -14,6 +14,7 @@ export function apiError(e, fallback = "Something went wrong. Please try again."
   if (d == null) return e?.message || fallback;
   if (typeof d === "string") return d;
   if (Array.isArray(d)) return d.map((x) => (x?.msg ? x.msg : JSON.stringify(x))).join(" ");
+  if (d?.message) return d.message;
   if (d?.msg) return d.msg;
   return fallback;
 }

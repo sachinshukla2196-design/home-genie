@@ -263,3 +263,13 @@ VERIFIED via curl: commission release→RELEASED, double release→400, hold→H
 ## Notes
 - Auth is JWT Bearer in localStorage (`anj_token`); CORS now explicit origin from env, credentials on.
 - Payment finalization is webhook-independent (status poll calls Stripe get_checkout_status) for preview reliability.
+
+## 2026-10-01 — Production publish prep (surgical)
+- Object storage (Emergent) for profile photos + product images: `backend/storage.py`, `POST /api/uploads/profile-photo`, `POST /api/admin/uploads/product-image`, `GET /api/files/{path}` (public, DB-gated). Old base64 images left as-is.
+- MSG91 gated by `MSG91_ENABLED=false` → all OTP send/verify return 503 `{code: OTP_SERVICE_UNAVAILABLE}`. No mock OTP. Enable later: MSG91_ENABLED=true + SENDER_ID + TEMPLATE_ID.
+- Rank display: codes only (GD..ZM) — `compute_rank` returns code for current/next; Team depth labels "Depth N".
+- RED/GREEN removed from user-facing UI (badges in AppLayout/Dashboard/Profile/Team/TreeView, i18n strings). Internal `status` red/green logic untouched. Admin UI still shows status.
+- Commission: activation orders now ALSO go through the 70% depth formula (per user rule 7). ₹100 reward unchanged (paid-activation only).
+- Legal pages: `/legal/{privacy,terms,refund-policy,shipping-policy,distributor-terms,contact}` + footer links.
+- CORS .env: anjaliherbal.life + preview. Production secret CORS_ORIGINS must be set by user (was `*`).
+- Verified via temp-data script (cleaned up): Tests A–L all PASS.

@@ -44,7 +44,7 @@ export default function PaymentSuccess() {
         {state === "paid" && (<>
           <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-brand-50"><CheckCircle2 className="text-brand" size={40} /></div>
           <h1 className="mt-5 font-display text-2xl font-semibold text-forest">Payment successful!</h1>
-          <p className="mt-2 text-muted2">Your order is confirmed and your invoice is ready. If this was a qualifying purchase, your account is now GREEN.</p>
+          <p className="mt-2 text-muted2">Your order is confirmed and your invoice is ready. If this was a qualifying purchase, your distributor account is now activated.</p>
           <div className="mt-7 flex flex-col gap-2">
             {orderId && <Button onClick={() => navigate(`/app/orders/${orderId}`)} className="rounded-full bg-forest hover:bg-brand" data-testid="view-invoice-btn">{t("order.invoice")} <ArrowRight size={16} className="ml-1.5" /></Button>}
             <Button onClick={() => navigate("/app/dashboard")} variant="outline" className="rounded-full border-forest/20 text-forest" data-testid="success-dashboard-btn">{t("nav.dashboard")}</Button>

@@ -33,11 +33,11 @@ def compute_rank(bv) -> dict:
         if bv < hi or nxt is None:
             span = (hi - lo) or 1
             prog = round(min(100.0, max(0.0, (bv - lo) / span * 100.0)), 1)
-            return {"code": code, "current": name, "current_bv": bv,
-                    "next_code": nxt[0] if nxt else None, "next": nxt[1] if nxt else None,
+            return {"code": code, "current": code, "current_bv": bv,
+                    "next_code": nxt[0] if nxt else None, "next": nxt[0] if nxt else None,
                     "next_bv": hi if nxt else None, "progress": prog, "is_max": nxt is None}
-    return {"code": RANK_TIERS[0][0], "current": RANK_TIERS[0][1], "current_bv": bv,
-            "next_code": RANK_TIERS[1][0], "next": RANK_TIERS[1][1],
+    return {"code": RANK_TIERS[0][0], "current": RANK_TIERS[0][0], "current_bv": bv,
+            "next_code": RANK_TIERS[1][0], "next": RANK_TIERS[1][0],
             "next_bv": RANK_TIERS[0][3], "progress": 0.0, "is_max": False}
 
 

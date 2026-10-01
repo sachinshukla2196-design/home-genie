@@ -8,7 +8,6 @@ import {
 import { Logo } from "@/components/Logo";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { StatusBadge } from "@/components/StatusBadge";
 import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
 import { useCart } from "@/context/CartContext";
@@ -103,7 +102,6 @@ export function AppLayout() {
             {user && (
               <div className="hidden sm:flex items-center gap-2">
                 <span className="text-sm font-semibold text-forest" data-testid="header-distributor-id">{user.distributor_id}</span>
-                <StatusBadge status={user.status} size="sm" />
               </div>
             )}
           </div>

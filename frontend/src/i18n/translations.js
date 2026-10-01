@@ -26,7 +26,7 @@ export const translations = {
     "landing.productsTitle": "Our Wellness Range", "landing.productsSub": "Authentic Ayurvedic products, crafted with heritage recipes.",
     "landing.oppTitle": "The Distributor Opportunity", "landing.oppSub": "Activate once, earn on every referral you empower.",
     "landing.step1": "Register free", "landing.step1d": "Create your account and get a unique Distributor ID instantly.",
-    "landing.step2": "Activate (GREEN)", "landing.step2d": "Purchase the qualifying starter kit to unlock full income.",
+    "landing.step2": "Activate", "landing.step2d": "Purchase the qualifying starter kit to unlock full income.",
     "landing.step3": "Refer & earn", "landing.step3d": "Share your link. Earn referral commission on each activation.",
     "landing.ctaTitle": "Ready to begin your Ayurveda journey?",
 
@@ -45,7 +45,7 @@ export const translations = {
     "auth.demoDistributor": "Distributor Demo",
     "auth.demoAdmin": "Admin Demo",
 
-    "status.red": "RED ID", "status.green": "GREEN ID",
+    "status.red": "Activation Pending", "status.green": "Active",
     "status.redDesc": "Registered — not activated yet", "status.greenDesc": "Activated distributor",
 
     "dash.title": "Dashboard", "dash.greeting": "Namaste",
@@ -71,7 +71,7 @@ export const translations = {
     "referral.title": "Your Referral", "referral.link": "Your Referral Link",
     "referral.code": "Referral Code", "referral.qr": "Referral QR Code",
     "referral.copied": "Copied to clipboard", "referral.eligibleNote": "You earn commission on each activation.",
-    "referral.lockedNote": "Activate your account (GREEN) to unlock referral income.",
+    "referral.lockedNote": "Activate your account to unlock referral income.",
 
     "kyc.title": "KYC Verification", "kyc.pan": "PAN Number", "kyc.aadhaar": "Aadhaar Number",
     "kyc.holder": "Account Holder Name", "kyc.bank": "Bank Account Number",
@@ -126,7 +126,7 @@ export const translations = {
     "landing.productsTitle": "हमारी वेलनेस रेंज", "landing.productsSub": "प्रामाणिक आयुर्वेदिक उत्पाद, पारंपरिक व्यंजनों से बने।",
     "landing.oppTitle": "डिस्ट्रीब्यूटर अवसर", "landing.oppSub": "एक बार सक्रिय करें, हर रेफ़रल पर कमाएँ।",
     "landing.step1": "मुफ़्त रजिस्टर", "landing.step1d": "अपना खाता बनाएं और तुरंत यूनिक डिस्ट्रीब्यूटर आईडी पाएं।",
-    "landing.step2": "सक्रिय करें (ग्रीन)", "landing.step2d": "पूरी आय अनलॉक करने हेतु स्टार्टर किट खरीदें।",
+    "landing.step2": "सक्रिय करें", "landing.step2d": "पूरी आय अनलॉक करने हेतु स्टार्टर किट खरीदें।",
     "landing.step3": "रेफ़र करें और कमाएँ", "landing.step3d": "अपना लिंक शेयर करें। हर सक्रियण पर रेफ़रल कमीशन कमाएँ।",
     "landing.ctaTitle": "अपनी आयुर्वेद यात्रा शुरू करने के लिए तैयार हैं?",
 
@@ -145,7 +145,7 @@ export const translations = {
     "auth.demoDistributor": "डिस्ट्रीब्यूटर डेमो",
     "auth.demoAdmin": "एडमिन डेमो",
 
-    "status.red": "रेड आईडी", "status.green": "ग्रीन आईडी",
+    "status.red": "सक्रियण लंबित", "status.green": "सक्रिय",
     "status.redDesc": "रजिस्टर्ड — अभी सक्रिय नहीं", "status.greenDesc": "सक्रिय डिस्ट्रीब्यूटर",
 
     "dash.title": "डैशबोर्ड", "dash.greeting": "नमस्ते",
@@ -171,7 +171,7 @@ export const translations = {
     "referral.title": "आपका रेफ़रल", "referral.link": "आपका रेफ़रल लिंक",
     "referral.code": "रेफ़रल कोड", "referral.qr": "रेफ़रल क्यूआर कोड",
     "referral.copied": "क्लिपबोर्ड पर कॉपी किया गया", "referral.eligibleNote": "आप हर सक्रियण पर कमीशन कमाते हैं।",
-    "referral.lockedNote": "रेफ़रल आय अनलॉक करने हेतु अपना खाता सक्रिय करें (ग्रीन)।",
+    "referral.lockedNote": "रेफ़रल आय अनलॉक करने हेतु अपना खाता सक्रिय करें।",
 
     "kyc.title": "केवाईसी सत्यापन", "kyc.pan": "पैन नंबर", "kyc.aadhaar": "आधार नंबर",
     "kyc.holder": "खाताधारक का नाम", "kyc.bank": "बैंक खाता संख्या",

@@ -1,0 +1,30 @@
+{
+  "summary": "Frontend E2E of Emergent Object Storage image uploads (profile photos + admin product images) plus 3 light backend regression curls. All flows PASS. Admin flow: /admin-secure-login succeeded with rotated creds -> /admin/products -> Add Product dialog -> uploaded 1x1 PNG via data-testid=pf-image-upload. 'Uploading…' (pf-image-uploading) rendered, then pf-image-preview src became https://.../api/files/anjali-herbal-life/products/<admin-id>/<uuid>.png. Saved product (TEST-UPL-*), then verified the same URL renders as an <img> on the public /products page. Cleaned up with DELETE /api/admin/products/{id}/permanent -> 200. Distributor flow: Used admin POST /api/admin/users/{ANJ000215_id}/reset-password to set Test@1234, logged in at /login, navigated to /app/profile, uploaded PNG via data-testid=profile-photo-input. Avatar <img> src became https://.../api/files/anjali-herbal-life/profile/<user-id>/<uuid>.jpg (not data:). Remove photo via data-testid=remove-photo-link -> initials fallback restored and 'Photo removed' toast visible. Backend curls: POST /api/uploads/profile-photo (no auth) -> 401; POST /api/admin/uploads/product-image with text/plain file (admin auth) -> 400 'Only JPG, PNG or WebP images are allowed.'; GET /api/files/anjali-herbal-life/products/nonexistent/abc.jpg -> 404 'File not found'. All as expected.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/app/profile after Remove photo", "issues": ["Minor React console warning: 'An empty string (\"\") was passed to the src attribute' on an <img>. Likely one of the avatar-adjacent components (IdCard QR or similar) renders <img src=\"\"> when user.photo is cleared. Harmless but should pass null/undefined instead."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_13.json"
+  ],
+  "action_items": [
+    "Optional (low priority): Avoid rendering <img src=\"\"> when distributor has no photo — pass null or conditionally render to silence React warning."
+  ],
+  "critical_code_review_comments": [
+    "storage.py:57-59 — _public_url derives scheme by whether host starts with 'localhost'/'127.0.0.1'. Works behind Kubernetes ingress but will yield wrong scheme if x-forwarded-proto differs from the heuristic. Prefer request.headers.get('x-forwarded-proto') with https fallback.",
+    "storage.py init_storage caches _storage_key as module-level global; concurrent first-request storms could call /init multiple times. Low impact (idempotent on backend) but a lock/single-flight would be cleaner.",
+    "Profile.js resizeImage always re-encodes as image/jpeg at quality 0.85 — PNG/WebP transparency is lost. Acceptable for avatars but note the output extension stays .jpg regardless of input."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (3/3 regression curls)", "frontend": "100% (admin product upload + distributor profile upload + remove)"},
+  "test_credentials": "Admin: admin / fFiiKDF2TBZtiVrwcu / 79258486 at /admin-secure-login. Distributor: ANJ000215 / Test@1234 (password reset by test via POST /api/admin/users/{id}/reset-password).",
+  "seed_data_creation": "Temporarily created a product TEST-UPL-<ts> with an uploaded image URL for /products visibility check, then permanently deleted via DELETE /api/admin/products/{id}/permanent. ANJ000215 password was reset to Test@1234 and left as-is (per request: use admin reset-password to enable login).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Emergent Object Storage image upload integration is fully working end-to-end for both profile photos and product images. Uploaded files are served via /api/files/<storage_path> with proper 404 on unknown paths. 5MB cap + MIME whitelist (jpg/png/webp) enforced server-side. Only cosmetic nit is a React empty-src warning after Remove photo.",
+  "rca_of_the_issue": "n/a — no bugs. All acceptance criteria for both flows met."
+}

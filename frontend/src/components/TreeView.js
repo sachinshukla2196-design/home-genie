@@ -13,12 +13,10 @@ export function TreeView({ tree, testid }) {
   return (
     <div data-testid={testid} className="overflow-x-auto">
       {rows.map((n) => {
-        const green = n.status === "green";
         return (
           <div key={n.distributor_id} style={{ marginLeft: n.depth * 18 }} className="flex items-center gap-2 border-l border-brand-50 py-1 pl-3">
             <span className="font-mono text-sm font-semibold text-forest">{n.distributor_id}</span>
             {n.name ? <span className="text-xs text-muted2">{n.name}</span> : null}
-            {n.status ? <span className={`rounded-full px-1.5 py-0.5 text-[9px] font-bold ${green ? "bg-brand-50 text-brand" : "bg-danger/10 text-danger"}`}>{n.status.toUpperCase()}</span> : null}
           </div>
         );
       })}

@@ -372,7 +372,7 @@ async def _process_paid_order(session_id: str, request: Request = None):
             "activation_date": now_iso(), "created_at": now_iso(),
         })
         await db.wallets.update_one({"user_id": user["id"]}, {"$set": {"active": True, "updated_at": now_iso()}})
-        await create_notification(user["id"], "activation", "Your account is now GREEN",
+        await create_notification(user["id"], "activation", "Your account is now active",
                                   "Congratulations! Your distributor account is activated. Income & referrals unlocked.",
                                   "आपका खाता अब ग्रीन है",
                                   "बधाई हो! आपका डिस्ट्रीब्यूटर खाता सक्रिय हो गया है। आय और रेफ़रल अनलॉक।")
@@ -429,9 +429,8 @@ async def _process_paid_order(session_id: str, request: Request = None):
 # Base = product value EXCLUDING GST. Total pool = 70%.
 # SEPARATE from the ₹100 direct referral reward — the two never mix.
 LEVEL_COMMISSION_PCT = {1: 20.0, 2: 12.0, 3: 10.0, 4: 8.0, 5: 6.0, 6: 5.0, 7: 4.0, 8: 3.0, 9: 2.0}
-# User-facing rank/designation names by depth (backend keeps numeric levels internally).
-RANK_NAME = {1: "Executive", 2: "Sr. Executive", 3: "Asst. Organizer", 4: "Organizer",
-             5: "Sr. Organizer", 6: "Manager", 7: "Sr. Manager", 8: "Area Manager", 9: "Sr. Area Manager"}
+# Depth labels used in ledger descriptions (depth is positional, NOT rank).
+RANK_NAME = {n: f"Depth {n}" for n in range(1, 10)}
 
 
 async def _distribute_purchase_commission(order, buyer, settings, request=None):
@@ -441,10 +440,7 @@ async def _distribute_purchase_commission(order, buyer, settings, request=None):
     - Only GREEN/active uplines are paid; skipped uplines are NOT redistributed.
     - Idempotent: an order is claimed atomically so retries/refresh never duplicate.
     """
-    # Activation orders pay ONLY the ₹100 direct referral reward (handled elsewhere).
-    # Depth-based TEAM SALES commission applies to genuine PRODUCT purchases only.
-    if order.get("is_activation_order"):
-        return
+    # Activation orders use the SAME formula on their product value (excl GST); the ₹100 reward is separate.
     claim = await db.orders.update_one(
         {"id": order["id"], "purchase_commission_paid": {"$ne": True}},
         {"$set": {"purchase_commission_paid": True, "updated_at": now_iso()}},
