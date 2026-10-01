@@ -55,7 +55,8 @@ app.include_router(wallet_routes.router)
 app.include_router(admin_routes.router)
 app.include_router(storage.router)
 
-_cors = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip() and o.strip() != "*"]
+_cors_raw = os.environ.get("CORS_ALLOWED_ORIGINS") or os.environ.get("CORS_ORIGINS", "")
+_cors = [o.strip() for o in _cors_raw.split(",") if o.strip() and o.strip() != "*"]
 if not _cors:
     raise RuntimeError("CORS_ORIGINS is not configured with explicit production origin(s).")
 app.add_middleware(
