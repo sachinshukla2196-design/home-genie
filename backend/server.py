@@ -11,6 +11,7 @@ import auth_routes
 import shop_routes
 import wallet_routes
 import admin_routes
+import storage
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
@@ -52,6 +53,7 @@ app.include_router(auth_routes.router)
 app.include_router(shop_routes.router)
 app.include_router(wallet_routes.router)
 app.include_router(admin_routes.router)
+app.include_router(storage.router)
 
 _cors = [o.strip() for o in os.environ.get("CORS_ORIGINS", "").split(",") if o.strip() and o.strip() != "*"]
 if not _cors:
@@ -84,6 +86,15 @@ async def startup():
     # can never crash the process before /health can respond. The pod
     # becomes ready immediately; init retries until MongoDB is reachable.
     asyncio.create_task(_run_db_init_with_retry())
+    asyncio.create_task(_init_storage())
+
+
+async def _init_storage():
+    try:
+        await asyncio.to_thread(storage.init_storage)
+        logger.info("Object storage initialised")
+    except Exception as e:
+        logger.error("Object storage init failed: %s", e)
 
 
 async def _run_db_init_with_retry():

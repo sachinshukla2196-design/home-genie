@@ -19,6 +19,7 @@ export default function AdminProducts() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(EMPTY);
+  const [imgUploading, setImgUploading] = useState(false);
   const money = (v) => `₹${Number(v).toLocaleString("en-IN")}`;
 
   const load = () => API.get("/products?active=false").then(({ data }) => setProducts(data)).catch(() => setProducts([]));
@@ -39,13 +40,20 @@ export default function AdminProducts() {
   const del = async (p) => { if (!window.confirm(`Permanently delete "${p.name}"? This cannot be undone.`)) return; try { await API.delete(`/admin/products/${p.id}/permanent`); toast.success("Product deleted"); load(); } catch (err) { toast.error(apiError(err)); } };
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target?.value ?? e }));
 
-  const onImageFile = (e) => {
+  const onImageFile = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 2_000_000) { toast.error("Image too large. Please choose an image under 2MB."); return; }
-    const reader = new FileReader();
-    reader.onload = () => setForm((f) => ({ ...f, images: [reader.result] }));
-    reader.readAsDataURL(file);
+    if (!["image/jpeg", "image/png", "image/webp"].includes(file.type)) { toast.error("Only JPG, PNG or WebP images are allowed."); return; }
+    if (file.size > 5 * 1024 * 1024) { toast.error("Image too large. Please choose an image under 5MB."); return; }
+    setImgUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const { data } = await API.post("/admin/uploads/product-image", fd);
+      setForm((f) => ({ ...f, images: [data.url] }));
+      toast.success("Image uploaded");
+    } catch (err) { toast.error(apiError(err)); }
+    finally { setImgUploading(false); e.target.value = ""; }
   };
 
   if (!products) return <Skeleton className="h-96 rounded-2xl" />;
@@ -96,7 +104,8 @@ export default function AdminProducts() {
                   ? <img src={form.images[0]} alt="" className="h-16 w-16 rounded-lg border border-brand-50 object-cover" data-testid="pf-image-preview" />
                   : <div className="flex h-16 w-16 items-center justify-center rounded-lg border border-dashed border-brand-50 text-[10px] text-muted2">No image</div>}
                 <div className="flex-1 space-y-2">
-                  <input type="file" accept="image/*" onChange={onImageFile} className="block w-full text-xs text-muted2 file:mr-2 file:cursor-pointer file:rounded-full file:border-0 file:bg-forest file:px-3 file:py-1.5 file:text-white hover:file:bg-brand" data-testid="pf-image-upload" />
+                  <input type="file" accept="image/jpeg,image/png,image/webp" disabled={imgUploading} onChange={onImageFile} className="block w-full text-xs text-muted2 file:mr-2 file:cursor-pointer file:rounded-full file:border-0 file:bg-forest file:px-3 file:py-1.5 file:text-white hover:file:bg-brand disabled:opacity-50" data-testid="pf-image-upload" />
+                  {imgUploading && <p className="text-xs text-muted2" data-testid="pf-image-uploading">Uploading…</p>}
                   <Input placeholder="…or paste an image URL" value={form.images[0]?.startsWith("data:") ? "" : (form.images[0] || "")} onChange={(e) => setForm((f) => ({ ...f, images: [e.target.value] }))} className="h-9" data-testid="pf-image-url" />
                 </div>
               </div>

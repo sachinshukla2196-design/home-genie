@@ -21,7 +21,7 @@ function resizeImage(file, max = 400) {
         const c = document.createElement("canvas");
         c.width = width; c.height = height;
         c.getContext("2d").drawImage(img, 0, 0, width, height);
-        resolve(c.toDataURL("image/jpeg", 0.85));
+        c.toBlob((blob) => (blob ? resolve(blob) : reject(new Error("resize failed"))), "image/jpeg", 0.85);
       };
       img.onerror = reject;
       img.src = reader.result;
@@ -49,8 +49,11 @@ export default function Profile() {
     if (file.size > 10 * 1024 * 1024) { toast.error("Please choose an image under 10MB."); return; }
     setUploading(true);
     try {
-      const dataUrl = await resizeImage(file, 400);
-      await API.put("/auth/profile/photo", { photo: dataUrl });
+      const blob = await resizeImage(file, 400);
+      const fd = new FormData();
+      fd.append("file", blob, "photo.jpg");
+      const { data } = await API.post("/uploads/profile-photo", fd);
+      await API.put("/auth/profile/photo", { photo: data.url });
       await refresh();
       toast.success("Profile photo updated");
     } catch (err) { toast.error(apiError(err)); }
