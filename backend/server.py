@@ -72,7 +72,7 @@ PRODUCT_SEED = [
     {"sku": "ANJ-STARTER", "name": "Distributor Starter Kit", "name_hi": "डिस्ट्रीब्यूटर स्टार्टर किट",
      "description": "Official activation kit with a curated set of Ayurvedic wellness products. Qualifying purchase to activate your distributor account.",
      "description_hi": "आधिकारिक सक्रियण किट, चुनिंदा आयुर्वेदिक वेलनेस उत्पादों के साथ। डिस्ट्रीब्यूटर खाता सक्रिय करने हेतु योग्य खरीद।",
-     "images": ["https://images.pexels.com/photos/7615621/pexels-photo-7615621.jpeg"],
+     "images": ["https://customer-assets-jt897jd0.emergentagent.net/job_anjali-ayurveda-mvp/artifacts/0fcbr7nv_Screenshot_2026_1003_024227.jpg"],
      "mrp": 1800.0, "selling_price": 1500.0, "gst_percent": 5.0, "stock": 999,
      "category": "Starter Kit", "is_active": True, "is_activation_product": True},
 ]
