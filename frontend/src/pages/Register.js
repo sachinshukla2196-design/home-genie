@@ -18,11 +18,47 @@ export default function Register() {
   const [params] = useSearchParams();
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
+  const [pinLookup, setPinLookup] = useState(false);
   const [form, setForm] = useState({
     full_name: "", mobile: "", email: "", password: "", confirm_password: "",
     sponsor_id: params.get("ref") || "", aadhaar_number: "", address: "", state: "", city: "", pincode: "",
   });
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target?.value ?? e }));
+
+  const cityOptions = Array.from(new Set([
+    ...(form.city ? [form.city] : []),
+    ...(CITIES[form.state] || []),
+    "Other",
+  ]));
+
+  const matchState = (name) => {
+    if (!name) return "";
+    const norm = (s) => s.toLowerCase().replace(/[^a-z]/g, "");
+    return STATES.find((s) => norm(s) === norm(name)) || "";
+  };
+
+  const lookupPincode = async (pin) => {
+    const code = pin.trim();
+    if (!/^\d{6}$/.test(code)) return;
+    setPinLookup(true);
+    try {
+      const res = await fetch(`https://api.postalpincode.in/pincode/${code}`);
+      const json = await res.json();
+      const po = json?.[0]?.PostOffice;
+      if (!po || !po.length) {
+        toast.error("No location found for this pincode. Please select manually.");
+        return;
+      }
+      const st = matchState(po[0].State);
+      const district = po[0].District || "";
+      setForm((f) => ({ ...f, state: st || f.state, city: district || f.city }));
+      if (st) toast.success(`Location detected: ${district}, ${st}`);
+    } catch {
+      toast.error("Could not look up pincode. Please select state and city manually.");
+    } finally {
+      setPinLookup(false);
+    }
+  };
 
   const submit = async (e) => {
     e.preventDefault();
@@ -82,6 +118,23 @@ export default function Register() {
               <Field label={`${t("auth.address")} (optional)`} value={form.address} onChange={set("address")} testid="reg-address" />
               <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">
                 <div>
+                  <Label className="text-sm text-ink">{t("auth.pincode")} *</Label>
+                  <Input
+                    value={form.pincode}
+                    onChange={(e) => {
+                      const v = e.target.value.replace(/\D/g, "").slice(0, 6);
+                      setForm((f) => ({ ...f, pincode: v }));
+                      if (v.length === 6) lookupPincode(v);
+                    }}
+                    inputMode="numeric"
+                    maxLength={6}
+                    required
+                    className="mt-1.5 h-11 rounded-lg focus-visible:ring-brand"
+                    data-testid="reg-pincode"
+                  />
+                  <p className="mt-1 text-xs text-muted2">{pinLookup ? "Detecting location…" : "State & city auto-fill from pincode"}</p>
+                </div>
+                <div>
                   <Label className="text-sm text-ink">{t("auth.state")} *</Label>
                   <Select value={form.state} onValueChange={(v) => setForm((f) => ({ ...f, state: v, city: "" }))}>
                     <SelectTrigger className="mt-1.5 h-11 rounded-lg" data-testid="reg-state"><SelectValue placeholder="Select" /></SelectTrigger>
@@ -90,12 +143,19 @@ export default function Register() {
                 </div>
                 <div>
                   <Label className="text-sm text-ink">{t("auth.city")} *</Label>
-                  <Select value={form.city} onValueChange={(v) => setForm((f) => ({ ...f, city: v }))} disabled={!form.state}>
-                    <SelectTrigger className="mt-1.5 h-11 rounded-lg" data-testid="reg-city"><SelectValue placeholder={form.state ? "Select" : "State first"} /></SelectTrigger>
-                    <SelectContent className="max-h-64">{[...(CITIES[form.state] || []), "Other"].map((c) => <SelectItem key={c} value={c}>{c}</SelectItem>)}</SelectContent>
-                  </Select>
+                  <Input
+                    list="reg-city-options"
+                    value={form.city}
+                    onChange={set("city")}
+                    disabled={!form.state}
+                    placeholder={form.state ? "Select or type" : "State first"}
+                    className="mt-1.5 h-11 rounded-lg focus-visible:ring-brand"
+                    data-testid="reg-city"
+                  />
+                  <datalist id="reg-city-options">
+                    {cityOptions.map((c) => <option key={c} value={c} />)}
+                  </datalist>
                 </div>
-                <Field label={`${t("auth.pincode")} *`} value={form.pincode} onChange={set("pincode")} required testid="reg-pincode" />
               </div>
               <Button type="submit" disabled={loading} className="h-11 w-full rounded-full bg-forest hover:bg-brand" data-testid="reg-submit">
                 {loading ? t("common.loading") : "Submit Registration Request"}
