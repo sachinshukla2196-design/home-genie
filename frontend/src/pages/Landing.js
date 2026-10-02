@@ -129,11 +129,15 @@ export default function Landing() {
                 </div>
               </div>
             </div>
-            <motion.div className="absolute -bottom-5 -left-5 rounded-2xl border border-brand-50 bg-white p-4 shadow-soft"
+            <motion.button
+              type="button"
+              onClick={() => navigate("/register")}
+              data-testid="refer-earn-badge"
+              className="absolute -bottom-4 -left-4 cursor-pointer rounded-xl border border-brand-50 bg-white p-2.5 text-left shadow-soft transition-shadow hover:shadow-lift"
               animate={{ y: [0, -8, 0] }} transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}>
-              <div className="text-xs font-semibold uppercase tracking-wide text-muted2">{t("landing.step3")}</div>
-              <div className="mt-1 font-display text-2xl font-semibold text-forest">{sym}{settings.referral_commission} <span className="text-sm font-normal text-muted2">/ activation</span></div>
-            </motion.div>
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-muted2">{t("landing.step3")}</div>
+              <div className="mt-0.5 font-display text-lg font-semibold text-forest">{sym}{settings.referral_commission} <span className="text-xs font-normal text-muted2">/ activation</span></div>
+            </motion.button>
           </motion.div>
         </div>
       </section>
