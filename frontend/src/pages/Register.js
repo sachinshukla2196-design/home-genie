@@ -19,6 +19,7 @@ export default function Register() {
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
   const [pinLookup, setPinLookup] = useState(false);
+  const [pinNotice, setPinNotice] = useState("");
   const [form, setForm] = useState({
     full_name: "", mobile: "", email: "", password: "", confirm_password: "",
     sponsor_id: params.get("ref") || "", aadhaar_number: "", address: "", state: "", city: "", pincode: "",
@@ -41,20 +42,20 @@ export default function Register() {
     const code = pin.trim();
     if (!/^\d{6}$/.test(code)) return;
     setPinLookup(true);
+    setPinNotice("");
     try {
       const res = await fetch(`https://api.postalpincode.in/pincode/${code}`);
       const json = await res.json();
       const po = json?.[0]?.PostOffice;
       if (!po || !po.length) {
-        toast.error("No location found for this pincode. Please select manually.");
+        setPinNotice("We couldn't find this pincode. Please pick your state and city manually.");
         return;
       }
       const st = matchState(po[0].State);
       const district = po[0].District || "";
       setForm((f) => ({ ...f, state: st || f.state, city: district || f.city }));
-      if (st) toast.success(`Location detected: ${district}, ${st}`);
     } catch {
-      toast.error("Could not look up pincode. Please select state and city manually.");
+      setPinNotice("Couldn't look up the pincode right now. Please pick your state and city manually.");
     } finally {
       setPinLookup(false);
     }
@@ -124,15 +125,18 @@ export default function Register() {
                     onChange={(e) => {
                       const v = e.target.value.replace(/\D/g, "").slice(0, 6);
                       setForm((f) => ({ ...f, pincode: v }));
+                      setPinNotice("");
                       if (v.length === 6) lookupPincode(v);
                     }}
                     inputMode="numeric"
                     maxLength={6}
                     required
-                    className="mt-1.5 h-11 rounded-lg focus-visible:ring-brand"
+                    className={`mt-1.5 h-11 rounded-lg focus-visible:ring-brand ${pinNotice ? "border-amber-400" : ""}`}
                     data-testid="reg-pincode"
                   />
-                  <p className="mt-1 text-xs text-muted2">{pinLookup ? "Detecting location…" : "State & city auto-fill from pincode"}</p>
+                  <p className={`mt-1 text-xs ${pinNotice ? "text-amber-600" : "text-muted2"}`} data-testid="reg-pincode-notice">
+                    {pinNotice || (pinLookup ? "Detecting location…" : "State & city auto-fill from pincode")}
+                  </p>
                 </div>
                 <div>
                   <Label className="text-sm text-ink">{t("auth.state")} *</Label>
