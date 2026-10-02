@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
-import { ArrowRight, ChevronLeft, ChevronRight } from "lucide-react";
+import { Leaf, ShieldCheck, TrendingUp, ArrowRight, Sparkles } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -32,7 +32,6 @@ export default function Landing() {
   const sym = settings.currency_symbol || "₹";
 
   const [slide, setSlide] = useState(0);
-  const go = (n) => setSlide((s) => (s + n + BANNERS.length) % BANNERS.length);
   useEffect(() => {
     const id = setInterval(() => setSlide((s) => (s + 1) % BANNERS.length), 5500);
     return () => clearInterval(id);
@@ -58,64 +57,84 @@ export default function Landing() {
         </div>
       </header>
 
-      {/* Hero slider */}
-      <section className="relative w-full overflow-hidden" data-testid="hero-slider">
-        <div className="relative w-full aspect-[16/9] max-h-[82vh] bg-[#f4f7ef]">
-          {BANNERS.map((src, i) => (
-            <button
-              key={i}
-              type="button"
-              onClick={() => navigate("/register")}
-              aria-hidden={i !== slide}
-              tabIndex={i === slide ? 0 : -1}
-              aria-label={`Anjali Herbal Life banner ${i + 1} — join now`}
-              className="absolute inset-0 block h-full w-full cursor-pointer border-0 bg-transparent p-0 transition-opacity duration-1000 ease-in-out"
-              style={{ opacity: i === slide ? 1 : 0, pointerEvents: i === slide ? "auto" : "none" }}
-              data-testid={`hero-slide-${i}`}
-            >
-              <img
-                src={src}
-                alt={`Anjali Herbal Life banner ${i + 1}`}
-                className="h-full w-full object-contain"
-                loading={i === 0 ? "eager" : "lazy"}
-                fetchpriority={i === 0 ? "high" : "low"}
-                decoding="async"
-                draggable={false}
-              />
-            </button>
-          ))}
-
-          <button
-            type="button"
-            onClick={() => go(-1)}
-            aria-label="Previous banner"
-            data-testid="hero-prev"
-            className="absolute left-3 top-1/2 z-10 -translate-y-1/2 rounded-full bg-white/70 p-2 text-forest shadow-soft backdrop-blur-sm transition hover:bg-white sm:left-5"
-          >
-            <ChevronLeft size={22} />
-          </button>
-          <button
-            type="button"
-            onClick={() => go(1)}
-            aria-label="Next banner"
-            data-testid="hero-next"
-            className="absolute right-3 top-1/2 z-10 -translate-y-1/2 rounded-full bg-white/70 p-2 text-forest shadow-soft backdrop-blur-sm transition hover:bg-white sm:right-5"
-          >
-            <ChevronRight size={22} />
-          </button>
-
-          <div className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 gap-2 sm:bottom-5">
-            {BANNERS.map((_, i) => (
-              <button
-                key={i}
-                type="button"
-                onClick={() => setSlide(i)}
-                aria-label={`Go to banner ${i + 1}`}
-                data-testid={`hero-dot-${i}`}
-                className={`h-2.5 rounded-full transition-all ${i === slide ? "w-7 bg-forest" : "w-2.5 bg-forest/40 hover:bg-forest/60"}`}
-              />
-            ))}
-          </div>
+      {/* Hero */}
+      <section className="relative overflow-hidden">
+        <div className="absolute inset-0 -z-10">
+          <img src="https://images.pexels.com/photos/4046683/pexels-photo-4046683.jpeg" alt="" className="h-full w-full object-cover opacity-[0.08]" />
+        </div>
+        <motion.div aria-hidden className="pointer-events-none absolute -right-24 -top-24 -z-10 h-96 w-96 rounded-full bg-gold/20 blur-3xl"
+          animate={{ scale: [1, 1.15, 1], opacity: [0.35, 0.55, 0.35] }} transition={{ duration: 9, repeat: Infinity, ease: "easeInOut" }} />
+        <motion.div aria-hidden className="pointer-events-none absolute -left-32 bottom-0 -z-10 h-96 w-96 rounded-full bg-brand/20 blur-3xl"
+          animate={{ scale: [1.1, 1, 1.1], opacity: [0.3, 0.5, 0.3] }} transition={{ duration: 11, repeat: Infinity, ease: "easeInOut" }} />
+        <div className="mx-auto grid max-w-7xl items-center gap-12 px-4 py-16 lg:grid-cols-2 lg:px-8 lg:py-24">
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6 }}>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-gold-light px-3 py-1 text-xs font-semibold text-gold">
+              <Sparkles size={13} /> {t("brand.tagline")}
+            </span>
+            <h1 className={`mt-5 text-4xl font-semibold tracking-tight text-forest sm:text-5xl lg:text-6xl ${lang === "hi" ? "font-hindi" : "font-display"}`}>
+              {t("landing.heroTitle")}
+            </h1>
+            <p className="mt-5 max-w-xl text-base leading-relaxed text-muted2">{t("landing.heroSub")}</p>
+            <div className="mt-8 flex flex-wrap gap-3">
+              <Button onClick={() => navigate("/register")} size="lg" className="group rounded-full btn-grad px-7" data-testid="hero-register-btn">
+                {t("cta.getStarted")} <ArrowRight size={17} className="ml-1.5 transition-transform group-hover:translate-x-1" />
+              </Button>
+              <Button onClick={() => navigate("/login")} size="lg" variant="outline" className="rounded-full border-forest/20 px-7 text-forest hover:bg-brand-50" data-testid="hero-login-btn">{t("cta.login")}</Button>
+            </div>
+            <div className="mt-10 flex flex-wrap gap-6">
+              {[["landing.trust1", Leaf], ["landing.trust2", ShieldCheck], ["landing.trust3", TrendingUp]].map(([k, Icon]) => (
+                <div key={k} className="flex items-center gap-2 text-sm font-medium text-forest">
+                  <Icon size={17} className="text-gold" /> {t(k)}
+                </div>
+              ))}
+            </div>
+          </motion.div>
+          <motion.div initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.6, delay: 0.1 }} className="relative">
+            <div className="relative overflow-hidden rounded-3xl border border-brand-50 bg-[#f4f7ef] shadow-lift" data-testid="hero-slider">
+              <div className="relative aspect-[3/2] w-full">
+                {BANNERS.map((src, i) => (
+                  <button
+                    key={i}
+                    type="button"
+                    onClick={() => navigate("/register")}
+                    aria-hidden={i !== slide}
+                    tabIndex={i === slide ? 0 : -1}
+                    aria-label={`Anjali Herbal Life banner ${i + 1} — join now`}
+                    className="absolute inset-0 block h-full w-full cursor-pointer border-0 bg-transparent p-0 transition-opacity duration-1000 ease-in-out"
+                    style={{ opacity: i === slide ? 1 : 0, pointerEvents: i === slide ? "auto" : "none" }}
+                    data-testid={`hero-slide-${i}`}
+                  >
+                    <img
+                      src={src}
+                      alt={`Anjali Herbal Life banner ${i + 1}`}
+                      className="h-full w-full object-contain"
+                      loading={i === 0 ? "eager" : "lazy"}
+                      fetchpriority={i === 0 ? "high" : "low"}
+                      decoding="async"
+                      draggable={false}
+                    />
+                  </button>
+                ))}
+                <div className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 gap-2">
+                  {BANNERS.map((_, i) => (
+                    <button
+                      key={i}
+                      type="button"
+                      onClick={() => setSlide(i)}
+                      aria-label={`Go to banner ${i + 1}`}
+                      data-testid={`hero-dot-${i}`}
+                      className={`h-2.5 rounded-full transition-all ${i === slide ? "w-7 bg-forest" : "w-2.5 bg-forest/40 hover:bg-forest/60"}`}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+            <motion.div className="absolute -bottom-5 -left-5 rounded-2xl border border-brand-50 bg-white p-4 shadow-soft"
+              animate={{ y: [0, -8, 0] }} transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}>
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted2">{t("landing.step3")}</div>
+              <div className="mt-1 font-display text-2xl font-semibold text-forest">{sym}{settings.referral_commission} <span className="text-sm font-normal text-muted2">/ activation</span></div>
+            </motion.div>
+          </motion.div>
         </div>
       </section>
 
