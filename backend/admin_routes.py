@@ -17,6 +17,27 @@ from core import (db, now_iso, new_id, require_admin, get_settings,
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
+def _mask_pan(p: str) -> str:
+    p = str(p or "").strip().upper()
+    if len(p) < 6:
+        return "*" * len(p)
+    return "XXXXX" + p[5:9] + "X"  # ABCDE1234F -> XXXXX1234X
+
+
+def _mask_acct(a: str) -> str:
+    a = str(a or "").strip()
+    if len(a) <= 4:
+        return "*" * len(a)
+    return "XXXX" + a[-4:]  # only last 4 visible
+
+
+def _mask_ifsc(i: str) -> str:
+    i = str(i or "").strip().upper()
+    if len(i) <= 4:
+        return "*" * len(i)
+    return i[:4] + "*" * (len(i) - 4)  # keep bank code, hide branch
+
+
 # ---------------- Dashboard ----------------
 @router.get("/dashboard")
 async def admin_dashboard(admin: dict = Depends(require_admin)):
@@ -250,6 +271,15 @@ async def admin_kyc(status: Optional[str] = None, admin: dict = Depends(require_
     if status:
         q["status"] = status
     recs = await db.kyc_records.find(q, {"_id": 0}).sort("submitted_at", -1).to_list(1000)
+    for r in recs:
+        if r.get("aadhaar"):
+            r["aadhaar"] = mask_aadhaar(r["aadhaar"])
+        if r.get("pan"):
+            r["pan"] = _mask_pan(r["pan"])
+        if r.get("bank_account"):
+            r["bank_account"] = _mask_acct(r["bank_account"])
+        if r.get("ifsc"):
+            r["ifsc"] = _mask_ifsc(r["ifsc"])
     return recs
 
 
