@@ -1,3 +1,10 @@
+# CHANGELOG — 2026-06 (Admin identity migration)
+- Super-admin identity moved from distributor_id `ANJ000000` to new **`ADMIN001`** (same email sachin.shukla2196@gmail.com / username `admin` / env password / passcode — admin login UNCHANGED).
+- `ANJ000000` demoted to a plain **distributor**: role=distributor, email/username detached, now visible in admin Users list, admin can reset its password (verified). Keeps its ₹100 wallet + referral-tree root position.
+- `server.py` admin seed now seeds distributor_id `ADMIN001` (was hardcoded `ANJ000000`) so restarts never recreate/re-promote ANJ000000. Idempotent: seed finds ADMIN001 by email, no-op.
+- Backups: /app/backups/pre_adminmigrate_20261006_215718
+
+
 # CHANGELOG — 2026-06 (Business-rule lock update)
 - ₹100 DIRECT REFERRAL REWARD is now paid at **registration approval** (admin approves signup), to the **immediate sponsor regardless of status**, once/idempotent, reference_order_id=None (NOT clawed back by order refunds). Moved OUT of activation path. Files: `admin_routes.approve_registration_request`, removed from `shop_routes._process_paid_order`.
 - PURCHASE COMMISSION MATRIX changed from old 70% to **FINAL 45%** positional codes: GD 0 / BD 15 / AD 5 / CD 5 / PD 5 / MD 5 / RD 4 / DD 3 / MDD 3 = 45%. Base = subtotal excl GST. Skip-no-redistribute preserved. File: `shop_routes.LEVEL_COMMISSION_PCT` + `RANK_NAME`.

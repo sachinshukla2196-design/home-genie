@@ -161,7 +161,7 @@ async def _init_db():
     existing = await db.users.find_one({"email": admin_email})
     if not existing:
         await db.users.insert_one({
-            "id": new_id(), "distributor_id": "ANJ000000", "full_name": "Platform Administrator",
+            "id": new_id(), "distributor_id": "ADMIN001", "full_name": "Platform Administrator",
             "email": admin_email, "username": admin_username, "mobile": "9999999999",
             "password_hash": hash_password(admin_password),
             "role": "super_admin", "status": "green", "mobile_verified": True, "email_verified": True,
