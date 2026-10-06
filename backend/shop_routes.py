@@ -379,58 +379,21 @@ async def _process_paid_order(session_id: str, request: Request = None):
         await log_audit(None, "green_activation", "user", user["id"],
                         old_value={"status": "red"}, new_value={"status": "green"}, request=request)
 
-        # ---- Referral commission (idempotent) ----
-        rel = await db.referral_relationships.find_one({"referred_user_id": user["id"]})
-        if rel and not rel.get("commission_paid"):
-            sponsor = await db.users.find_one({"id": rel["sponsor_id"]})
-            commission_amount = float(settings.get("referral_commission", 100.0))
-            if sponsor and sponsor.get("status") == "green":
-                # guard: no existing commission for this referred user
-                existing = await db.commissions.find_one({"referred_user_id": user["id"],
-                                                          "type": "REFERRAL_COMMISSION"})
-                if not existing:
-                    marked = await db.referral_relationships.update_one(
-                        {"id": rel["id"], "commission_paid": {"$ne": True}},
-                        {"$set": {"commission_paid": True, "commission_paid_at": now_iso()}},
-                    )
-                    if marked.modified_count == 1:
-                        comm = {
-                            "id": new_id(), "sponsor_id": sponsor["id"],
-                            "sponsor_distributor_id": sponsor.get("distributor_id"),
-                            "referred_user_id": user["id"],
-                            "referred_distributor_id": user.get("distributor_id"),
-                            "type": "REFERRAL_COMMISSION", "amount": commission_amount,
-                            "reference_order_id": order["id"], "status": "CREDITED",
-                            "description": f"Referral commission for activation of {user.get('distributor_id')}",
-                            "created_at": now_iso(),
-                        }
-                        await db.commissions.insert_one(dict(comm))
-                        await add_wallet_transaction(
-                            sponsor["id"], "REFERRAL_COMMISSION", commission_amount, "CREDITED",
-                            reference=order["id"],
-                            description=f"Referral commission: {user.get('distributor_id')} activated",
-                            direction="credit",
-                        )
-                        await create_notification(
-                            sponsor["id"], "commission",
-                            f"You earned {settings.get('currency_symbol','₹')}{int(commission_amount)}",
-                            f"Referral commission credited for activation of {user.get('distributor_id')}.",
-                            f"आपने {settings.get('currency_symbol','₹')}{int(commission_amount)} कमाए",
-                            f"{user.get('distributor_id')} के सक्रिय होने पर रेफ़रल कमीशन क्रेडिट हुआ।")
-                        await log_audit(None, "commission_credited", "commission", comm["id"],
-                                        new_value={"amount": commission_amount, "sponsor": sponsor.get("distributor_id")},
-                                        request=request)
+        # NOTE: The ₹100 DIRECT REFERRAL REWARD is paid at REGISTRATION APPROVAL
+        # (admin_routes.approve_registration_request), NOT here. Activation only
+        # unlocks GREEN status and the purchase-commission matrix below.
 
     # ---- Product purchase level commission (separate from the ₹100 direct referral) ----
     await _distribute_purchase_commission(order, user, settings, request)
 
 
-# Depth-based TEAM SALES commission. Depth 1 = the buyer's IMMEDIATE sponsor.
-# Base = product value EXCLUDING GST. Total pool = 70%.
+# Positional TEAM SALES commission matrix (FINAL, locked). Position 1 = buyer's IMMEDIATE sponsor.
+# Base = product value EXCLUDING GST. Total pool = 45%. Positions map to rank codes GD..MDD.
 # SEPARATE from the ₹100 direct referral reward — the two never mix.
-LEVEL_COMMISSION_PCT = {1: 20.0, 2: 12.0, 3: 10.0, 4: 8.0, 5: 6.0, 6: 5.0, 7: 4.0, 8: 3.0, 9: 2.0}
-# Depth labels used in ledger descriptions (depth is positional, NOT rank).
-RANK_NAME = {n: f"Depth {n}" for n in range(1, 10)}
+# GD 0 | BD 15 | AD 5 | CD 5 | PD 5 | MD 5 | RD 4 | DD 3 | MDD 3  =>  45%
+LEVEL_COMMISSION_PCT = {1: 0.0, 2: 15.0, 3: 5.0, 4: 5.0, 5: 5.0, 6: 5.0, 7: 4.0, 8: 3.0, 9: 3.0}
+# Rank-code label per position (user-facing codes only; no D1-D9, no titles).
+RANK_NAME = {1: "GD", 2: "BD", 3: "AD", 4: "CD", 5: "PD", 6: "MD", 7: "RD", 8: "DD", 9: "MDD"}
 
 
 async def _distribute_purchase_commission(order, buyer, settings, request=None):

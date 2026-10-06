@@ -528,9 +528,7 @@ async def approve_registration_request(req_id: str, request: Request, admin: dic
     except Exception:
         raise HTTPException(status_code=400, detail="Could not create distributor (possibly a duplicate email or mobile). Please check and try again.")
     await get_or_create_wallet(user["id"])
-    # IMPORTANT: NO ₹100 is paid at approval. The ₹100 DIRECT REFERRAL REWARD is paid
-    # exactly once — only when this distributor completes the qualifying paid activation
-    # (GREEN) — via the single authoritative _process_paid_order().
+    # The ₹100 DIRECT REFERRAL REWARD is paid once, here at approval, to the sponsor below.
     sp_did = r.get("sponsor_id")
     if sp_did:
         rc = await db.referral_codes.find_one({"code": sp_did, "active": True})
@@ -550,6 +548,40 @@ async def approve_registration_request(req_id: str, request: Request, admin: dic
                     "referred_user_id": user["id"], "referred_distributor_id": did,
                     "commission_paid": False, "created_at": now_iso(),
                 })
+            # ---- ₹100 DIRECT REFERRAL REWARD: paid once, at registration approval,
+            # to the immediate sponsor regardless of the sponsor's own status. Idempotent. ----
+            settings = await get_settings()
+            reward = float(settings.get("referral_commission", 100.0))
+            already = await db.commissions.find_one(
+                {"referred_user_id": user["id"], "type": "REFERRAL_COMMISSION"})
+            if not already:
+                marked = await db.referral_relationships.update_one(
+                    {"referred_user_id": user["id"], "commission_paid": {"$ne": True}},
+                    {"$set": {"commission_paid": True, "commission_paid_at": now_iso()}})
+                if marked.modified_count == 1:
+                    comm = {
+                        "id": new_id(), "sponsor_id": sponsor["id"],
+                        "sponsor_distributor_id": sponsor.get("distributor_id"),
+                        "referred_user_id": user["id"], "referred_distributor_id": did,
+                        "type": "REFERRAL_COMMISSION", "amount": reward,
+                        "reference_order_id": None, "status": "CREDITED",
+                        "description": f"Direct referral reward for registration of {did}",
+                        "created_at": now_iso(),
+                    }
+                    await db.commissions.insert_one(dict(comm))
+                    await add_wallet_transaction(
+                        sponsor["id"], "REFERRAL_COMMISSION", reward, "CREDITED",
+                        reference=user["id"], direction="credit",
+                        description=f"Direct referral reward: {did} registered")
+                    await create_notification(
+                        sponsor["id"], "commission",
+                        f"You earned ₹{int(reward)}",
+                        f"Direct referral reward credited for registration of {did}.",
+                        f"आपने ₹{int(reward)} कमाए",
+                        f"{did} के पंजीकरण पर प्रत्यक्ष रेफ़रल इनाम क्रेडिट हुआ।")
+                    await log_audit(admin, "referral_reward_credited", "commission", comm["id"],
+                                    new_value={"amount": reward, "sponsor": sponsor.get("distributor_id"), "referred": did},
+                                    request=request)
     await db.registration_requests.update_one({"id": req_id},
         {"$set": {"status": "approved", "distributor_id": did, "approved_by": admin["id"], "approved_at": now_iso()}})
     await log_audit(admin, "registration_approved", "user", user["id"], new_value={"distributor_id": did}, request=request)

@@ -1,3 +1,11 @@
+# CHANGELOG — 2026-06 (Business-rule lock update)
+- ₹100 DIRECT REFERRAL REWARD is now paid at **registration approval** (admin approves signup), to the **immediate sponsor regardless of status**, once/idempotent, reference_order_id=None (NOT clawed back by order refunds). Moved OUT of activation path. Files: `admin_routes.approve_registration_request`, removed from `shop_routes._process_paid_order`.
+- PURCHASE COMMISSION MATRIX changed from old 70% to **FINAL 45%** positional codes: GD 0 / BD 15 / AD 5 / CD 5 / PD 5 / MD 5 / RD 4 / DD 3 / MDD 3 = 45%. Base = subtotal excl GST. Skip-no-redistribute preserved. File: `shop_routes.LEVEL_COMMISSION_PCT` + `RANK_NAME`.
+- Admin ₹1,500 manual/offline payment (`/api/admin/payments/manual`) triggers GREEN activation + 45% matrix WITHOUT Razorpay (unchanged, re-verified).
+- Team view: labels show rank CODES (GD..MDD), team depth extended to 9 (`wallet_routes.MAX_TEAM_LEVEL=9`), `Team.js` depth label -> code.
+- Withdrawals / KYC / Razorpay / auth UNCHANGED.
+
+
 # PRD — Anjali Herbal Life Ayurveda India LLP — Distributor & E-Commerce Platform
 
 ## Original Problem Statement

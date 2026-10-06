@@ -66,7 +66,7 @@ export default function Team() {
           <SummaryCard label="Total Team" value={data.total} />
           <SummaryCard label="Active" value={data.active} accent />
           <SummaryCard label="Total Income" value={money(data.total_income)} />
-          <SummaryCard label="Ranks Reached" value={levels.filter((l) => l.count > 0).length} sub="of 8" />
+          <SummaryCard label="Ranks Reached" value={levels.filter((l) => l.count > 0).length} sub="of 9" />
         </div>
       )}
     </div>
@@ -112,7 +112,7 @@ function LevelsView({ levels }) {
             >
               <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-forest font-display text-xs font-bold text-white">{RANK_ABBR[lvl.level] || lvl.level}</span>
               <div className="min-w-0 flex-1">
-                <div className="font-display text-base font-semibold text-ink">{`Depth ${lvl.level}`}</div>
+                <div className="font-display text-base font-semibold text-ink">{RANK_ABBR[lvl.level] || `Level ${lvl.level}`}</div>
                 <div className="text-xs text-muted2">{lvl.count} member{lvl.count !== 1 ? "s" : ""} · {lvl.active} active</div>
               </div>
               <div className="text-right">

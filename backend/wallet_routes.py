@@ -90,7 +90,7 @@ async def referral_info(user: dict = Depends(get_current_user)):
     }
 
 
-MAX_TEAM_LEVEL = 8
+MAX_TEAM_LEVEL = 9
 
 
 @router.get("/team")
