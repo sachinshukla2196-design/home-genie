@@ -154,6 +154,7 @@ async def team(user: dict = Depends(get_current_user)):
             members.append({
                 "full_name": u.get("full_name"), "distributor_id": u.get("distributor_id"),
                 "status": u.get("status"), "photo": u.get("photo"),
+                "level": lvl,
                 "city": u.get("city"), "state": u.get("state"),
                 "joined_at": r.get("created_at"),
                 "commission_paid": r.get("commission_paid", False),

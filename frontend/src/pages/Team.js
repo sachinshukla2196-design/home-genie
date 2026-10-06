@@ -186,6 +186,11 @@ function NodeCard({ node, index }) {
         : <div className={`mx-auto flex h-12 w-12 items-center justify-center rounded-full font-display text-base font-bold text-white ${green ? "bg-forest" : "bg-danger"}`}>{initials}</div>}
       <div className="mt-2 truncate text-sm font-semibold text-ink">{node.full_name}</div>
       <div className="text-xs font-medium text-forest">{node.distributor_id}</div>
+      {!node.isRoot && node.level && (
+        <span className="mt-1.5 inline-flex items-center rounded-full bg-forest px-2 py-0.5 text-[10px] font-bold text-white" data-testid={`node-rank-${node.distributor_id}`}>
+          {RANK_ABBR[node.level] || `L${node.level}`}
+        </span>
+      )}
       <div className="mt-2 flex items-center justify-center gap-1.5">
         {!node.isRoot && node.downline_count > 0 && (
           <span className="rounded-full bg-gold-light px-2 py-0.5 text-[10px] font-semibold text-gold">+{node.downline_count}</span>
