@@ -41,7 +41,15 @@ export default function Landing() {
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-40 glass-nav">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-4 py-3 lg:px-8">
-          <Logo />
+          <div className="flex flex-col items-start">
+            <Logo />
+            <span
+              className="mt-1 inline-flex items-center gap-1 rounded-full border border-gold/40 bg-gold-light px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gold"
+              data-testid="beta-testing-badge"
+            >
+              <Sparkles size={9} /> Beta Testing
+            </span>
+          </div>
           <div className="flex items-center gap-2 sm:gap-3">
             <ThemeToggle />
             <LanguageSwitcher />
