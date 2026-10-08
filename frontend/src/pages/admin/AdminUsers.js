@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from "react";
 import { toast } from "sonner";
-import { Copy, Ticket, Plus, KeyRound, X, Ban, Trash2, Pencil } from "lucide-react";
+import { Copy, Ticket, Plus, KeyRound, X, Ban, Trash2, Pencil, Wallet } from "lucide-react";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,8 @@ export default function AdminUsers() {
   const [busyId, setBusyId] = useState(null);
   const [editUser, setEditUser] = useState(null);
   const [editForm, setEditForm] = useState({});
+  const [creditUser, setCreditUser] = useState(null);
+  const [creditForm, setCreditForm] = useState({ amount: "", reason: "" });
 
   useEffect(() => {
     API.get("/admin/users").then(({ data }) => setUsers(data)).catch(() => setUsers([]));
@@ -53,6 +55,18 @@ export default function AdminUsers() {
       setUsers((list) => list.map((x) => (x.id === editUser.id ? { ...x, ...data } : x)));
       toast.success("Profile updated");
       setEditUser(null);
+    } catch (e) { toast.error(apiError(e)); } finally { setBusyId(null); }
+  };
+
+  const openCredit = (u) => { setCreditForm({ amount: "", reason: "" }); setCreditUser(u); };
+  const submitCredit = async () => {
+    const amt = parseFloat(creditForm.amount);
+    if (!amt || amt <= 0) { toast.error("Enter a valid amount greater than 0"); return; }
+    setBusyId(creditUser.id);
+    try {
+      const { data } = await API.post("/admin/wallet/credit", { distributor_id: creditUser.distributor_id, amount: amt, reason: creditForm.reason || "Manual admin credit" });
+      toast.success(`${data.message} New balance ₹${data.available_balance}`);
+      setCreditUser(null);
     } catch (e) { toast.error(apiError(e)); } finally { setBusyId(null); }
   };
 
@@ -234,6 +248,9 @@ export default function AdminUsers() {
                     <button onClick={() => resetPw(u)} disabled={busyId === u.id} className="inline-flex items-center gap-1.5 rounded-full border border-forest/25 px-3 py-1.5 text-xs font-semibold text-forest transition-all hover:bg-brand-50 disabled:opacity-50" data-testid={`reset-pw-${u.distributor_id}`}>
                       <KeyRound size={13} /> {busyId === u.id ? "…" : "Reset Password"}
                     </button>
+                    <button onClick={() => openCredit(u)} disabled={busyId === u.id} className="inline-flex items-center gap-1.5 rounded-full border border-gold/40 px-3 py-1.5 text-xs font-semibold text-gold transition-all hover:bg-gold-light/50 disabled:opacity-50" data-testid={`credit-user-${u.distributor_id}`}>
+                      <Wallet size={13} /> Credit ₹
+                    </button>
                     <button onClick={() => toggleBlock(u)} disabled={busyId === u.id} className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-semibold transition-all disabled:opacity-50 ${u.blocked ? "border-forest/25 text-forest hover:bg-brand-50" : "border-gold/40 text-gold hover:bg-gold-light/50"}`} data-testid={`block-toggle-${u.distributor_id}`}>
                       <Ban size={13} /> {u.blocked ? "Unblock" : "Block"}
                     </button>
@@ -270,6 +287,27 @@ export default function AdminUsers() {
             <div className="mt-5 flex justify-end gap-2">
               <button onClick={() => setEditUser(null)} className="rounded-full border border-brand-50 px-4 py-2 text-sm font-semibold text-muted2 hover:bg-brand-50/40" data-testid="edit-user-cancel">Cancel</button>
               <button onClick={saveEdit} disabled={busyId === editUser.id} className="rounded-full bg-forest px-5 py-2 text-sm font-semibold text-white hover:bg-brand disabled:opacity-50" data-testid="edit-user-save">{busyId === editUser.id ? "Saving…" : "Save"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {creditUser && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink/40 p-4" data-testid="credit-user-modal">
+          <div className="w-full max-w-sm rounded-2xl bg-white p-6 shadow-xl">
+            <div className="flex items-center justify-between">
+              <h3 className="font-display text-lg font-medium text-ink">Manual Wallet Credit</h3>
+              <button onClick={() => setCreditUser(null)} className="text-muted2 hover:text-ink" data-testid="credit-user-close"><X size={18} /></button>
+            </div>
+            <p className="mt-1 text-xs text-muted2">Credit <b className="text-forest">{creditUser.distributor_id}</b> — {creditUser.full_name}. Adds to available balance (MANUAL_ADMIN_CREDIT).</p>
+            <label className="mt-4 block text-sm text-ink">Amount (₹)
+              <input type="number" min="1" value={creditForm.amount} onChange={(e) => setCreditForm((f) => ({ ...f, amount: e.target.value }))} className="mt-1 h-10 w-full rounded-lg border border-brand-50 px-3 focus:outline-none focus:ring-2 focus:ring-brand" data-testid="credit-amount" />
+            </label>
+            <label className="mt-3 block text-sm text-ink">Reason (optional)
+              <input value={creditForm.reason} onChange={(e) => setCreditForm((f) => ({ ...f, reason: e.target.value }))} placeholder="Manual admin credit" className="mt-1 h-10 w-full rounded-lg border border-brand-50 px-3 focus:outline-none focus:ring-2 focus:ring-brand" data-testid="credit-reason" />
+            </label>
+            <div className="mt-5 flex justify-end gap-2">
+              <button onClick={() => setCreditUser(null)} className="rounded-full border border-brand-50 px-4 py-2 text-sm font-semibold text-muted2 hover:bg-brand-50/40" data-testid="credit-cancel">Cancel</button>
+              <button onClick={submitCredit} disabled={busyId === creditUser.id} className="rounded-full bg-forest px-5 py-2 text-sm font-semibold text-white hover:bg-brand disabled:opacity-50" data-testid="credit-submit">{busyId === creditUser.id ? "Crediting…" : "Credit"}</button>
             </div>
           </div>
         </div>

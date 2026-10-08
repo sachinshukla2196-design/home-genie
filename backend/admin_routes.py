@@ -666,6 +666,35 @@ async def admin_update_user(user_id: str, body: AdminUserUpdate, request: Reques
     return updated
 
 
+class WalletCreditBody(BaseModel):
+    distributor_id: str
+    amount: float
+    reason: Optional[str] = None
+
+
+@router.post("/wallet/credit")
+async def admin_wallet_credit(body: WalletCreditBody, request: Request, admin: dict = Depends(require_admin)):
+    did = (body.distributor_id or "").strip().upper()
+    u = await db.users.find_one({"distributor_id": did})
+    if not u:
+        raise HTTPException(status_code=404, detail=f"Distributor {did} not found.")
+    amt = round(float(body.amount or 0), 2)
+    if amt <= 0:
+        raise HTTPException(status_code=400, detail="Amount must be greater than 0.")
+    reason = (body.reason or "").strip() or "Manual admin credit"
+    await add_wallet_transaction(u["id"], "MANUAL_ADMIN_CREDIT", amt, "CREDITED",
+                                 reference=f"admin:{admin.get('distributor_id', '')}",
+                                 direction="credit", description=reason)
+    await create_notification(u["id"], "wallet", f"₹{int(amt)} credited",
+                              f"{reason} — ₹{amt} added to your wallet.",
+                              f"₹{int(amt)} क्रेडिट हुआ", f"{reason} — ₹{amt} आपके वॉलेट में जोड़े गए।")
+    await log_audit(admin, "admin_wallet_credit", "user", u["id"],
+                    new_value={"distributor_id": did, "amount": amt, "reason": reason}, request=request)
+    w = await db.wallets.find_one({"user_id": u["id"]}, {"_id": 0, "available_balance": 1})
+    return {"message": f"₹{amt} credited to {did}.", "distributor_id": did, "amount": amt,
+            "available_balance": round(float((w or {}).get("available_balance", 0)), 2)}
+
+
 class AdminPwBody(BaseModel):
     password: Optional[str] = None
 
