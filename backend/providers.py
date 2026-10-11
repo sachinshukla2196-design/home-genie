@@ -1,5 +1,5 @@
 """Production OTP: server-generated secure OTP, delivered ONLY via a real SMS
-provider (MSG91). No mock, no test OTP, no dev OTP, no OTP in API responses or
+provider (Twilio). No mock, no test OTP, no dev OTP, no OTP in API responses or
 logs. If the SMS provider is not configured, OTP flows FAIL SAFELY (503)."""
 import os
 import re
@@ -19,15 +19,14 @@ OTP_MAX_ATTEMPTS = int(os.environ.get("OTP_MAX_ATTEMPTS", "5"))
 OTP_RESEND_COOLDOWN = int(os.environ.get("OTP_RESEND_COOLDOWN", "60"))
 OTP_PEPPER = os.environ.get("OTP_PEPPER", "")
 
-MSG91_ENABLED = os.environ.get("MSG91_ENABLED", "false").strip().lower() == "true"
-MSG91_AUTH_KEY = os.environ.get("MSG91_AUTH_KEY", "")
-MSG91_SENDER_ID = os.environ.get("MSG91_SENDER_ID", "")
-MSG91_TEMPLATE_ID = os.environ.get("MSG91_TEMPLATE_ID", "")
-MSG91_BASE_URL = os.environ.get("MSG91_BASE_URL", "https://control.msg91.com")
+TWILIO_ENABLED = os.environ.get("TWILIO_ENABLED", "false").strip().lower() == "true"
+TWILIO_ACCOUNT_SID = os.environ.get("TWILIO_ACCOUNT_SID", "")
+TWILIO_AUTH_TOKEN = os.environ.get("TWILIO_AUTH_TOKEN", "")
+TWILIO_FROM_NUMBER = os.environ.get("TWILIO_FROM_NUMBER", "")
 
 
 def sms_configured() -> bool:
-    return MSG91_ENABLED and bool(MSG91_AUTH_KEY and MSG91_SENDER_ID and MSG91_TEMPLATE_ID)
+    return TWILIO_ENABLED and bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_FROM_NUMBER)
 
 
 OTP_UNAVAILABLE = HTTPException(status_code=503, detail={
@@ -36,10 +35,11 @@ OTP_UNAVAILABLE = HTTPException(status_code=503, detail={
 
 
 def _normalize_mobile(m: str) -> str:
+    """Return an E.164 number (+<country><number>) for Twilio. Defaults to India (+91)."""
     p = re.sub(r"\D", "", (m or ""))
     if len(p) == 10:
         p = "91" + p
-    return p
+    return "+" + p
 
 
 def _hash(code: str) -> str:
@@ -47,24 +47,22 @@ def _hash(code: str) -> str:
 
 
 async def _send_sms_otp(mobile: str, code: str) -> None:
-    """Deliver OTP via MSG91 Flow API. Never logs the code or provider secrets."""
+    """Deliver OTP via Twilio Messages API. Never logs the code or provider secrets."""
     if not sms_configured():
         raise OTP_UNAVAILABLE
-    payload = {
-        "flow_id": MSG91_TEMPLATE_ID,
-        "sender": MSG91_SENDER_ID,
-        "recipients": [{"mobiles": _normalize_mobile(mobile), "OTP": code}],
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json"
+    data = {
+        "To": _normalize_mobile(mobile),
+        "From": TWILIO_FROM_NUMBER,
+        "Body": f"{code} is your Anjali Herbal Life verification code. It expires in 5 minutes. Do not share it with anyone.",
     }
-    url = MSG91_BASE_URL.rstrip("/") + "/api/v5/flow/"
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
-            resp = await client.post(url, json=payload,
-                                     headers={"authkey": MSG91_AUTH_KEY, "Content-Type": "application/json"})
-        data = resp.json()
-    except (httpx.HTTPError, ValueError):
+            resp = await client.post(url, data=data, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN))
+    except httpx.HTTPError:
         raise HTTPException(status_code=503, detail="Could not send OTP right now. Please try again shortly.")
-    if resp.status_code >= 400 or str(data.get("type")) != "success":
-        logger.error("MSG91 send rejected (status=%s)", resp.status_code)
+    if resp.status_code >= 400:
+        logger.error("Twilio send rejected (status=%s)", resp.status_code)
         raise HTTPException(status_code=503, detail="Could not send OTP right now. Please try again shortly.")
 
 
