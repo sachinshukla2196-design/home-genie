@@ -17,14 +17,11 @@ ADDITIONAL_INCOME_RULES = [
         "key": "PERSONAL_REPURCHASE",
         "name": "Personal Repurchase Income",
         "rate_percent": 5.0,
-        "trigger": "Eligible future personal repurchase orders",
+        "trigger": "Every paid personal order AFTER the first paid purchase",
         "recipient": "The self-purchasing distributor (DEFINED)",
-        "status": "PENDING_BUSINESS_CLARIFICATION",
+        "status": "IMPLEMENTED",
         "missing_definitions": [
-            "Which orders qualify as personal repurchases (no reliable repurchase classification exists in the order lifecycle yet; not every post-activation order can be assumed a repurchase)",
-            "Is the 5% base the product subtotal excluding GST, or another amount?",
-            "How should discounts, returns, refunds and cancellations affect the calculation?",
-            "Can Personal Repurchase Income stack with other income categories on the same order?",
+            "Partial refunds / partial returns are NOT supported by the current order lifecycle (only full-order refund clawback is handled); confirm rules if partials are introduced later",
         ],
     },
     {

@@ -302,7 +302,7 @@ async def reverse_order_financials(order_id: str, actor: dict = None, request: R
     n = 0
     comms = await db.commissions.find(
         {"reference_order_id": order_id, "status": "CREDITED",
-         "type": {"$in": ["PURCHASE_LEVEL_COMMISSION", "REFERRAL_COMMISSION"]}}).to_list(1000)
+         "type": {"$in": ["PURCHASE_LEVEL_COMMISSION", "REFERRAL_COMMISSION", "PERSONAL_REPURCHASE_INCOME"]}}).to_list(1000)
     for c in comms:
         await db.commissions.update_one({"id": c["id"]},
             {"$set": {"status": "REVERSED", "reversed_at": now_iso()}})
@@ -386,6 +386,9 @@ async def _process_paid_order(session_id: str, request: Request = None):
     # ---- Product purchase level commission (separate from the ₹100 direct referral) ----
     await _distribute_purchase_commission(order, user, settings, request)
 
+    # ---- Personal Repurchase Income (5%) to the self-purchasing distributor ----
+    await _credit_personal_repurchase(order, user, settings, request)
+
 
 # Positional TEAM SALES commission matrix (FINAL, locked). Position 1 = buyer's IMMEDIATE sponsor.
 # Base = product value EXCLUDING GST. Total pool = 45%. Positions map to rank codes GD..MDD.
@@ -394,6 +397,11 @@ async def _process_paid_order(session_id: str, request: Request = None):
 LEVEL_COMMISSION_PCT = {1: 0.0, 2: 15.0, 3: 5.0, 4: 5.0, 5: 5.0, 6: 5.0, 7: 4.0, 8: 3.0, 9: 3.0}
 # Rank-code label per position (user-facing codes only; no D1-D9, no titles).
 RANK_NAME = {1: "GD", 2: "BD", 3: "AD", 4: "CD", 5: "PD", 6: "MD", 7: "RD", 8: "DD", 9: "MDD"}
+
+# Personal Repurchase Income (FINAL, locked). Paid to the SELF-PURCHASING distributor on
+# every eligible PAID order AFTER their first paid purchase. Base = subtotal (excl GST).
+# SEPARATE from the 45% matrix, the ₹100 referral reward and the Monthly Fixed Income pool.
+REPURCHASE_INCOME_PCT = 5.0
 
 
 async def _distribute_purchase_commission(order, buyer, settings, request=None):
@@ -457,6 +465,59 @@ async def _distribute_purchase_commission(order, buyer, settings, request=None):
                                     new_value={"amount": amount, "level": level,
                                                "sponsor": sponsor.get("distributor_id")}, request=request)
         current_id = sponsor_id
+
+
+async def _credit_personal_repurchase(order, buyer, settings, request=None):
+    """Personal Repurchase Income (5%) credited to the SELF-PURCHASING distributor.
+    - The buyer's FIRST paid purchase is EXCLUDED; every subsequent paid order qualifies.
+    - Base = order subtotal (discounted product value EXCLUDING GST).
+    - Separate from the 45% matrix, the ₹100 referral reward and the Monthly Fixed Income pool.
+    - Idempotent: the order is claimed atomically so retries/refresh never duplicate.
+    - Refund/cancellation reversal is handled by reverse_order_financials (ledger clawback).
+    """
+    claim = await db.orders.update_one(
+        {"id": order["id"], "repurchase_income_paid": {"$ne": True}},
+        {"$set": {"repurchase_income_paid": True, "updated_at": now_iso()}},
+    )
+    if claim.modified_count != 1:
+        return  # already processed
+    # First-purchase exclusion: any EARLIER paid, non-reversed order by this buyer.
+    prior = await db.orders.count_documents({
+        "user_id": buyer["id"], "payment_status": "paid",
+        "id": {"$ne": order["id"]}, "financials_reversed": {"$ne": True}})
+    if prior < 1:
+        return  # this IS the first qualifying purchase -> excluded
+    base = float(order.get("subtotal", 0) or 0)  # discounted product value excl GST
+    if base <= 0:
+        return
+    amount = round(base * REPURCHASE_INCOME_PCT / 100.0, 2)
+    if amount <= 0:
+        return
+    sym = settings.get("currency_symbol", "₹")
+    comm = {
+        "id": new_id(), "sponsor_id": buyer["id"],
+        "sponsor_distributor_id": buyer.get("distributor_id"),
+        "referred_user_id": buyer["id"],
+        "referred_distributor_id": buyer.get("distributor_id"),
+        "type": "PERSONAL_REPURCHASE_INCOME", "level": 0, "percent": REPURCHASE_INCOME_PCT,
+        "amount": amount, "base_amount": base,
+        "reference_order_id": order["id"], "status": "CREDITED",
+        "description": f"Personal Repurchase Income ({REPURCHASE_INCOME_PCT:g}%) on order {order.get('order_number')}",
+        "created_at": now_iso(),
+    }
+    await db.commissions.insert_one(dict(comm))
+    await add_wallet_transaction(
+        buyer["id"], "PERSONAL_REPURCHASE_INCOME", amount, "CREDITED",
+        reference=order["id"],
+        description=f"Personal Repurchase Income ({REPURCHASE_INCOME_PCT:g}%) • base ₹{base:g} • order {order.get('order_number')}",
+        direction="credit")
+    await create_notification(
+        buyer["id"], "income", f"You earned {sym}{amount:g}",
+        f"Personal Repurchase Income ({REPURCHASE_INCOME_PCT:g}%) credited on order {order.get('order_number')}.",
+        f"आपने {sym}{amount:g} कमाए",
+        f"ऑर्डर {order.get('order_number')} पर पुनर्खरीद आय ({REPURCHASE_INCOME_PCT:g}%) क्रेडिट हुई।")
+    await log_audit(None, "repurchase_income_credited", "commission", comm["id"],
+                    new_value={"amount": amount, "buyer": buyer.get("distributor_id"), "base": base}, request=request)
 
 
 @router.get("/payments/status/{session_id}")

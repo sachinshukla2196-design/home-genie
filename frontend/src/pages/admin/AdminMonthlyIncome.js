@@ -96,7 +96,9 @@ export default function AdminMonthlyIncome() {
                   <td className="py-3 pr-3 text-muted2">{r.trigger}</td>
                   <td className="py-3 pr-3 text-muted2">{r.recipient || "—"}</td>
                   <td className="py-3">
-                    <span className="rounded-full bg-gold/10 px-2 py-1 text-xs font-medium text-gold">Pending business clarification</span>
+                    {r.status === "IMPLEMENTED"
+                      ? <span className="rounded-full bg-forest/10 px-2 py-1 text-xs font-medium text-forest">Active</span>
+                      : <span className="rounded-full bg-gold/10 px-2 py-1 text-xs font-medium text-gold">Pending business clarification</span>}
                   </td>
                 </tr>
               ))}
