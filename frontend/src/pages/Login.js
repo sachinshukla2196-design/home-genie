@@ -39,6 +39,12 @@ export default function Login() {
     }
   };
 
+  const googleLogin = () => {
+    // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+    const redirectUrl = window.location.origin + "/app/dashboard";
+    window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+  };
+
   return (
     <div className="grid min-h-screen lg:grid-cols-2">
       <div className="relative hidden bg-forest lg:block">
@@ -73,6 +79,13 @@ export default function Login() {
               {loading ? t("common.loading") : t("cta.login")}
             </Button>
           </form>
+          <div className="my-5 flex items-center gap-3 text-xs text-muted2">
+            <span className="h-px flex-1 bg-brand-50" /> OR <span className="h-px flex-1 bg-brand-50" />
+          </div>
+          <Button type="button" onClick={googleLogin} variant="outline" className="h-11 w-full rounded-full gap-2 border-brand-50" data-testid="login-google-btn">
+            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="" className="h-4 w-4" />
+            Continue with Google
+          </Button>
           <div className="mt-3 flex items-center justify-between text-sm">
             <Link to="/login-otp" className="font-medium text-forest hover:underline" data-testid="to-login-otp">Login with OTP</Link>
             <Link to="/forgot" className="font-medium text-muted2 hover:text-forest" data-testid="to-forgot">Forgot password?</Link>

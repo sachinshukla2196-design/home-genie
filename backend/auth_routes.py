@@ -3,6 +3,7 @@ import os
 import re
 import hmac
 import random
+import httpx
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel, EmailStr, Field
@@ -259,6 +260,49 @@ async def login(body: LoginBody, request: Request):
 
     await db.login_attempts.delete_one({"identifier": ident})
     await log_audit(clean_user(user), "login", "user", user["id"], request=request)
+    token = create_token(user["id"])
+    return {"token": token, "user": clean_user(user)}
+
+
+EMERGENT_SESSION_DATA_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
+
+
+class GoogleSessionBody(BaseModel):
+    session_id: str
+
+
+@router.post("/google/session")
+async def google_session(body: GoogleSessionBody, request: Request):
+    """Emergent-managed Google sign-in for EXISTING distributors only.
+    We use Emergent Auth solely to obtain the verified Google email, then match it to an
+    existing account and mint the app's own JWT (same as password login). No new account
+    is created here — sponsor/KYC/admin-approval rules are never bypassed."""
+    sid = (body.session_id or "").strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="Missing session. Please try signing in again.")
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            resp = await client.get(EMERGENT_SESSION_DATA_URL, headers={"X-Session-ID": sid})
+    except httpx.HTTPError:
+        raise HTTPException(status_code=503, detail="Could not verify Google sign-in right now. Please try again.")
+    if resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="Google sign-in could not be verified. Please try again.")
+    email = (resp.json().get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=401, detail="Google did not return an email. Please try another account.")
+
+    user = await db.users.find_one({"email": email})
+    if not user:
+        raise HTTPException(status_code=404,
+                            detail="No Anjali account is linked to this Google email. Please register first or contact the admin.")
+    if user.get("blocked"):
+        raise HTTPException(status_code=403, detail="Your account has been blocked. Please contact the admin.")
+
+    await db.users.update_one({"id": user["id"]},
+                              {"$set": {"google_linked": True, "email_verified": True, "updated_at": now_iso()}})
+    user["google_linked"] = True
+    user["email_verified"] = True
+    await log_audit(clean_user(user), "login_google", "user", user["id"], request=request)
     token = create_token(user["id"])
     return {"token": token, "user": clean_user(user)}
 

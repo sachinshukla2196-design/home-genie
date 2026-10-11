@@ -1,5 +1,5 @@
 import "@/App.css";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Toaster } from "sonner";
 import { I18nProvider } from "@/context/I18nContext";
 import { AuthProvider } from "@/context/AuthContext";
@@ -11,6 +11,7 @@ import { AdminLayout } from "@/components/AdminLayout";
 
 import Landing from "@/pages/Landing";
 import Login from "@/pages/Login";
+import AuthCallback from "@/pages/AuthCallback";
 import AdminSecureLogin from "@/pages/AdminSecureLogin";
 import Register from "@/pages/Register";
 import { LoginOtp, ForgotPassword } from "@/pages/AuthExtras";
@@ -52,6 +53,21 @@ function App() {
           <CartProvider>
             <Toaster position="top-center" richColors />
             <BrowserRouter>
+              <AppRoutes />
+            </BrowserRouter>
+          </CartProvider>
+        </AuthProvider>
+      </ThemeProvider>
+    </I18nProvider>
+  );
+}
+
+// Synchronously intercept the Google OAuth return (session_id in the URL fragment) BEFORE
+// ProtectedRoute runs, otherwise the user gets bounced to /login before the session exchange.
+function AppRoutes() {
+  const location = useLocation();
+  if (location.hash?.includes("session_id=")) return <AuthCallback />;
+  return (
               <Routes>
                 <Route path="/" element={<Landing />} />
                 <Route path="/login" element={<Login />} />
@@ -97,11 +113,6 @@ function App() {
 
                 <Route path="*" element={<Navigate to="/" replace />} />
               </Routes>
-            </BrowserRouter>
-          </CartProvider>
-        </AuthProvider>
-      </ThemeProvider>
-    </I18nProvider>
   );
 }
 

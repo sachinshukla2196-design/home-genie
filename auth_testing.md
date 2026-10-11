@@ -1,31 +1,28 @@
-# Auth Testing Playbook — Anjali Herbal Life Ayurveda
+Auth-Gated App Testing Playbook (Emergent Google Auth)
 
-Auth uses JWT Bearer tokens (returned in response body, stored in localStorage on frontend).
+NOTE: This app uses Emergent Google Auth ONLY to identify an existing distributor's verified
+email, then mints the app's OWN JWT (stored in localStorage as `anj_token`, sent as
+`Authorization: Bearer <token>`). There is NO cookie session and NO `user_sessions` collection.
+Google sign-in is for EXISTING distributors only (matched by email); no new account is created.
 
-## Admin
-- Email: sachin.shukla2196@gmail.com
-- Password: Admin@12345
-- Role: super_admin
+Backend endpoint:
+- POST /api/auth/google/session   body: {"session_id": "<id from URL fragment>"}
+  -> calls Emergent https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data (X-Session-ID)
+  -> finds existing user by email; returns {token, user} just like /api/auth/login
+  -> 404 if no account linked to that email; 403 if blocked.
 
-## API tests
-```
-API=$(grep REACT_APP_BACKEND_URL /app/frontend/.env | cut -d '=' -f2)
-# login
-curl -s -X POST "$API/api/auth/login" -H "Content-Type: application/json" \
-  -d '{"email":"sachin.shukla2196@gmail.com","password":"Admin@12345"}'
-# me
-TOKEN=... ; curl -s "$API/api/auth/me" -H "Authorization: Bearer $TOKEN"
-```
+Manual test (existing user):
+1. Ensure a distributor user exists with a known email, e.g. via admin or /api/auth/register.
+2. Frontend: on /login click "Continue with Google" (data-testid="login-google-btn").
+3. Complete Google on auth.emergentagent.com; you return to /app/dashboard#session_id=...
+4. AppRoutes detects the fragment and renders AuthCallback (data-testid="google-auth-callback"),
+   which POSTs session_id, stores anj_token, and navigates to /app/dashboard.
 
-## Registration (OTP mocked, returned as dev_otp)
-```
-curl -s -X POST "$API/api/auth/send-otp" -H "Content-Type: application/json" \
-  -d '{"email":"userA@test.com","mobile":"9876543210"}'
-# use dev_otp in register
-curl -s -X POST "$API/api/auth/register" -H "Content-Type: application/json" \
-  -d '{"full_name":"User A","email":"userA@test.com","mobile":"9876543210","password":"Pass@123","confirm_password":"Pass@123","otp":"<dev_otp>","accept_terms":true}'
-```
+Negative test:
+- A Google email with no matching account must get a 404 toast and land back on /login.
 
-## Activation & commission
-- Create order with ANJ-STARTER product, checkout, then GET /api/payments/status/{session_id}.
-- In preview, payment auto-verifies via Stripe status polling once the checkout is completed with test card 4242 4242 4242 4242.
+Token-based API checks (reuse existing JWT):
+  curl -s $REACT_APP_BACKEND_URL/api/auth/me -H "Authorization: Bearer <anj_token>"
+
+Success indicators: dashboard loads, /api/auth/me returns the user.
+Failure indicators: bounced to /login, 401/404.

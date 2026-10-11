@@ -21,7 +21,11 @@ export function AuthProvider({ children }) {
     }
   };
 
-  useEffect(() => { loadMe(); }, []);
+  useEffect(() => {
+    // Returning from Google OAuth: AuthCallback exchanges the session first. Skip /auth/me.
+    if (window.location.hash?.includes("session_id=")) { setReady(true); return; }
+    loadMe();
+  }, []);
 
   const applyAuth = (data) => {
     localStorage.setItem("anj_token", data.token);
