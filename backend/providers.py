@@ -54,7 +54,7 @@ async def _send_sms_otp(mobile: str, code: str) -> None:
     data = {
         "To": _normalize_mobile(mobile),
         "From": TWILIO_FROM_NUMBER,
-        "Body": f"{code} is your Anjali Herbal Life verification code. It expires in 5 minutes. Do not share it with anyone.",
+        "Body": f"Welcome to Anjali Herbal Life - a world of possibilities! Your verification code is {code}. It expires in 5 minutes. Do not share it with anyone.",
     }
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
@@ -64,6 +64,29 @@ async def _send_sms_otp(mobile: str, code: str) -> None:
     if resp.status_code >= 400:
         logger.error("Twilio send rejected (status=%s)", resp.status_code)
         raise HTTPException(status_code=503, detail="Could not send OTP right now. Please try again shortly.")
+
+
+async def send_account_id_sms(mobile: str, distributor_id: str) -> bool:
+    """Best-effort: SMS a new distributor their Account ID (NEVER the password).
+    Never raises — a delivery failure must not block registration."""
+    if not sms_configured():
+        return False
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json"
+    data = {
+        "To": _normalize_mobile(mobile),
+        "From": TWILIO_FROM_NUMBER,
+        "Body": f"Welcome to Anjali Herbal Life - a world of possibilities! Your Distributor ID is {distributor_id}. Keep it safe to log in.",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            resp = await client.post(url, data=data, auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN))
+        if resp.status_code >= 400:
+            logger.error("Twilio account-ID SMS rejected (status=%s)", resp.status_code)
+            return False
+        return True
+    except httpx.HTTPError:
+        logger.error("Twilio account-ID SMS failed to send")
+        return False
 
 
 async def otp_create(identifier: str, purpose: str) -> dict:

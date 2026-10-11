@@ -11,7 +11,7 @@ from typing import Optional
 from core import (db, now_iso, new_id, hash_password, verify_password, create_token,
                   clean_user, get_current_user, next_distributor_id, get_or_create_wallet,
                   create_notification, log_audit, send_email, email_shell)
-from providers import otp_create, otp_verify
+from providers import otp_create, otp_verify, send_account_id_sms
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -79,7 +79,7 @@ async def _resolve_sponsor(sid_raw: str) -> dict:
 
 @router.post("/send-otp")
 async def send_otp(body: SendOtp, request: Request):
-    """Registration mobile OTP (mock provider in beta). Also emails the code when available."""
+    """Registration mobile OTP via Twilio SMS. Fails safe (503) if SMS is not configured."""
     email = body.email.lower().strip()
     mobile = body.mobile.strip()
     if await db.users.find_one({"email": email}):
@@ -227,6 +227,9 @@ async def register(body: RegisterBody, request: Request):
                               "अंजलि हर्बल लाइफ में आपका स्वागत है",
                               f"आपकी डिस्ट्रीब्यूटर आईडी {distributor_id} है। आय अनलॉक करने के लिए खाता सक्रिय करें।")
     await log_audit(clean_user(user), "register", "user", uid, request=request)
+
+    # Best-effort: SMS the new distributor their Account ID (never the password).
+    await send_account_id_sms(user["mobile"], distributor_id)
 
     token = create_token(uid)
     return {"token": token, "user": clean_user(user)}
