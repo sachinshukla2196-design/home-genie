@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useSearchParams, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { CheckCircle2 } from "lucide-react";
@@ -16,14 +16,23 @@ import { API, apiError } from "@/lib/api";
 export default function Register() {
   const { t } = useI18n();
   const [params] = useSearchParams();
+  const location = useLocation();
+  const gEmail = location.state?.googleEmail || "";
+  const gName = location.state?.googleName || "";
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
   const [pinLookup, setPinLookup] = useState(false);
   const [pinNotice, setPinNotice] = useState("");
   const [form, setForm] = useState({
-    full_name: "", mobile: "", email: "", password: "", confirm_password: "",
+    full_name: gName, mobile: "", email: gEmail, password: "", confirm_password: "",
     sponsor_id: params.get("ref") || "", aadhaar_number: "", address: "", state: "", city: "", pincode: "",
+    google_verified: !!gEmail,
   });
+
+  const googleSignup = () => {
+    // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
+    window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(window.location.origin + "/register")}`;
+  };
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target?.value ?? e }));
 
   const cityOptions = Array.from(new Set([
@@ -65,8 +74,10 @@ export default function Register() {
     e.preventDefault();
     if (!/^[6-9]\d{9}$/.test(form.mobile.trim())) return toast.error("Enter a valid 10-digit mobile number.");
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(form.email.trim())) return toast.error("A valid email address is required.");
-    if (form.password.length < 6) return toast.error("Password must be at least 6 characters.");
-    if (form.password !== form.confirm_password) return toast.error("Passwords do not match.");
+    if (!form.google_verified) {
+      if (form.password.length < 6) return toast.error("Password must be at least 6 characters.");
+      if (form.password !== form.confirm_password) return toast.error("Passwords do not match.");
+    }
     if (!/^\d{12}$/.test(form.aadhaar_number.trim())) return toast.error("Enter a valid 12-digit Aadhaar number.");
     if (!form.sponsor_id.trim()) return toast.error("Please enter a valid Referral / Sponsor ID.");
     if (!form.state || !form.city || !form.pincode.trim()) return toast.error("State, City and Pincode are required.");
@@ -102,16 +113,38 @@ export default function Register() {
             <h1 className="font-display text-3xl font-semibold text-ink">{t("auth.createAccount")}</h1>
             <p className="mt-1 text-muted2">Fill in your details. Admin will review and approve your account.</p>
 
-            <form onSubmit={submit} className="mt-6 space-y-3.5" data-testid="register-form">
+            {form.google_verified ? (
+              <div className="mt-5 rounded-xl border border-forest/20 bg-forest/5 p-3 text-sm text-forest" data-testid="reg-google-note">
+                Verified with Google as <span className="font-semibold">{form.email}</span>. Just add your sponsor and details below.
+              </div>
+            ) : (
+              <>
+                <Button type="button" onClick={googleSignup} variant="outline" className="mt-5 h-11 w-full rounded-full gap-2 border-brand-50" data-testid="reg-google-btn">
+                  <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="" className="h-4 w-4" />
+                  Continue with Google
+                </Button>
+                <div className="my-4 flex items-center gap-3 text-xs text-muted2">
+                  <span className="h-px flex-1 bg-brand-50" /> OR fill manually <span className="h-px flex-1 bg-brand-50" />
+                </div>
+              </>
+            )}
+
+            <form onSubmit={submit} className="mt-2 space-y-3.5" data-testid="register-form">
               <Field label={t("auth.fullName")} value={form.full_name} onChange={set("full_name")} required testid="reg-fullname" />
               <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
                 <Field label={t("auth.mobile")} value={form.mobile} onChange={set("mobile")} required testid="reg-mobile" />
-                <Field label={t("auth.email")} type="email" value={form.email} onChange={set("email")} required testid="reg-email" />
+                <div>
+                  <Label className="text-sm text-ink">{t("auth.email")}</Label>
+                  <Input type="email" value={form.email} onChange={set("email")} required readOnly={form.google_verified}
+                         className={`mt-1.5 h-11 rounded-lg focus-visible:ring-brand ${form.google_verified ? "bg-muted/40" : ""}`} data-testid="reg-email" />
+                </div>
               </div>
-              <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
-                <Field label={t("auth.password")} type="password" value={form.password} onChange={set("password")} required testid="reg-password" />
-                <Field label={t("auth.confirmPassword")} type="password" value={form.confirm_password} onChange={set("confirm_password")} required testid="reg-confirm" />
-              </div>
+              {!form.google_verified && (
+                <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
+                  <Field label={t("auth.password")} type="password" value={form.password} onChange={set("password")} required testid="reg-password" />
+                  <Field label={t("auth.confirmPassword")} type="password" value={form.confirm_password} onChange={set("confirm_password")} required testid="reg-confirm" />
+                </div>
+              )}
               <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
                 <Field label={`${t("auth.aadhaar")} *`} value={form.aadhaar_number} onChange={set("aadhaar_number")} required testid="reg-aadhaar" />
                 <Field label={`${t("auth.sponsorId")} *`} value={form.sponsor_id} onChange={set("sponsor_id")} required testid="reg-sponsor" />

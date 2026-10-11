@@ -97,8 +97,8 @@ async def send_otp(body: SendOtp, request: Request):
 class RegRequestBody(BaseModel):
     full_name: str
     mobile: str
-    password: str = Field(min_length=6)
-    confirm_password: str
+    password: str = ""
+    confirm_password: str = ""
     email: str = ""
     address: str = ""
     state: str = ""
@@ -106,6 +106,7 @@ class RegRequestBody(BaseModel):
     pincode: str = ""
     sponsor_id: str = ""
     aadhaar_number: str = ""
+    google_verified: bool = False
 
 
 @router.post("/register-request")
@@ -117,8 +118,16 @@ async def register_request(body: RegRequestBody):
         raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number.")
     if email and not _valid_email(email):
         raise HTTPException(status_code=400, detail="Enter a valid email address, or leave it blank.")
-    if body.password != body.confirm_password:
-        raise HTTPException(status_code=400, detail="Passwords do not match.")
+    if body.google_verified:
+        if not email:
+            raise HTTPException(status_code=400, detail="Google sign-up requires an email.")
+        pw_hash = hash_password(new_id() + new_id())  # Google users sign in via Google; random placeholder
+    else:
+        if len(body.password or "") < 6:
+            raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
+        if body.password != body.confirm_password:
+            raise HTTPException(status_code=400, detail="Passwords do not match.")
+        pw_hash = hash_password(body.password)
     if not _valid_aadhaar(body.aadhaar_number):
         raise HTTPException(status_code=400, detail="A valid 12-digit Aadhaar number is required.")
     if not body.state.strip() or not body.city.strip() or not body.pincode.strip():
@@ -142,7 +151,9 @@ async def register_request(body: RegRequestBody):
     doc = {
         "id": new_id(), "full_name": body.full_name.strip(), "mobile": mobile,
         "email": email,
-        "password_hash": hash_password(body.password),
+        "password_hash": pw_hash,
+        "email_verified": bool(body.google_verified),
+        "google_linked": bool(body.google_verified),
         "address": body.address.strip(), "state": body.state.strip(),
         "city": body.city.strip(), "pincode": body.pincode.strip(),
         "sponsor_id": (body.sponsor_id or "").strip().upper() or None,
@@ -287,14 +298,15 @@ async def google_session(body: GoogleSessionBody, request: Request):
         raise HTTPException(status_code=503, detail="Could not verify Google sign-in right now. Please try again.")
     if resp.status_code != 200:
         raise HTTPException(status_code=401, detail="Google sign-in could not be verified. Please try again.")
-    email = (resp.json().get("email") or "").strip().lower()
+    data = resp.json()
+    email = (data.get("email") or "").strip().lower()
     if not email:
         raise HTTPException(status_code=401, detail="Google did not return an email. Please try another account.")
 
     user = await db.users.find_one({"email": email})
     if not user:
-        raise HTTPException(status_code=404,
-                            detail="No Anjali account is linked to this Google email. Please register first or contact the admin.")
+        # No account yet -> tell the frontend to start a Google-prefilled registration request.
+        return {"mode": "register", "email": email, "name": (data.get("name") or "").strip()}
     if user.get("blocked"):
         raise HTTPException(status_code=403, detail="Your account has been blocked. Please contact the admin.")
 
@@ -304,7 +316,7 @@ async def google_session(body: GoogleSessionBody, request: Request):
     user["email_verified"] = True
     await log_audit(clean_user(user), "login_google", "user", user["id"], request=request)
     token = create_token(user["id"])
-    return {"token": token, "user": clean_user(user)}
+    return {"mode": "login", "token": token, "user": clean_user(user)}
 
 
 class AdminLoginBody(BaseModel):

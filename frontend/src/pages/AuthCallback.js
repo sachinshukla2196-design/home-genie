@@ -31,6 +31,11 @@ export default function AuthCallback() {
     (async () => {
       try {
         const { data } = await API.post("/auth/google/session", { session_id: sessionId });
+        if (data.mode === "register") {
+          toast.message("Let's finish your registration");
+          navigate("/register", { replace: true, state: { googleEmail: data.email, googleName: data.name } });
+          return;
+        }
         applyAuth(data);
         toast.success("Signed in with Google");
         navigate(ADMIN_ROLES.includes(data.user.role) ? "/admin" : "/app/dashboard", { replace: true });
