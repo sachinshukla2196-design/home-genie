@@ -2,6 +2,8 @@
 commissions, activations, settings, audit logs, reports (with CSV export)."""
 import io
 import csv
+import math
+import re
 import secrets
 from core import hash_password, next_distributor_id, get_or_create_wallet
 from fastapi import APIRouter, HTTPException, Request, Depends
@@ -693,6 +695,81 @@ async def admin_wallet_credit(body: WalletCreditBody, request: Request, admin: d
     w = await db.wallets.find_one({"user_id": u["id"]}, {"_id": 0, "available_balance": 1})
     return {"message": f"₹{amt} credited to {did}.", "distributor_id": did, "amount": amt,
             "available_balance": round(float((w or {}).get("available_balance", 0)), 2)}
+
+
+async def _compute_mfi(month: str):
+    """Monthly Fixed Income snapshot: 1% of eligible product-sales turnover (subtotal excl GST),
+    shared equally among GREEN distributor IDs. Read-only computation."""
+    orders = await db.orders.find({"payment_status": "paid"},
+                                  {"_id": 0, "subtotal": 1, "status": 1, "created_at": 1}).to_list(100000)
+    turnover = 0.0
+    for o in orders:
+        if not str(o.get("created_at", "")).startswith(month):
+            continue
+        if o.get("status") in ("cancelled", "refunded", "reversed"):
+            continue
+        turnover += float(o.get("subtotal") or 0)
+    turnover = round(turnover, 2)
+    pool = round(turnover * 0.01, 2)
+    n = await db.users.count_documents({"role": "distributor", "status": "green"})
+    per = (math.floor((pool / n) * 100) / 100) if n else 0.0
+    distributed = round(per * n, 2)
+    residual = round(pool - distributed, 2)
+    run = await db.monthly_income_runs.find_one({"id": f"MFI:{month}"}, {"_id": 0})
+    return {"month": month, "turnover": turnover, "pool": pool, "eligible_green_ids": n,
+            "per_id_allocation": per, "total_distributed": distributed, "rounding_residual": residual,
+            "status": (run or {}).get("status", "not_processed"), "processed_at": (run or {}).get("processed_at")}
+
+
+@router.get("/monthly-income/preview")
+async def monthly_income_preview(month: str, admin: dict = Depends(require_admin)):
+    if not re.match(r"^\d{4}-\d{2}$", month or ""):
+        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+    return await _compute_mfi(month)
+
+
+class MonthBody(BaseModel):
+    month: str
+
+
+@router.post("/monthly-income/distribute")
+async def monthly_income_distribute(body: MonthBody, request: Request, admin: dict = Depends(require_admin)):
+    month = (body.month or "").strip()
+    if not re.match(r"^\d{4}-\d{2}$", month):
+        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+    run = await db.monthly_income_runs.find_one({"id": f"MFI:{month}"})
+    if run and run.get("status") == "completed":
+        raise HTTPException(status_code=409,
+                            detail=f"{month} already processed: ₹{run.get('per_id_allocation')} x {run.get('eligible_green_ids')} IDs.")
+    calc = await _compute_mfi(month)
+    base = {"id": f"MFI:{month}", "month": month, "turnover": calc["turnover"], "pool": calc["pool"],
+            "eligible_green_ids": calc["eligible_green_ids"], "per_id_allocation": calc["per_id_allocation"],
+            "total_distributed": calc["total_distributed"], "rounding_residual": calc["rounding_residual"],
+            "processed_at": now_iso(), "processed_by": admin.get("distributor_id")}
+    if calc["eligible_green_ids"] == 0:
+        base.update({"total_distributed": 0.0, "rounding_residual": calc["pool"], "status": "no_eligible"})
+        await db.monthly_income_runs.update_one({"id": f"MFI:{month}"}, {"$set": base}, upsert=True)
+        return {"message": f"No eligible GREEN IDs for {month}. Pool ₹{calc['pool']} not distributed.", **calc, "status": "no_eligible"}
+    per = calc["per_id_allocation"]
+    greens = await db.users.find({"role": "distributor", "status": "green"}, {"_id": 0, "id": 1}).to_list(100000)
+    newly = 0
+    for g in greens:
+        if await db.wallet_transactions.find_one({"user_id": g["id"], "type": "MONTHLY_FIXED_INCOME", "reference": f"MFI:{month}"}):
+            continue  # resumable: already credited this month
+        await add_wallet_transaction(g["id"], "MONTHLY_FIXED_INCOME", per, "CREDITED",
+                                     reference=f"MFI:{month}", direction="credit",
+                                     description=f"Monthly Fixed Income {month}")
+        await create_notification(g["id"], "income", f"₹{per} Monthly Fixed Income",
+                                  f"Your equal share of the {month} company pool: ₹{per}.",
+                                  f"₹{per} मासिक निश्चित आय", f"{month} कंपनी पूल में आपका बराबर हिस्सा: ₹{per}।")
+        newly += 1
+    base["status"] = "completed"
+    await db.monthly_income_runs.update_one({"id": f"MFI:{month}"}, {"$set": base}, upsert=True)
+    await log_audit(admin, "monthly_income_distributed", "monthly_income", f"MFI:{month}",
+                    new_value={"month": month, "pool": calc["pool"], "per_id": per,
+                               "ids": calc["eligible_green_ids"], "newly_credited": newly}, request=request)
+    return {"message": f"Distributed ₹{calc['total_distributed']} to {calc['eligible_green_ids']} GREEN IDs for {month} (₹{per} each).",
+            **calc, "status": "completed", "newly_credited": newly}
 
 
 class AdminPwBody(BaseModel):

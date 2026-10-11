@@ -38,6 +38,7 @@ import AdminOrders from "@/pages/admin/AdminOrders";
 import AdminKyc from "@/pages/admin/AdminKyc";
 import AdminWithdrawals from "@/pages/admin/AdminWithdrawals";
 import AdminCommissions from "@/pages/admin/AdminCommissions";
+import AdminMonthlyIncome from "@/pages/admin/AdminMonthlyIncome";
 import AdminReports from "@/pages/admin/AdminReports";
 import AdminSettings from "@/pages/admin/AdminSettings";
 import AdminAuditLogs from "@/pages/admin/AdminAuditLogs";
@@ -88,6 +89,7 @@ function App() {
                   <Route path="kyc" element={<AdminKyc />} />
                   <Route path="withdrawals" element={<AdminWithdrawals />} />
                   <Route path="commissions" element={<AdminCommissions />} />
+                  <Route path="monthly-income" element={<AdminMonthlyIncome />} />
                   <Route path="reports" element={<AdminReports />} />
                   <Route path="settings" element={<AdminSettings />} />
                   <Route path="audit" element={<AdminAuditLogs />} />

@@ -1,3 +1,9 @@
+# CHANGELOG — 2026-06 (Monthly Fixed Income 1% pool)
+- NEW Rule 5: Monthly Fixed Income. `admin_routes.py` adds `_compute_mfi`, `GET /api/admin/monthly-income/preview`, `POST /api/admin/monthly-income/distribute`. Pool = 1% of month's paid product subtotal (excl GST, excl cancelled/refunded/reversed), split EQUALLY among GREEN distributor IDs. Floor-to-paise per ID; residual recorded. Idempotent + resumable via new `monthly_income_runs` collection (keyed `MFI:YYYY-MM`) + per-ID guard on wallet_transactions type `MONTHLY_FIXED_INCOME` ref `MFI:YYYY-MM`. Zero GREEN => no distribution, residual=full pool.
+- UI: new admin page `AdminMonthlyIncome.js` + route `/admin/monthly-income` + nav "Monthly Income". Distributors see credits in existing wallet history automatically.
+- Rules 2/3/4/7/8 verified ALREADY WORKING (₹100@registration, admin ₹1500 activation, 45% matrix, team view, wallet integrity). Rule 6 income types = PENDING BUSINESS CLARIFICATION (undefined bases/thresholds/frequency).
+
+
 # CHANGELOG — 2026-06 (Admin identity migration)
 - Super-admin identity moved from distributor_id `ANJ000000` to new **`ADMIN001`** (same email sachin.shukla2196@gmail.com / username `admin` / env password / passcode — admin login UNCHANGED).
 - `ANJ000000` demoted to a plain **distributor**: role=distributor, email/username detached, now visible in admin Users list, admin can reset its password (verified). Keeps its ₹100 wallet + referral-tree root position.
