@@ -84,6 +84,7 @@ export default function AdminMonthlyIncome() {
                 <th className="py-2 pr-3">Income</th>
                 <th className="py-2 pr-3">Rate</th>
                 <th className="py-2 pr-3">Trigger</th>
+                <th className="py-2 pr-3">Recipient</th>
                 <th className="py-2">Status</th>
               </tr>
             </thead>
@@ -93,6 +94,7 @@ export default function AdminMonthlyIncome() {
                   <td className="py-3 pr-3 font-medium text-ink">{r.name}</td>
                   <td className="py-3 pr-3 font-semibold text-forest">{r.rate_percent}%</td>
                   <td className="py-3 pr-3 text-muted2">{r.trigger}</td>
+                  <td className="py-3 pr-3 text-muted2">{r.recipient || "—"}</td>
                   <td className="py-3">
                     <span className="rounded-full bg-gold/10 px-2 py-1 text-xs font-medium text-gold">Pending business clarification</span>
                   </td>
