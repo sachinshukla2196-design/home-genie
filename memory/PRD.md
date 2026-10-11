@@ -294,3 +294,9 @@ VERIFIED via curl: commission release→RELEASED, double release→400, hold→H
 - Legal pages: `/legal/{privacy,terms,refund-policy,shipping-policy,distributor-terms,contact}` + footer links.
 - CORS .env: anjaliherbal.life + preview. Production secret CORS_ORIGINS must be set by user (was `*`).
 - Verified via temp-data script (cleaned up): Tests A–L all PASS.
+
+---
+## Rule 6 — Additional Income (status as of Jun 2026)
+- **Monthly Fixed Income (1% pool)**: ALREADY WORKING — `admin_routes._compute_mfi`, `/api/admin/monthly-income/preview|distribute`. 1% of paid-order subtotal (excl GST), excludes cancelled/refunded/reversed, equal split among GREEN distributor IDs with paise-floor rounding + residual, idempotent & resumable per month.
+- **Personal Repurchase 5% / Team Purchase 2.5% / Royalty 5% (RD) / Master Club 3% (CD) / Super Club 3% (PD)**: RATES LOCKED but PENDING_BUSINESS_CLARIFICATION — no payout wired (calc bases, clearance thresholds, payout periods, recipient rules undefined). Registry in `backend/income_rules.py`, surfaced read-only via `GET /api/admin/income-rules` and the Admin → Monthly Fixed Income page table.
+- No production financial records were modified in this task.

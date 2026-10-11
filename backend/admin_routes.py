@@ -772,6 +772,16 @@ async def monthly_income_distribute(body: MonthBody, request: Request, admin: di
             **calc, "status": "completed", "newly_credited": newly}
 
 
+@router.get("/income-rules")
+async def income_rules(admin: dict = Depends(require_admin)):
+    """Read-only: locked rates + status for the five additional income categories.
+    These are PENDING_BUSINESS_CLARIFICATION — rates are locked but no payout is active
+    until the business supplies the missing bases/qualification/period definitions."""
+    from income_rules import ADDITIONAL_INCOME_RULES
+    return {"rules": ADDITIONAL_INCOME_RULES,
+            "note": "Monthly Fixed Income (1% pool) is handled separately and is fully active."}
+
+
 class AdminPwBody(BaseModel):
     password: Optional[str] = None
 

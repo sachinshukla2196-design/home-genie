@@ -1,6 +1,5 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { toast } from "sonner";
-import { Banknote } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { API, apiError } from "@/lib/api";
 
@@ -11,6 +10,13 @@ export default function AdminMonthlyIncome() {
   const [month, setMonth] = useState(thisMonth());
   const [data, setData] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [rules, setRules] = useState([]);
+
+  useEffect(() => {
+    API.get("/admin/income-rules")
+      .then(({ data }) => setRules(data.rules || []))
+      .catch(() => {});
+  }, []);
 
   const preview = async () => {
     setBusy(true);
@@ -67,6 +73,35 @@ export default function AdminMonthlyIncome() {
           {data.processed_at && <Stat label="Processed At" value={String(data.processed_at).slice(0, 10)} testid="mfi-processed-at" />}
         </div>
       )}
+
+      <div className="rounded-2xl border border-brand-50 bg-white p-6 shadow-card" data-testid="additional-income-rules">
+        <h2 className="font-display text-lg font-semibold text-ink">Additional Income Rules (Rule 6)</h2>
+        <p className="mt-1 text-xs text-muted2">Rates are locked. Payouts are NOT active until the business supplies the missing calculation bases, clearance thresholds and payout periods.</p>
+        <div className="mt-4 overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-brand-50 text-xs uppercase tracking-wide text-muted2">
+                <th className="py-2 pr-3">Income</th>
+                <th className="py-2 pr-3">Rate</th>
+                <th className="py-2 pr-3">Trigger</th>
+                <th className="py-2">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rules.map((r) => (
+                <tr key={r.key} className="border-b border-brand-50/60 align-top" data-testid={`income-rule-${r.key}`}>
+                  <td className="py-3 pr-3 font-medium text-ink">{r.name}</td>
+                  <td className="py-3 pr-3 font-semibold text-forest">{r.rate_percent}%</td>
+                  <td className="py-3 pr-3 text-muted2">{r.trigger}</td>
+                  <td className="py-3">
+                    <span className="rounded-full bg-gold/10 px-2 py-1 text-xs font-medium text-gold">Pending business clarification</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </div>
   );
 }
