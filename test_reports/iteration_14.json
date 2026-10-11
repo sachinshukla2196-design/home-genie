@@ -1,0 +1,20 @@
+{
+  "summary": "Frontend-only verification of the new Income Breakdown dashboard card for distributor bdtest_3881@example.com. Logged in via /login (login-email/password/submit testids), landed on /app/dashboard. The 'Income Breakdown' card renders with data-testid='income-breakdown' and shows the empty state (data-testid='empty-breakdown', text 'No income yet') as expected since the account has no income. No console errors. No horizontal overflow at 1920x1080 (desktop) or 390x844 (mobile).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A", "frontend": "100%"},
+  "test_credentials": "Distributor: bdtest_3881@example.com / test1234 (ANJ000240)",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Income Breakdown card verified in empty state only. To verify the four rows (income-bd-matrix/team/repurchase/pool) and income-bd-total, a distributor account with CREDITED commissions and/or MONTHLY_FIXED_INCOME wallet txns is needed.",
+  "rca of the issue": "N/A - no issue found"
+}
