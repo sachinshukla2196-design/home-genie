@@ -339,6 +339,26 @@ async def dashboard(user: dict = Depends(get_current_user)):
         amt = sum(c.get("amount", 0.0) for c in commissions if (c.get("created_at") or "")[:10] == day)
         series.append({"date": day[5:], "income": amt})
 
+    # Income breakdown by source (net of reversed commissions) + monthly pool from the ledger
+    by_type = {}
+    async for r in db.commissions.aggregate([
+        {"$match": {"sponsor_id": user["id"], "status": "CREDITED"}},
+        {"$group": {"_id": "$type", "total": {"$sum": "$amount"}}},
+    ]):
+        by_type[r["_id"]] = r.get("total", 0.0)
+    pool_total = 0.0
+    async for r in db.wallet_transactions.aggregate([
+        {"$match": {"user_id": user["id"], "type": "MONTHLY_FIXED_INCOME", "direction": "credit"}},
+        {"$group": {"_id": None, "total": {"$sum": "$amount"}}},
+    ]):
+        pool_total = r.get("total", 0.0)
+    income_breakdown = [
+        {"key": "matrix", "label": "Team Matrix (45%)", "amount": round(by_type.get("PURCHASE_LEVEL_COMMISSION", 0.0), 2)},
+        {"key": "team", "label": "Team Purchase (2.5%)", "amount": round(by_type.get("TEAM_PURCHASE_INCOME", 0.0), 2)},
+        {"key": "repurchase", "label": "Personal Repurchase (5%)", "amount": round(by_type.get("PERSONAL_REPURCHASE_INCOME", 0.0), 2)},
+        {"key": "pool", "label": "Monthly Fixed Income", "amount": round(pool_total, 2)},
+    ]
+
     return {
         "user": {"distributor_id": user.get("distributor_id"), "full_name": user.get("full_name"),
                  "status": user.get("status"), "kyc_status": user.get("kyc_status")},
@@ -353,5 +373,6 @@ async def dashboard(user: dict = Depends(get_current_user)):
         "recent_transactions": txns,
         "notifications": notif,
         "income_series": series,
+        "income_breakdown": income_breakdown,
         "rank": rank,
     }

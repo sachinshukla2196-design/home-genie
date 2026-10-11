@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
   Wallet, TrendingUp, Package, Users, ShoppingBag, Share2, ShieldCheck, LifeBuoy,
-  ArrowRight, Sparkles, CheckCircle2,
+  ArrowRight, Sparkles, CheckCircle2, PieChart,
 } from "lucide-react";
 import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 import { StatCard } from "@/components/StatCard";
@@ -109,6 +109,47 @@ export default function Dashboard() {
         <StatCard testid="stat-withdrawn" icon={Wallet} accent="ink" label={t("wallet.withdrawn")} value={money(d.wallet.total_withdrawn)} index={6} />
         <StatCard testid="stat-rank" icon={TrendingUp} accent="gold" label={t("dash.rank")} value={d.rank?.current || "—"} sub={d.rank ? (d.rank.is_max ? t("dash.topRank") : `${t("dash.nextRank")}: ${d.rank.next}`) : t("dash.rankSoon")} index={7} />
       </div>
+
+      {/* Income breakdown by source */}
+      {d.income_breakdown && (
+        <div className="rounded-2xl border border-brand-50 bg-white p-6 shadow-card" data-testid="income-breakdown">
+          <div className="flex items-center gap-2">
+            <PieChart size={18} className="text-brand" />
+            <h3 className="font-display text-lg font-medium text-ink">{t("dash.incomeBreakdown")}</h3>
+          </div>
+          <p className="mt-1 text-sm text-muted2">{t("dash.incomeBreakdownSub")}</p>
+          {(() => {
+            const total = d.income_breakdown.reduce((s, x) => s + (x.amount || 0), 0);
+            const colors = { matrix: "#176B43", team: "#2E9E63", repurchase: "#C9A227", pool: "#66736B" };
+            if (total <= 0) return <EmptyState icon={PieChart} title={t("empty.income")} testid="empty-breakdown" />;
+            return (
+              <div className="mt-4 space-y-3.5">
+                {d.income_breakdown.map((b) => {
+                  const pct = Math.round(((b.amount || 0) / total) * 100);
+                  return (
+                    <div key={b.key} data-testid={`income-bd-${b.key}`}>
+                      <div className="flex items-center justify-between text-sm">
+                        <span className="font-medium text-ink">{b.label}</span>
+                        <span className="font-display font-semibold text-forest" data-testid={`income-bd-${b.key}-amount`}>
+                          {money(b.amount)} <span className="text-xs font-normal text-muted2">({pct}%)</span>
+                        </span>
+                      </div>
+                      <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-brand-50">
+                        <motion.div initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.6 }}
+                          className="h-full rounded-full" style={{ background: colors[b.key] }} />
+                      </div>
+                    </div>
+                  );
+                })}
+                <div className="flex items-center justify-between border-t border-brand-50 pt-3 text-sm">
+                  <span className="font-semibold text-ink">{t("dash.totalIncome")}</span>
+                  <span className="font-display font-semibold text-forest" data-testid="income-bd-total">{money(total)}</span>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
 
       <div className="grid gap-6 lg:grid-cols-3">
         {/* Income chart */}
