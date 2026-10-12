@@ -711,7 +711,9 @@ async def _compute_mfi(month: str):
             continue
         turnover += float(o.get("subtotal") or 0)
     turnover = round(turnover, 2)
-    pool = round(turnover * 0.01, 2)
+    from income_config import resolve_rate
+    mfi_rule = await resolve_rate("MONTHLY_FIXED_INCOME", 1.0)
+    pool = round(turnover * mfi_rule["rate"] / 100.0, 2)
     n = await db.users.count_documents({"role": "distributor", "status": "green"})
     per = (math.floor((pool / n) * 100) / 100) if n else 0.0
     distributed = round(per * n, 2)
@@ -781,6 +783,72 @@ async def income_rules(admin: dict = Depends(require_admin)):
     from income_rules import ADDITIONAL_INCOME_RULES
     return {"rules": ADDITIONAL_INCOME_RULES,
             "note": "Monthly Fixed Income (1% pool) is handled separately and is fully active."}
+
+
+class IncomeConfigBody(BaseModel):
+    rate_percent: float
+    enabled: bool = True
+    effective_at: Optional[str] = None
+    reason: str = ""
+
+
+@router.get("/income-config")
+async def income_config_list(admin: dict = Depends(require_admin)):
+    from income_config import INCOME_CATEGORIES, resolve_rate
+    out = []
+    for c in INCOME_CATEGORIES:
+        latest = await db.income_rule_configs.find_one(
+            {"category": c["key"], "status": "published"}, sort=[("version", -1)], projection={"_id": 0})
+        applied = await resolve_rate(c["key"], c["default_rate"])
+        out.append({**c, "applied_rate": applied["rate"], "applied_version": applied["version"],
+                    "applied_enabled": applied["enabled"], "current": latest})
+    return {"categories": out,
+            "note": "Rates apply prospectively from their effective time. Already-posted commissions keep their original rule version and are never recalculated."}
+
+
+@router.get("/income-config/{category}/history")
+async def income_config_history(category: str, admin: dict = Depends(require_admin)):
+    from income_config import CATEGORY_KEYS
+    if category not in CATEGORY_KEYS:
+        raise HTTPException(status_code=404, detail="Unknown income category.")
+    versions = await db.income_rule_configs.find({"category": category}, {"_id": 0}).sort("version", -1).to_list(500)
+    return {"category": category, "versions": versions}
+
+
+@router.post("/income-config/{category}")
+async def income_config_publish(category: str, body: IncomeConfigBody, request: Request, admin: dict = Depends(require_admin)):
+    from datetime import datetime as _dt, timezone as _tz
+    from income_config import CATEGORY_KEYS, DEFAULT_RATES
+    if category not in CATEGORY_KEYS:
+        raise HTTPException(status_code=404, detail="Unknown income category.")
+    rate = round(float(body.rate_percent), 4)
+    if rate < 0 or rate > 100:
+        raise HTTPException(status_code=400, detail="Rate must be between 0 and 100.")
+    eff = (body.effective_at or "").strip() or now_iso()
+    try:
+        _eff_dt = _dt.fromisoformat(eff.replace("Z", "+00:00"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="effective_at must be a valid ISO datetime.")
+    if _eff_dt.tzinfo is None:
+        _eff_dt = _eff_dt.replace(tzinfo=_tz.utc)
+    eff = _eff_dt.isoformat()
+    reason = (body.reason or "").strip()
+    if len(reason) < 3:
+        raise HTTPException(status_code=400, detail="Please provide a change reason (min 3 characters).")
+    latest = await db.income_rule_configs.find_one({"category": category, "status": "published"}, sort=[("version", -1)])
+    old_rate = float(latest["rate_percent"]) if latest else DEFAULT_RATES.get(category)
+    version = (int(latest["version"]) + 1) if latest else 1
+    doc = {"id": new_id(), "category": category, "version": version, "rate_percent": rate,
+           "enabled": bool(body.enabled), "effective_at": eff, "status": "published",
+           "old_rate": old_rate, "reason": reason, "created_by": admin.get("distributor_id"),
+           "created_by_id": admin.get("id"), "created_at": now_iso()}
+    await db.income_rule_configs.insert_one(dict(doc))
+    await log_audit(admin, "income_config_published", "income_config", f"{category}:v{version}",
+                    new_value={"category": category, "version": version, "old_rate": old_rate,
+                               "new_rate": rate, "enabled": body.enabled, "effective_at": eff, "reason": reason},
+                    request=request)
+    doc.pop("_id", None)
+    return {"message": f"{category} v{version} published at {rate}% (effective {eff}).", "config": doc}
 
 
 class AdminPwBody(BaseModel):

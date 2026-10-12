@@ -21,6 +21,7 @@ const NAV = [
   { to: "/admin/withdrawals", icon: Banknote, key: "nav.withdrawals" },
   { to: "/admin/commissions", icon: Share2, key: "nav.commissions" },
   { to: "/admin/monthly-income", icon: Banknote, key: "Monthly Income" },
+  { to: "/admin/income-rules", icon: Banknote, key: "Income Rules" },
   { to: "/admin/reports", icon: FileBarChart, key: "nav.reports" },
   { to: "/admin/settings", icon: Settings, key: "nav.settings" },
   { to: "/admin/audit", icon: ScrollText, key: "nav.audit" },
