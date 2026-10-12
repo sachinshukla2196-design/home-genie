@@ -318,3 +318,13 @@ VERIFIED via curl: commission release→RELEASED, double release→400, hold→H
 - `/api/dashboard` now returns `income_breakdown`: [matrix (PURCHASE_LEVEL_COMMISSION), team (TEAM_PURCHASE_INCOME), repurchase (PERSONAL_REPURCHASE_INCOME), pool (MONTHLY_FIXED_INCOME)]. Commission sources summed from `commissions` where sponsor_id=user & status=CREDITED (REVERSED excluded); pool from MONTHLY_FIXED_INCOME credit wallet txns.
 - Frontend `Dashboard.js` renders an "Income Breakdown" card (data-testid income-breakdown) with per-source bars + % and a total row; empty state (empty-breakdown) when total is 0. i18n keys dash.incomeBreakdown / dash.incomeBreakdownSub (en+hi).
 - Verified: empty state via testing agent (iteration_14, 100% frontend, no console errors, no overflow at 390/1920); populated state via API (matrix 500/team 100/repurchase 200/pool 75, REVERSED excluded). Temp test distributor ANJ000240 created then fully deleted.
+
+---
+## Income & Commission Rules Manager (Jun 2026)
+- New DB-backed, versioned rule configs in collection `income_rule_configs` (fields: category, version, rate_percent, enabled, effective_at, status=published, old_rate, reason, created_by/created_by_id, created_at). Prior versions preserved; never deleted via UI.
+- `backend/income_config.py`: INCOME_CATEGORIES (6) + `resolve_rate(category, default, at_iso)` = latest published config with effective_at <= time, else hardcoded default (version 0). effective_at normalized to tz-aware ISO on publish for correct lexicographic comparison.
+- Admin endpoints (require_admin): GET /api/admin/income-config (list w/ applied rate+version), GET /api/admin/income-config/{category}/history, POST /api/admin/income-config/{category} (validates rate 0-100, reason>=3, ISO effective_at; audited via log_audit). 401/400/404 verified.
+- Payout functions now read the rate via resolve_rate and STAMP rule_version on each commission; disabled config => no payout; rates apply prospectively; already-posted commissions keep their version (never recalculated). MFI pool % is now configurable (default 1%), distribution unchanged.
+- Royalty/Master Club/Super Club: rate configurable but payout stays INACTIVE (allocation undefined).
+- Frontend: `AdminIncomeRules.js` (route /admin/income-rules, nav 'Income Rules') — cards per category, edit->review->confirm publish, version history, validation. Verified 100% by testing agent (iteration_15): rendering, publish, history, invalid-rate block, no overflow at 1920/390, no console errors.
+- Unchanged: 45% matrix, ₹100 referral reward, Twilio/OTP, Razorpay, KYC, withdrawals, activation.

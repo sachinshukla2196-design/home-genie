@@ -1,0 +1,21 @@
+{
+  "summary": "Frontend-only testing of Admin Income & Commission Rules page (/admin/income-rules). All 6 rule cards render with correct testids, rates and Payout active/Config only badges. Edit flow on ROYALTY: dialog opens, rate 5->6 with reason 'test version', Review panel shows diff, Confirm publish succeeds -> card updates to 6% v1 with effective timestamp. History dialog lists history-v1 with 6%, previous 5%, reason, and ADMIN001 author. Validation: rate=150 produces 'Rate must be between 0 and 100.' error toast and publish is blocked. No horizontal overflow at 1920px or 390px. No console errors observed.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Effective-from input uses native browser datetime-local picker (mm/dd/yyyy) instead of a shadcn calendar — minor UX inconsistency; acceptable since field is optional."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (not tested per request)", "frontend": "100%"},
+  "test_credentials": "admin / fFiiKDF2TBZtiVrwcu / passcode 79258486",
+  "seed_data_creation": "Published ROYALTY v1 (6%, reason 'test version') via UI — safe since ROYALTY is Config only.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Admin Income Rules UI verified end-to-end: card rendering, edit->review->publish, history, invalid-rate validation, responsive at 1920 and 390. ROYALTY is now at v1 (6%). Login via placeholder-based 3-input form (/admin-secure-login) using testids admin-email, admin-password, admin-passcode."
+}
