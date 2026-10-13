@@ -332,3 +332,4 @@ VERIFIED via curl: commission release→RELEASED, double release→400, hold→H
 ## Oct 2026 — Content-only update
 - Navdurga wishes banner added as slide 0 of the Landing hero carousel (existing carousel reused, 4 slides now).
 - Support email changed everywhere to support@anjaliherbal.life (Profile.js hardcode, core.py DEFAULT_SETTINGS, business_settings DB doc). No remaining anjaliherballife.in in app code (only in legacy test scripts).
+- Oct 2026: Distributor Team page got a "Tree" tab (GET /api/team/tree, reuses build_referral_tree rooted at the logged-in distributor + shared TreeView component) mirroring the admin Master Root network tree.

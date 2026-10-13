@@ -5,9 +5,14 @@ from typing import Optional
 from datetime import datetime, timezone, timedelta
 
 from core import (db, now_iso, new_id, get_current_user, get_settings, get_or_create_wallet,
-                  add_wallet_transaction, create_notification, log_audit)
+                  add_wallet_transaction, create_notification, log_audit, build_referral_tree)
 
 router = APIRouter(prefix="/api", tags=["distributor"])
+
+
+@router.get("/team/tree")
+async def team_tree(user: dict = Depends(get_current_user)):
+    return await build_referral_tree(user["distributor_id"])
 
 
 # ---------------- Rank / BV ----------------

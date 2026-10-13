@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
 import { API } from "@/lib/api";
+import { TreeView } from "@/components/TreeView";
 
 const money = (v) => `₹${Number(v || 0).toLocaleString("en-IN")}`;
 // User-facing rank/designation names by depth (backend keeps numeric levels internally).
@@ -19,8 +20,12 @@ export default function Team() {
   const { user } = useAuth();
   const [data, setData] = useState(null);
   const [view, setView] = useState("levels");
+  const [tree, setTree] = useState(null);
 
-  useEffect(() => { API.get("/team").then(({ data }) => setData(data)).catch(() => setData({ members: [], levels: [] })); }, []);
+  useEffect(() => {
+    API.get("/team").then(({ data }) => setData(data)).catch(() => setData({ members: [], levels: [] }));
+    API.get("/team/tree").then(({ data }) => setTree(data)).catch(() => {});
+  }, []);
   if (!data) return <Skeleton className="h-64 rounded-2xl" />;
 
   const members = data.members || [];
@@ -30,6 +35,7 @@ export default function Team() {
   const TABS = [
     { id: "levels", label: "Ranks", icon: Layers },
     { id: "matrix", label: "Matrix", icon: Network },
+    { id: "tree", label: "Tree", icon: Share2 },
     { id: "list", label: "List", icon: List },
   ];
 
@@ -57,6 +63,11 @@ export default function Team() {
         <LevelsView levels={levels} />
       ) : view === "matrix" ? (
         <MatrixView root={data.root} members={members} />
+      ) : view === "tree" ? (
+        <div className="rounded-2xl border border-brand-50 bg-white p-5 shadow-soft" data-testid="team-tree-card">
+          <div className="mb-1 text-xs font-semibold text-muted2">Network Tree (root: {user?.distributor_id})</div>
+          <TreeView tree={tree} testid="team-network-tree" />
+        </div>
       ) : (
         <ListView members={members} t={t} />
       )}
