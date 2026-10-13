@@ -1,0 +1,8 @@
+crons:
+  - name: club-income-monthly
+    description: "Pays Royalty/Master Club/Super Club income for the previous month on the 1st (07:00 IST)"
+    cron: "30 1 1 * *"
+    endpoint: "{{BASE_URL}}/api/cron/club-income"
+    method: POST
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true

@@ -20,9 +20,7 @@ ADDITIONAL_INCOME_RULES = [
         "trigger": "Every paid personal order AFTER the first paid purchase",
         "recipient": "The self-purchasing distributor (DEFINED)",
         "status": "IMPLEMENTED",
-        "missing_definitions": [
-            "Partial refunds / partial returns are NOT supported by the current order lifecycle (only full-order refund clawback is handled); confirm rules if partials are introduced later",
-        ],
+        "definition": "Monthly on the 1st: each distributor at EXACT rank earns rate% of OWN team's previous-month paid turnover (subtotal excl GST, all downline levels). Auto via cron + admin preview/distribute.",
     },
     {
         "key": "TEAM_PURCHASE",
@@ -31,7 +29,7 @@ ADDITIONAL_INCOME_RULES = [
         "trigger": "Product purchases by the direct (level-1) downline team",
         "recipient": "The direct sponsor (must be GREEN/active)",
         "status": "IMPLEMENTED",
-        "missing_definitions": [],
+        "definition": "Monthly on the 1st: each distributor at EXACT rank earns rate% of OWN team's previous-month paid turnover (subtotal excl GST, all downline levels). Auto via cron + admin preview/distribute.",
     },
     {
         "key": "ROYALTY",
@@ -39,12 +37,8 @@ ADDITIONAL_INCOME_RULES = [
         "rate_percent": 5.0,
         "trigger": "RD-level clearance",
         "recipient": "RD-qualified distributor",
-        "status": "PENDING_BUSINESS_CLARIFICATION",
-        "missing_definitions": [
-            "Exact RD qualification threshold and the precise meaning of 'RD-level clearance' (no documented, reliable definition exists)",
-            "Calculation base for the 5% (company turnover / team turnover / eligible sales amount / a pool / other)",
-            "Payout eligibility and recipient rules",
-        ],
+        "status": "IMPLEMENTED",
+        "definition": "Monthly on the 1st: each distributor at EXACT rank earns rate% of OWN team's previous-month paid turnover (subtotal excl GST, all downline levels). Auto via cron + admin preview/distribute.",
     },
     {
         "key": "MASTER_CLUB",
@@ -52,12 +46,8 @@ ADDITIONAL_INCOME_RULES = [
         "rate_percent": 3.0,
         "trigger": "CD-level clearance",
         "recipient": "CD-qualified distributor",
-        "status": "PENDING_BUSINESS_CLARIFICATION",
-        "missing_definitions": [
-            "Exact CD qualification / clearance threshold (no documented, reliable definition exists)",
-            "Calculation base for the 3%",
-            "Recipient-allocation and stacking rules",
-        ],
+        "status": "IMPLEMENTED",
+        "definition": "Monthly on the 1st: each distributor at EXACT rank earns rate% of OWN team's previous-month paid turnover (subtotal excl GST, all downline levels). Auto via cron + admin preview/distribute.",
     },
     {
         "key": "SUPER_CLUB",
@@ -65,12 +55,8 @@ ADDITIONAL_INCOME_RULES = [
         "rate_percent": 3.0,
         "trigger": "PD-level clearance",
         "recipient": "PD-qualified distributor",
-        "status": "PENDING_BUSINESS_CLARIFICATION",
-        "missing_definitions": [
-            "Exact PD qualification / clearance threshold (no documented, reliable definition exists)",
-            "Calculation base for the 3%",
-            "Recipient-allocation and stacking rules",
-        ],
+        "status": "IMPLEMENTED",
+        "definition": "Monthly on the 1st: each distributor at EXACT rank earns rate% of OWN team's previous-month paid turnover (subtotal excl GST, all downline levels). Auto via cron + admin preview/distribute.",
     },
 ]
 

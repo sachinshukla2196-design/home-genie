@@ -775,6 +775,27 @@ async def monthly_income_distribute(body: MonthBody, request: Request, admin: di
             **calc, "status": "completed", "newly_credited": newly}
 
 
+@router.get("/club-income/preview")
+async def club_income_preview(month: str, admin: dict = Depends(require_admin)):
+    if not re.match(r"^\d{4}-\d{2}$", month or ""):
+        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+    from club_income import compute_club_income
+    return await compute_club_income(month)
+
+
+@router.post("/club-income/distribute")
+async def club_income_distribute(body: MonthBody, request: Request, admin: dict = Depends(require_admin)):
+    month = (body.month or "").strip()
+    if not re.match(r"^\d{4}-\d{2}$", month):
+        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
+    from club_income import distribute_club_income
+    res = await distribute_club_income(month, admin.get("distributor_id"))
+    await log_audit(admin, "club_income_distributed", "monthly_income", f"CLUB:{month}",
+                    new_value={"month": month, "qualifiers": res["qualifiers"], "total": res["total_payout"],
+                               "newly_credited": res["newly_credited"]}, request=request)
+    return res
+
+
 @router.get("/income-rules")
 async def income_rules(admin: dict = Depends(require_admin)):
     """Read-only: locked rates + status for the five additional income categories.

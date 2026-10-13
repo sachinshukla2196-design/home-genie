@@ -333,3 +333,8 @@ VERIFIED via curl: commission release→RELEASED, double release→400, hold→H
 - Navdurga wishes banner added as slide 0 of the Landing hero carousel (existing carousel reused, 4 slides now).
 - Support email changed everywhere to support@anjaliherbal.life (Profile.js hardcode, core.py DEFAULT_SETTINGS, business_settings DB doc). No remaining anjaliherballife.in in app code (only in legacy test scripts).
 - Oct 2026: Distributor Team page got a "Tree" tab (GET /api/team/tree, reuses build_referral_tree rooted at the logged-in distributor + shared TreeView component) mirroring the admin Master Root network tree.
+
+## Oct 2026 — Rule 6 Club/Royalty incomes ACTIVATED
+- User decision: each EXACT-rank qualifier (RD→Royalty 5%, CD→Master Club 3%, PD→Super Club 3%) earns rate% of OWN team's monthly paid turnover (subtotal excl GST, all downline levels ≤9, excl cancelled/refunded/reversed). Paid automatically on the 1st for previous month.
+- Code: backend/club_income.py (compute/distribute, idempotent per user+category+month via wallet_transactions ref CLUB:{CAT}:{YYYY-MM}; run record monthly_income_runs id CLUB:{month}), backend/cron_routes.py (POST /api/cron/club-income, Bearer WEBHOOK_CRON_SECRET, X-Webhook-Id idempotency, background task), .emergent/crons.yml (30 1 1 * * UTC = 07:00 IST on 1st), admin GET /api/admin/club-income/preview & POST /distribute, UI card on Admin → Monthly Income. income_config/income_rules marked IMPLEMENTED.
+- Verified on throwaway DB: 5% of ₹15,000.50 = ₹750.02 (floor paise), refunded & other-month orders excluded, re-run credits 0.
