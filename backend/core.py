@@ -182,7 +182,7 @@ DEFAULT_SETTINGS = {
     "currency": "INR",
     "currency_symbol": "₹",
     "company_name": "Anjali Herbal Life Ayurveda India LLP",
-    "company_email": "care@anjaliherballife.in",
+    "company_email": "support@anjaliherbal.life",
     "company_phone": "+91 90000 00000",
     "company_address": "Anjali Herbal Life Ayurveda India LLP, India",
 }

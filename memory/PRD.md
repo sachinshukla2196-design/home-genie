@@ -328,3 +328,7 @@ VERIFIED via curl: commission release→RELEASED, double release→400, hold→H
 - Royalty/Master Club/Super Club: rate configurable but payout stays INACTIVE (allocation undefined).
 - Frontend: `AdminIncomeRules.js` (route /admin/income-rules, nav 'Income Rules') — cards per category, edit->review->confirm publish, version history, validation. Verified 100% by testing agent (iteration_15): rendering, publish, history, invalid-rate block, no overflow at 1920/390, no console errors.
 - Unchanged: 45% matrix, ₹100 referral reward, Twilio/OTP, Razorpay, KYC, withdrawals, activation.
+
+## Oct 2026 — Content-only update
+- Navdurga wishes banner added as slide 0 of the Landing hero carousel (existing carousel reused, 4 slides now).
+- Support email changed everywhere to support@anjaliherbal.life (Profile.js hardcode, core.py DEFAULT_SETTINGS, business_settings DB doc). No remaining anjaliherballife.in in app code (only in legacy test scripts).

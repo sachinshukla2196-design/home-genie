@@ -12,6 +12,7 @@ import { API } from "@/lib/api";
 import { LEGAL_LINKS } from "@/pages/Legal";
 
 const BANNERS = [
+  "https://customer-assets-jt897jd0.emergentagent.net/job_anjali-ayurveda-mvp/artifacts/8fa8f9ed66cb9629_file_00000000c6c882118a76b34cf146a477.png",
   "https://customer-assets-jt897jd0.emergentagent.net/job_anjali-ayurveda-mvp/artifacts/0gaw4tbu_file_00000000625c8211a258936d4ac2b802.png",
   "https://customer-assets-jt897jd0.emergentagent.net/job_anjali-ayurveda-mvp/artifacts/uuv7y4vz_file_0000000029708211978b8f664a84d93d.png",
   "https://customer-assets-jt897jd0.emergentagent.net/job_anjali-ayurveda-mvp/artifacts/p90dxthf_file_0000000082848211b7666f867b23c943.png",
