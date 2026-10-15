@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 import { ShieldCheck, X, BadgeIndianRupee, Trash2 } from "lucide-react";
@@ -23,8 +23,8 @@ export default function AdminOrders() {
   const [manualBusy, setManualBusy] = useState(false);
   const money = (v) => `₹${Number(v).toLocaleString("en-IN")}`;
 
-  const load = () => API.get("/admin/orders").then(({ data }) => setOrders(data)).catch(() => setOrders([]));
-  useEffect(() => { load(); }, []);
+  const load = useCallback(() => API.get("/admin/orders").then(({ data }) => setOrders(data)).catch(() => setOrders([])), []);
+  useEffect(() => { load(); }, [load]);
 
   const change = async (id, status) => { try { await API.put(`/admin/orders/${id}/status`, { status }); toast.success(t("cta.save")); load(); } catch (e) { toast.error(apiError(e)); } };
 

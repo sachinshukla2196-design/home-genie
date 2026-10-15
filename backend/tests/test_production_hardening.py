@@ -13,7 +13,7 @@ Covers:
 """
 import os
 import time
-import random
+import secrets
 import string
 import pytest
 import requests
@@ -31,15 +31,15 @@ MASTER_ID = "MST000001"
 
 
 def _rand_mobile():
-    return "9" + "".join(random.choice("0123456789") for _ in range(9))
+    return "9" + "".join(secrets.choice("0123456789") for _ in range(9))
 
 
 def _rand_aadhaar():
-    return "".join(random.choice("0123456789") for _ in range(12))
+    return "".join(secrets.choice("0123456789") for _ in range(12))
 
 
 def _rand_str(n=6):
-    return "".join(random.choices(string.ascii_lowercase, k=n))
+    return "".join(secrets.choice(string.ascii_lowercase) for _ in range(n))
 
 
 # ---------------- Fixtures ----------------

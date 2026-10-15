@@ -103,7 +103,7 @@ export default function Landing() {
               <div className="relative aspect-[3/2] w-full">
                 {BANNERS.map((src, i) => (
                   <button
-                    key={i}
+                    key={src}
                     type="button"
                     onClick={() => navigate("/register")}
                     aria-hidden={i !== slide}
@@ -125,9 +125,9 @@ export default function Landing() {
                   </button>
                 ))}
                 <div className="absolute bottom-3 left-1/2 z-10 flex -translate-x-1/2 gap-2">
-                  {BANNERS.map((_, i) => (
+                  {BANNERS.map((src, i) => (
                     <button
-                      key={i}
+                      key={src}
                       type="button"
                       onClick={() => setSlide(i)}
                       aria-label={`Go to banner ${i + 1}`}

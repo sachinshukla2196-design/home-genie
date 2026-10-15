@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { Plus, Pencil, Power, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -22,8 +22,8 @@ export default function AdminProducts() {
   const [imgUploading, setImgUploading] = useState(false);
   const money = (v) => `₹${Number(v).toLocaleString("en-IN")}`;
 
-  const load = () => API.get("/products?active=false").then(({ data }) => setProducts(data)).catch(() => setProducts([]));
-  useEffect(() => { load(); }, []);
+  const load = useCallback(() => API.get("/products?active=false").then(({ data }) => setProducts(data)).catch(() => setProducts([])), []);
+  useEffect(() => { load(); }, [load]);
 
   const openNew = () => { setEditing(null); setForm(EMPTY); setOpen(true); };
   const openEdit = (p) => { setEditing(p); setForm({ ...p, images: p.images?.length ? p.images : [""] }); setOpen(true); };
