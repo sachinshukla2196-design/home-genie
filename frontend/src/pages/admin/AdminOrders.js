@@ -28,6 +28,20 @@ export default function AdminOrders() {
 
   const change = async (id, status) => { try { await API.put(`/admin/orders/${id}/status`, { status }); toast.success(t("cta.save")); load(); } catch (e) { toast.error(apiError(e)); } };
 
+  const refundOrder = async (o) => {
+    const remaining = (o.total - (o.refunded_amount || 0)).toFixed(2);
+    const amt = window.prompt(`Refund amount for ${o.order_number} (max ₹${remaining}). Leave as is for FULL refund:`, remaining);
+    if (amt === null) return;
+    const ref = window.prompt("Refund payment reference (UTR / Razorpay refund id) — mandatory:");
+    if (!ref || !ref.trim()) { toast.error("Refund reference is mandatory"); return; }
+    const cancel = window.confirm("Also mark this order as CANCELLED? (OK = cancelled, Cancel = keep status)");
+    try {
+      const { data } = await API.post(`/admin/orders/${o.id}/refund`, { amount: Number(amt), reference: ref.trim(), cancel_order: cancel });
+      toast.success(`Refunded ₹${data.refund_amount} · ${data.reversed} credit(s) clawed back`);
+      load();
+    } catch (e) { toast.error(apiError(e)); }
+  };
+
   const deleteOrder = async (o) => {
     if (!window.confirm(`Permanently DELETE order ${o.order_number} (${money(o.total)})? This cannot be undone.`)) return;
     try {
@@ -143,6 +157,11 @@ export default function AdminOrders() {
                 </td>
                 <td className="p-4 text-muted2">{o.invoice_number || "—"}</td>
                 <td className="p-4">
+                  {(o.payment_status === "paid" || o.payment_status === "partially_refunded") && (
+                    <button onClick={() => refundOrder(o)} className="inline-flex items-center gap-1.5 rounded-full border border-gold/50 px-3 py-1.5 text-xs font-semibold text-gold transition-all hover:bg-gold/10" data-testid={`refund-order-${o.order_number}`}>
+                      Refund{o.refunded_amount ? ` (₹${o.refunded_amount} done)` : ""}
+                    </button>
+                  )}
                   <button onClick={() => deleteOrder(o)} className="inline-flex items-center gap-1.5 rounded-full border border-danger/40 px-3 py-1.5 text-xs font-semibold text-danger transition-all hover:bg-danger/10" data-testid={`delete-order-${o.order_number}`}>
                     <Trash2 size={13} /> Delete
                   </button>

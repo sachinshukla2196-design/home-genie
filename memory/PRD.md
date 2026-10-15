@@ -343,3 +343,10 @@ VERIFIED via curl: commission release→RELEASED, double release→400, hold→H
 - Matrix verified on isolated DB: ₹1500 subtotal → GD 0/BD 225/AD 75/CD 75/PD 75/MD 75/RD 60/DD 45/MDD 45 = ₹675; ineligible (RED) positions = ₹0, NOT shifted; GST excluded; duplicate run = 0 extra credits; refund clawback idempotent; ledger == wallet for all IDs.
 - Fixes: shop_routes._process_paid_order now aborts unless it atomically claims the order (race via Razorpay verify + webhook previously could duplicate invoice/activation record/notification; commissions were already safe). wallet_routes /team and /dashboard now count only CREDITED commissions (reversed/clawed-back commissions were still shown as income).
 - Preview DB reconciliation: 0 duplicate commission groups; every user's wallet == ledger.
+
+## 15 Oct 2026 — 70% pool rule + refund engine + cleanup (see /app/FINAL_APPLICATION_REPORT.md)
+- Matrix now: company 30% of S, pool 70% of S, GD..MDD rates on pool (₹1500 → ₹472.50 commissions, company ₹1027.50). orders.allocation snapshot stored.
+- Team Purchase 2.5% of S now paid to EVERY GREEN upline in first 9 positions.
+- Refunds: POST /api/admin/orders/{id}/refund {amount?, reference, reason, cancel_order}; proportional clawback, idempotent per reference (order_refunds _id), partially_refunded status, BV refund-aware. Status→refunded via plain status change is blocked; cancelled never auto-reverses.
+- Cleanup preview DB: removed ANJ000219/ANJ000220 (synthetic), orphan ANJ000240 referral credit (ANJ000000 wallet 200→100), 1 orphan wallet. 4 users remain.
+- Isolated suite backend/tests/test_financial_engine_isolated.py: 60/60 PASS.

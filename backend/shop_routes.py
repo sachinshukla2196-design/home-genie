@@ -1,5 +1,6 @@
 """Products, cart -> orders, and Stripe payments with server-side verification."""
 import os
+from decimal import Decimal, ROUND_HALF_UP
 from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel, Field
 from typing import List, Optional
@@ -289,30 +290,64 @@ async def razorpay_webhook(request: Request):
     return {"status": "ok"}
 
 
-async def reverse_order_financials(order_id: str, actor: dict = None, request: Request = None):
-    """Auditable refund/clawback: reverse product commissions + ₹100 referral reward
-    tied to a refunded order. Never deletes history — marks originals REVERSED and
-    writes clawback ledger entries. Idempotent via an atomic claim on the order."""
-    claim = await db.orders.update_one(
-        {"id": order_id, "payment_status": "paid", "financials_reversed": {"$ne": True}},
-        {"$set": {"financials_reversed": True, "updated_at": now_iso()}})
-    if claim.modified_count != 1:
-        return {"reversed": 0}
+ORDER_INCOME_TYPES = ["PURCHASE_LEVEL_COMMISSION", "REFERRAL_COMMISSION", "PERSONAL_REPURCHASE_INCOME", "TEAM_PURCHASE_INCOME"]
+
+
+async def reverse_order_financials(order_id: str, actor: dict = None, request: Request = None,
+                                   refund_amount: float = None, reference: str = "", reason: str = ""):
+    """Auditable refund/clawback. Full refund (refund_amount None) or PARTIAL refund (amount of the
+    order total actually returned). Each income credit tied to the order is clawed back in the same
+    proportion (refund_amount / order total), never beyond what was credited. Originals are kept and
+    marked REVERSED/PARTIALLY_REVERSED; linked CLAWBACK ledger entries are written. Idempotent: a
+    refund event is keyed by (order, reference) and total refunds can never exceed the order total."""
     order = await db.orders.find_one({"id": order_id})
+    if not order or order.get("payment_status") not in ("paid", "refunded", "partially_refunded"):
+        return {"reversed": 0, "refund_amount": 0.0}
+    total = float(order.get("total") or 0)
+    already = float(order.get("refunded_amount") or 0)
+    remaining = round(total - already, 2)
+    amt = remaining if refund_amount is None else round(float(refund_amount), 2)
+    if amt <= 0 or remaining <= 0:
+        return {"reversed": 0, "refund_amount": 0.0}
+    amt = min(amt, remaining)
+    event_id = f"{order_id}:refund:{reference or 'full'}"
+    try:
+        await db.order_refunds.insert_one({"_id": event_id, "id": event_id, "order_id": order_id, "amount": amt, "reference": reference,
+                                           "reason": reason, "status": "processing", "created_at": now_iso(),
+                                           "actor_id": (actor or {}).get("id")})
+    except Exception:
+        return {"reversed": 0, "refund_amount": 0.0, "duplicate": True}
+    claim = await db.orders.update_one(
+        {"id": order_id, "refunded_amount": {"$in": [None, already]}},
+        {"$set": {"refunded_amount": round(already + amt, 2), "updated_at": now_iso(),
+                  "payment_status": "refunded" if round(already + amt, 2) >= total else "partially_refunded",
+                  "financials_reversed": round(already + amt, 2) >= total}})
+    if claim.modified_count != 1:
+        await db.order_refunds.delete_one({"id": event_id})
+        return {"reversed": 0, "refund_amount": 0.0, "conflict": True}
+    fraction = amt / total if total else 1.0
     n = 0
     comms = await db.commissions.find(
-        {"reference_order_id": order_id, "status": "CREDITED",
-         "type": {"$in": ["PURCHASE_LEVEL_COMMISSION", "REFERRAL_COMMISSION", "PERSONAL_REPURCHASE_INCOME", "TEAM_PURCHASE_INCOME"]}}).to_list(1000)
+        {"reference_order_id": order_id, "status": {"$in": ["CREDITED", "PARTIALLY_REVERSED"]},
+         "type": {"$in": ORDER_INCOME_TYPES}}).to_list(1000)
     for c in comms:
-        await db.commissions.update_one({"id": c["id"]},
-            {"$set": {"status": "REVERSED", "reversed_at": now_iso()}})
+        credited = float(c["amount"]); done = float(c.get("reversed_amount") or 0)
+        claw = round(credited * fraction, 2) if fraction < 1 else round(credited - done, 2)
+        claw = min(claw, round(credited - done, 2))
+        if claw <= 0:
+            continue
+        new_done = round(done + claw, 2)
+        await db.commissions.update_one({"id": c["id"]}, {"$set": {
+            "reversed_amount": new_done, "reversed_at": now_iso(),
+            "status": "REVERSED" if new_done >= credited - 0.005 else "PARTIALLY_REVERSED"}})
         await add_wallet_transaction(
-            c["sponsor_id"], "COMMISSION_CLAWBACK", float(c["amount"]), "CLAWBACK",
-            reference=order_id, direction="debit",
-            description=f"Clawback of {c.get('type')} on refunded order {order.get('order_number')}")
+            c["sponsor_id"], "COMMISSION_CLAWBACK", claw, "CLAWBACK",
+            reference=event_id, direction="debit",
+            description=f"Clawback of {c.get('type')} on refund of order {order.get('order_number')} (₹{amt:g} refunded)")
         n += 1
-    # If the refunded order was the activation order, revert the account to RED.
-    if order and order.get("is_activation_order"):
+    await db.order_refunds.update_one({"id": event_id}, {"$set": {"status": "completed", "clawbacks": n}})
+    # If the activation order is FULLY refunded, revert the account to RED.
+    if order and order.get("is_activation_order") and round(already + amt, 2) >= total:
         buyer = await db.users.find_one({"id": order["user_id"]})
         if buyer and buyer.get("activation_order_id") == order_id:
             await db.users.update_one({"id": buyer["id"]},
@@ -321,8 +356,8 @@ async def reverse_order_financials(order_id: str, actor: dict = None, request: R
             await db.activation_records.update_many({"order_id": order_id},
                 {"$set": {"status": "reversed", "updated_at": now_iso()}})
     await log_audit(actor, "order_financials_reversed", "order", order_id,
-                    new_value={"reversed_entries": n}, request=request)
-    return {"reversed": n}
+                    new_value={"reversed_entries": n, "refund_amount": amt, "reference": reference, "reason": reason}, request=request)
+    return {"reversed": n, "refund_amount": amt, "refund_event": event_id}
 
 
 async def _process_paid_order(session_id: str, request: Request = None):
@@ -396,12 +431,22 @@ async def _process_paid_order(session_id: str, request: Request = None):
 
 
 # Positional TEAM SALES commission matrix (FINAL, locked). Position 1 = buyer's IMMEDIATE sponsor.
-# Base = product value EXCLUDING GST. Total pool = 45%. Positions map to rank codes GD..MDD.
-# SEPARATE from the ₹100 direct referral reward — the two never mix.
-# GD 0 | BD 15 | AD 5 | CD 5 | PD 5 | MD 5 | RD 4 | DD 3 | MDD 3  =>  45%
+# S = product subtotal EXCLUDING GST. Company direct share = 30% of S. Commission POOL = 70% of S.
+# Position rates apply to the POOL (45% of pool paid out; the other 55% of pool stays with company).
+# GD 0 | BD 15 | AD 5 | CD 5 | PD 5 | MD 5 | RD 4 | DD 3 | MDD 3  =>  45% of pool
 from income_config import resolve_rate
 
+COMPANY_DIRECT_PCT = 30.0
+COMMISSION_POOL_PCT = 70.0
 LEVEL_COMMISSION_PCT = {1: 0.0, 2: 15.0, 3: 5.0, 4: 5.0, 5: 5.0, 6: 5.0, 7: 4.0, 8: 3.0, 9: 3.0}
+
+
+def money2(v: float) -> float:
+    return float(Decimal(str(v)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def commission_pool(subtotal: float) -> float:
+    return money2(float(subtotal or 0) * COMMISSION_POOL_PCT / 100.0)
 # Rank-code label per position (user-facing codes only; no D1-D9, no titles).
 RANK_NAME = {1: "GD", 2: "BD", 3: "AD", 4: "CD", 5: "PD", 6: "MD", 7: "RD", 8: "DD", 9: "MDD"}
 
@@ -430,9 +475,11 @@ async def _distribute_purchase_commission(order, buyer, settings, request=None):
     )
     if claim.modified_count != 1:
         return  # already processed
-    base = float(order.get("subtotal", 0) or 0)  # product value excluding GST
-    if base <= 0:
+    subtotal = float(order.get("subtotal", 0) or 0)  # product value excluding GST
+    if subtotal <= 0:
         return
+    base = commission_pool(subtotal)  # 70% pool
+    paid_total = 0.0
     sym = settings.get("currency_symbol", "₹")
     current_id = buyer["id"]
     for level in range(1, 10):
@@ -444,8 +491,9 @@ async def _distribute_purchase_commission(order, buyer, settings, request=None):
         if pct > 0:
             sponsor = await db.users.find_one({"id": sponsor_id})
             if sponsor and sponsor.get("status") == "green":
-                amount = round(base * pct / 100.0, 2)
+                amount = money2(base * pct / 100.0)
                 if amount > 0:
+                    paid_total = money2(paid_total + amount)
                     comm = {
                         "id": new_id(), "sponsor_id": sponsor_id,
                         "sponsor_distributor_id": sponsor.get("distributor_id"),
@@ -453,7 +501,7 @@ async def _distribute_purchase_commission(order, buyer, settings, request=None):
                         "referred_distributor_id": buyer.get("distributor_id"),
                         "type": "PURCHASE_LEVEL_COMMISSION", "level": level, "percent": pct,
                         "rank": RANK_NAME.get(level, f"Level {level}"),
-                        "amount": amount, "base_amount": base,
+                        "amount": amount, "base_amount": base, "subtotal": subtotal, "pool_pct": COMMISSION_POOL_PCT,
                         "reference_order_id": order["id"], "status": "CREDITED",
                         "description": f"{RANK_NAME.get(level, f'Level {level}')} purchase commission ({pct:g}%) "
                                        f"on order {order.get('order_number')} by {buyer.get('distributor_id')}",
@@ -463,8 +511,8 @@ async def _distribute_purchase_commission(order, buyer, settings, request=None):
                     await add_wallet_transaction(
                         sponsor_id, "PURCHASE_LEVEL_COMMISSION", amount, "CREDITED",
                         reference=order["id"],
-                        description=f"Purchase commission • {RANK_NAME.get(level, f'Level {level}')} ({pct:g}%) • "
-                                    f"base ₹{base:g} • order {order.get('order_number')} ({buyer.get('distributor_id')})",
+                        description=f"Purchase commission • {RANK_NAME.get(level, f'Level {level}')} ({pct:g}% of 70% pool) • "
+                                    f"pool ₹{base:g} • order {order.get('order_number')} ({buyer.get('distributor_id')})",
                         direction="credit",
                     )
                     await create_notification(
@@ -477,6 +525,12 @@ async def _distribute_purchase_commission(order, buyer, settings, request=None):
                                     new_value={"amount": amount, "level": level,
                                                "sponsor": sponsor.get("distributor_id")}, request=request)
         current_id = sponsor_id
+    # Company allocation snapshot (auditable): direct 30% + unallocated part of the 70% pool.
+    company_direct = money2(subtotal * COMPANY_DIRECT_PCT / 100.0)
+    await db.orders.update_one({"id": order["id"]}, {"$set": {"allocation": {
+        "subtotal": subtotal, "company_direct": company_direct, "commission_pool": base,
+        "rank_commissions_paid": paid_total, "pool_retained": money2(base - paid_total),
+        "company_total": money2(company_direct + base - paid_total)}}})
 
 
 async def _credit_team_purchase(order, buyer, settings, request=None):
@@ -496,44 +550,47 @@ async def _credit_team_purchase(order, buyer, settings, request=None):
     base = float(order.get("subtotal", 0) or 0)
     if base <= 0:
         return
-    rel = await db.referral_relationships.find_one({"referred_user_id": buyer["id"]})
-    if not rel or not rel.get("sponsor_id"):
-        return
-    sponsor = await db.users.find_one({"id": rel["sponsor_id"]})
-    if not sponsor or sponsor.get("status") != "green":
-        return
     rule = await resolve_rate("TEAM_PURCHASE", TEAM_PURCHASE_INCOME_PCT, order.get("paid_at") or now_iso())
     if not rule["enabled"]:
         return
     pct = rule["rate"]
-    amount = round(base * pct / 100.0, 2)
+    amount = money2(base * pct / 100.0)
     if amount <= 0:
         return
     sym = settings.get("currency_symbol", "₹")
-    comm = {
-        "id": new_id(), "sponsor_id": sponsor["id"],
-        "sponsor_distributor_id": sponsor.get("distributor_id"),
-        "referred_user_id": buyer["id"],
-        "referred_distributor_id": buyer.get("distributor_id"),
-        "type": "TEAM_PURCHASE_INCOME", "level": 1, "percent": pct, "rule_version": rule["version"],
-        "amount": amount, "base_amount": base,
-        "reference_order_id": order["id"], "status": "CREDITED",
-        "description": f"Team Purchase Income ({pct:g}%) on order {order.get('order_number')} by {buyer.get('distributor_id')}",
-        "created_at": now_iso(),
-    }
-    await db.commissions.insert_one(dict(comm))
-    await add_wallet_transaction(
-        sponsor["id"], "TEAM_PURCHASE_INCOME", amount, "CREDITED",
-        reference=order["id"],
-        description=f"Team Purchase Income ({pct:g}%) • base ₹{base:g} • order {order.get('order_number')} ({buyer.get('distributor_id')})",
-        direction="credit")
-    await create_notification(
-        sponsor["id"], "commission", f"You earned {sym}{amount:g}",
-        f"Team Purchase Income ({pct:g}%) credited on your direct team's order {order.get('order_number')}.",
-        f"आपने {sym}{amount:g} कमाए",
-        f"आपकी सीधी टीम के ऑर्डर {order.get('order_number')} पर टीम खरीद आय ({pct:g}%) क्रेडिट हुई।")
-    await log_audit(None, "team_purchase_income_credited", "commission", comm["id"],
-                    new_value={"amount": amount, "sponsor": sponsor.get("distributor_id"), "base": base}, request=request)
+    current_id = buyer["id"]
+    for position in range(1, 10):  # every eligible GREEN upline within the first nine ACTUAL positions
+        rel = await db.referral_relationships.find_one({"referred_user_id": current_id})
+        if not rel or not rel.get("sponsor_id"):
+            break
+        sponsor = await db.users.find_one({"id": rel["sponsor_id"]})
+        current_id = rel["sponsor_id"]
+        if not sponsor or sponsor.get("status") != "green":
+            continue  # ineligible position gets ₹0; later positions keep their own position
+        comm = {
+            "id": new_id(), "sponsor_id": sponsor["id"],
+            "sponsor_distributor_id": sponsor.get("distributor_id"),
+            "referred_user_id": buyer["id"],
+            "referred_distributor_id": buyer.get("distributor_id"),
+            "type": "TEAM_PURCHASE_INCOME", "level": position, "percent": pct, "rule_version": rule["version"],
+            "amount": amount, "base_amount": base,
+            "reference_order_id": order["id"], "status": "CREDITED",
+            "description": f"Team Purchase Income ({pct:g}%, position {position}) on order {order.get('order_number')} by {buyer.get('distributor_id')}",
+            "created_at": now_iso(),
+        }
+        await db.commissions.insert_one(dict(comm))
+        await add_wallet_transaction(
+            sponsor["id"], "TEAM_PURCHASE_INCOME", amount, "CREDITED",
+            reference=order["id"],
+            description=f"Team Purchase Income ({pct:g}%) • position {position} • base ₹{base:g} • order {order.get('order_number')} ({buyer.get('distributor_id')})",
+            direction="credit")
+        await create_notification(
+            sponsor["id"], "commission", f"You earned {sym}{amount:g}",
+            f"Team Purchase Income ({pct:g}%) credited on your team's order {order.get('order_number')}.",
+            f"आपने {sym}{amount:g} कमाए",
+            f"आपकी टीम के ऑर्डर {order.get('order_number')} पर टीम खरीद आय ({pct:g}%) क्रेडिट हुई।")
+        await log_audit(None, "team_purchase_income_credited", "commission", comm["id"],
+                        new_value={"amount": amount, "sponsor": sponsor.get("distributor_id"), "base": base, "position": position}, request=request)
 
 
 async def _credit_personal_repurchase(order, buyer, settings, request=None):
@@ -563,7 +620,7 @@ async def _credit_personal_repurchase(order, buyer, settings, request=None):
     if not rule["enabled"]:
         return
     pct = rule["rate"]
-    amount = round(base * pct / 100.0, 2)
+    amount = money2(base * pct / 100.0)
     if amount <= 0:
         return
     sym = settings.get("currency_symbol", "₹")

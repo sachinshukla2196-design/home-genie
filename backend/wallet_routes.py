@@ -47,9 +47,13 @@ def compute_rank(bv) -> dict:
 
 
 async def _personal_bv(user_id: str) -> float:
-    paid = await db.orders.find({"user_id": user_id, "payment_status": "paid"},
-                                {"_id": 0, "subtotal": 1}).to_list(5000)
-    return sum(float(o.get("subtotal", 0) or 0) for o in paid)
+    paid = await db.orders.find({"user_id": user_id, "payment_status": {"$in": ["paid", "partially_refunded"]}},
+                                {"_id": 0, "subtotal": 1, "total": 1, "refunded_amount": 1}).to_list(5000)
+    bv = 0.0
+    for o in paid:
+        sub = float(o.get("subtotal", 0) or 0); tot = float(o.get("total") or 0) or sub
+        bv += sub * max(0.0, 1 - float(o.get("refunded_amount") or 0) / tot)
+    return round(bv, 2)
 
 
 def _mask(val: str, keep: int = 4) -> str:
@@ -358,7 +362,7 @@ async def dashboard(user: dict = Depends(get_current_user)):
     ]):
         pool_total = r.get("total", 0.0)
     income_breakdown = [
-        {"key": "matrix", "label": "Team Matrix (45%)", "amount": round(by_type.get("PURCHASE_LEVEL_COMMISSION", 0.0), 2)},
+        {"key": "matrix", "label": "Team Matrix (70% pool)", "amount": round(by_type.get("PURCHASE_LEVEL_COMMISSION", 0.0), 2)},
         {"key": "team", "label": "Team Purchase (2.5%)", "amount": round(by_type.get("TEAM_PURCHASE_INCOME", 0.0), 2)},
         {"key": "repurchase", "label": "Personal Repurchase (5%)", "amount": round(by_type.get("PERSONAL_REPURCHASE_INCOME", 0.0), 2)},
         {"key": "pool", "label": "Monthly Fixed Income", "amount": round(pool_total, 2)},

@@ -191,18 +191,50 @@ async def update_order_status(order_id: str, body: OrderStatusBody, request: Req
     o = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not o:
         raise HTTPException(status_code=404, detail="Order not found.")
+    if body.status == "refunded" and o.get("payment_status") in ("paid", "partially_refunded"):
+        raise HTTPException(status_code=400, detail="Use the Refund action (with amount & payment reference) to refund a paid order.")
     await db.orders.update_one({"id": order_id}, {"$set": {"status": body.status, "updated_at": now_iso()}})
-    # Refund → auditable reversal of all commissions & referral reward tied to this order.
-    if body.status == "refunded" and o.get("payment_status") == "paid":
-        import shop_routes
-        await shop_routes.reverse_order_financials(order_id, admin, request)
-        await db.orders.update_one({"id": order_id}, {"$set": {"payment_status": "refunded", "updated_at": now_iso()}})
+    # NOTE: 'cancelled' on a PAID order does NOT reverse commissions by itself — only a confirmed
+    # payment return (Refund action) does. Unpaid cancelled orders never generated commissions.
     await create_notification(o["user_id"], "order", "Order update",
                               f"Your order {o['order_number']} is now {body.status}.",
                               "ऑर्डर अपडेट", f"आपका ऑर्डर {o['order_number']} अब {body.status} है।")
     await log_audit(admin, "order_status_changed", "order", order_id,
                     old_value={"status": o["status"]}, new_value={"status": body.status}, request=request)
     return {"ok": True}
+
+
+class RefundBody(BaseModel):
+    amount: Optional[float] = None  # None/omitted = full remaining refund
+    reference: str
+    reason: str = ""
+    cancel_order: bool = False
+
+
+@router.post("/orders/{order_id}/refund")
+async def refund_order(order_id: str, body: RefundBody, request: Request, admin: dict = Depends(require_admin)):
+    """Record a confirmed payment return (full or partial) and claw back order-dependent credits proportionally."""
+    ref = (body.reference or "").strip()
+    if not ref:
+        raise HTTPException(status_code=400, detail="Refund payment reference (UTR / Razorpay refund id) is required.")
+    o = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not o:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    if o.get("payment_status") not in ("paid", "partially_refunded"):
+        raise HTTPException(status_code=400, detail="Only paid orders can be refunded.")
+    remaining = round(float(o.get("total") or 0) - float(o.get("refunded_amount") or 0), 2)
+    if body.amount is not None and (body.amount <= 0 or round(body.amount, 2) > remaining):
+        raise HTTPException(status_code=400, detail=f"Refund amount must be between 0 and ₹{remaining}.")
+    import shop_routes
+    res = await shop_routes.reverse_order_financials(order_id, admin, request, refund_amount=body.amount, reference=ref, reason=body.reason)
+    if res.get("duplicate"):
+        raise HTTPException(status_code=409, detail="A refund with this reference was already recorded for this order.")
+    new_status = "cancelled" if body.cancel_order else ("refunded" if res["refund_amount"] >= remaining - 0.005 else o.get("status"))
+    await db.orders.update_one({"id": order_id}, {"$set": {"status": new_status, "updated_at": now_iso()}})
+    await create_notification(o["user_id"], "order", "Refund processed",
+                              f"₹{res['refund_amount']:g} refunded on order {o['order_number']} (ref {ref}).",
+                              "रिफंड हो गया", f"ऑर्डर {o['order_number']} पर ₹{res['refund_amount']:g} रिफंड हुआ।")
+    return {"ok": True, **res, "status": new_status}
 
 
 @router.delete("/orders/{order_id}")
