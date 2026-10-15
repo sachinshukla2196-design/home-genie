@@ -338,11 +338,13 @@ async def _process_paid_order(session_id: str, request: Request = None):
 
     settings = await get_settings()
     invoice_number = await next_sequence("invoice", "INV", 6)
-    await db.orders.update_one(
+    claim = await db.orders.update_one(
         {"id": order["id"], "payment_status": {"$ne": "paid"}},
         {"$set": {"payment_status": "paid", "status": "processing",
                   "invoice_number": invoice_number, "paid_at": now_iso(), "updated_at": now_iso()}},
     )
+    if claim.modified_count != 1:
+        return  # concurrent webhook/verify already claimed this order
     await db.payment_transactions.update_one(
         {"session_id": session_id},
         {"$set": {"status": "completed", "payment_status": "paid", "updated_at": now_iso()}},

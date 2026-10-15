@@ -132,7 +132,7 @@ async def team(user: dict = Depends(get_current_user)):
     # income earned by this user, grouped per member they were credited for
     income_by_member = {}
     comms = await db.commissions.find(
-        {"sponsor_id": user["id"]}, {"_id": 0, "referred_user_id": 1, "amount": 1}).to_list(5000)
+        {"sponsor_id": user["id"], "status": "CREDITED"}, {"_id": 0, "referred_user_id": 1, "amount": 1}).to_list(5000)
     for c in comms:
         rid = c.get("referred_user_id")
         income_by_member[rid] = income_by_member.get(rid, 0.0) + c.get("amount", 0.0)
@@ -322,7 +322,7 @@ async def dashboard(user: dict = Depends(get_current_user)):
     today = datetime.now(timezone.utc).date().isoformat()
     today_income = 0.0
     total_income = wallet["total_earned"]
-    commissions = await db.commissions.find({"sponsor_id": user["id"]},
+    commissions = await db.commissions.find({"sponsor_id": user["id"], "status": "CREDITED"},
                                              {"_id": 0, "amount": 1, "created_at": 1}).to_list(2000)
     for c in commissions:
         if (c.get("created_at") or "")[:10] == today:

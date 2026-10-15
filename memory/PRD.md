@@ -338,3 +338,8 @@ VERIFIED via curl: commission release→RELEASED, double release→400, hold→H
 - User decision: each EXACT-rank qualifier (RD→Royalty 5%, CD→Master Club 3%, PD→Super Club 3%) earns rate% of OWN team's monthly paid turnover (subtotal excl GST, all downline levels ≤9, excl cancelled/refunded/reversed). Paid automatically on the 1st for previous month.
 - Code: backend/club_income.py (compute/distribute, idempotent per user+category+month via wallet_transactions ref CLUB:{CAT}:{YYYY-MM}; run record monthly_income_runs id CLUB:{month}), backend/cron_routes.py (POST /api/cron/club-income, Bearer WEBHOOK_CRON_SECRET, X-Webhook-Id idempotency, background task), .emergent/crons.yml (30 1 1 * * UTC = 07:00 IST on 1st), admin GET /api/admin/club-income/preview & POST /distribute, UI card on Admin → Monthly Income. income_config/income_rules marked IMPLEMENTED.
 - Verified on throwaway DB: 5% of ₹15,000.50 = ₹750.02 (floor paise), refunded & other-month orders excluded, re-run credits 0.
+
+## Oct 2026 — Commission Engine Audit (evidence-based)
+- Matrix verified on isolated DB: ₹1500 subtotal → GD 0/BD 225/AD 75/CD 75/PD 75/MD 75/RD 60/DD 45/MDD 45 = ₹675; ineligible (RED) positions = ₹0, NOT shifted; GST excluded; duplicate run = 0 extra credits; refund clawback idempotent; ledger == wallet for all IDs.
+- Fixes: shop_routes._process_paid_order now aborts unless it atomically claims the order (race via Razorpay verify + webhook previously could duplicate invoice/activation record/notification; commissions were already safe). wallet_routes /team and /dashboard now count only CREDITED commissions (reversed/clawed-back commissions were still shown as income).
+- Preview DB reconciliation: 0 duplicate commission groups; every user's wallet == ledger.
