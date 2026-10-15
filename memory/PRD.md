@@ -351,3 +351,4 @@ VERIFIED via curl: commission release→RELEASED, double release→400, hold→H
 - Cleanup preview DB: removed ANJ000219/ANJ000220 (synthetic), orphan ANJ000240 referral credit (ANJ000000 wallet 200→100), 1 orphan wallet. 4 users remain.
 - Isolated suite backend/tests/test_financial_engine_isolated.py: 60/60 PASS.
 - 15 Oct 2026: admin DELETE /orders/{id} now blocked for paid/refunded orders or orders with commissions (400); Delete button hidden for them. Team page EarningsExplainer card (₹1,500 → 70% pool chart, positions 1–9). Production read-only inspection requested via deployer agent (results pending — do NOT clean production without owner approval).
+- 15 Oct 2026: EarningsExplainer bilingual (EN/HI via useI18n lang). Redeploy dispatched (needs WEBHOOK_CRON_SECRET in prod secrets). Production read-only inspection results still pending from diagnostics agent — present candidates to owner before ANY production cleanup.

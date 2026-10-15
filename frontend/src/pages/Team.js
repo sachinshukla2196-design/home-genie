@@ -95,13 +95,17 @@ const EXPLAINER_ROWS = [
 ];
 
 function EarningsExplainer() {
+  const { lang } = useI18n();
+  const hi = lang === "hi";
   const [open, setOpen] = useState(false);
   return (
     <div className="rounded-2xl border border-brand-50 bg-white shadow-card" data-testid="earnings-explainer">
       <button onClick={() => setOpen(!open)} className="flex w-full items-center justify-between px-5 py-4 text-left" data-testid="earnings-explainer-toggle">
         <div>
-          <div className="font-display text-base font-semibold text-ink">How a ₹1,500 team purchase pays you</div>
-          <div className="text-xs text-muted2">Count how many steps below you the buyer is. Product value ₹1,500 (excl. GST) → commission pool 70% = ₹1,050. You must be GREEN to receive.</div>
+          <div className="font-display text-base font-semibold text-ink">{hi ? "₹1,500 की टीम खरीद से आपको कैसे मिलता है" : "How a ₹1,500 team purchase pays you"}</div>
+          <div className="text-xs text-muted2">{hi
+            ? "गिनें कि खरीदार आपसे कितने स्तर नीचे है। उत्पाद मूल्य ₹1,500 (GST छोड़कर) → कमीशन पूल 70% = ₹1,050। पाने के लिए आपका GREEN होना ज़रूरी है।"
+            : "Count how many steps below you the buyer is. Product value ₹1,500 (excl. GST) → commission pool 70% = ₹1,050. You must be GREEN to receive."}</div>
         </div>
         <ChevronDown size={18} className={`shrink-0 text-muted2 transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
@@ -110,15 +114,17 @@ function EarningsExplainer() {
           <div className="grid grid-cols-3 gap-2 sm:grid-cols-9">
             {EXPLAINER_ROWS.map((r) => (
               <div key={r.pos} className="rounded-xl border border-brand-50 bg-brand-50/30 p-3 text-center" data-testid={`explainer-pos-${r.pos}`}>
-                <div className="text-[10px] uppercase tracking-wide text-muted2">{r.pos} step{r.pos > 1 ? "s" : ""} below</div>
+                <div className="text-[10px] uppercase tracking-wide text-muted2">{hi ? `${r.pos} स्तर नीचे` : `${r.pos} step${r.pos > 1 ? "s" : ""} below`}</div>
                 <div className="font-display text-sm font-bold text-forest">{r.code}</div>
-                <div className="text-xs text-muted2">{r.pct}% of pool</div>
+                <div className="text-xs text-muted2">{hi ? `पूल का ${r.pct}%` : `${r.pct}% of pool`}</div>
                 <div className="mt-1 font-display text-base font-semibold text-brand">{money(r.amt)}</div>
-                {r.extra && <div className="text-[10px] text-gold">{r.extra}</div>}
+                {r.extra && <div className="text-[10px] text-gold">{hi ? "+ ₹37.50 टीम आय" : r.extra}</div>}
               </div>
             ))}
           </div>
-          <p className="mt-3 text-xs text-muted2">Plus Team Purchase Income 2.5% of product value (₹37.50) at every step 1–9 while you are GREEN. Total matrix payout on this order: ₹472.50. If a position is RED or empty, it earns ₹0 and nothing shifts. ₹100 referral reward and 5% repurchase income are separate.</p>
+          <p className="mt-3 text-xs text-muted2">{hi
+            ? "साथ ही, जब तक आप GREEN हैं, स्तर 1–9 में हर स्तर पर उत्पाद मूल्य का 2.5% (₹37.50) टीम खरीद आय मिलती है। इस ऑर्डर पर कुल मैट्रिक्स भुगतान: ₹472.50। अगर कोई स्थान RED या खाली है तो उसे ₹0 मिलता है और कुछ भी शिफ्ट नहीं होता। ₹100 रेफ़रल इनाम और 5% पुनर्खरीद आय अलग हैं।"
+            : "Plus Team Purchase Income 2.5% of product value (₹37.50) at every step 1–9 while you are GREEN. Total matrix payout on this order: ₹472.50. If a position is RED or empty, it earns ₹0 and nothing shifts. ₹100 referral reward and 5% repurchase income are separate."}</p>
         </div>
       )}
     </div>
