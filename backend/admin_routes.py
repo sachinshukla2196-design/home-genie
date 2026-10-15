@@ -7,7 +7,8 @@ import re
 import secrets
 from core import hash_password, next_distributor_id, get_or_create_wallet
 from fastapi import APIRouter, HTTPException, Request, Depends
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
+import os as _os
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
@@ -17,6 +18,14 @@ from core import (db, now_iso, new_id, require_admin, get_settings,
                   clean_user, mask_aadhaar, build_referral_tree)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
+
+
+@router.get("/final-report.pdf")
+async def final_report_pdf(admin: dict = Depends(require_admin)):
+    path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "FINAL_APPLICATION_REPORT.pdf")
+    if not _os.path.exists(path):
+        raise HTTPException(status_code=404, detail="Report not found.")
+    return FileResponse(path, media_type="application/pdf", filename="Anjali_Final_Application_Report.pdf")
 
 
 def _mask_pan(p: str) -> str:

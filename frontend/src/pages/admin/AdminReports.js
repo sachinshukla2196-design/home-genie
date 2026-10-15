@@ -27,10 +27,19 @@ export default function AdminReports() {
     const a = document.createElement("a"); a.href = url; a.download = `${report}_report.csv`; a.click();
   };
 
+  const downloadFinalReport = async () => {
+    const token = localStorage.getItem("anj_token");
+    const res = await fetch(`${BACKEND}/api/admin/final-report.pdf`, { headers: { Authorization: `Bearer ${token}` } });
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "Anjali_Final_Application_Report.pdf"; a.click();
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-display text-2xl font-semibold text-ink">{t("nav.reports")}</h1>
+        <Button onClick={downloadFinalReport} variant="outline" className="rounded-full" data-testid="download-final-report"><Download size={15} className="mr-1.5" /> Final Audit Report (PDF)</Button>
         <Button onClick={exportCsv} className="rounded-full bg-forest hover:bg-brand" data-testid="export-report"><Download size={15} className="mr-1.5" /> {t("cta.export")}</Button>
       </div>
       <div className="flex flex-wrap gap-2">
