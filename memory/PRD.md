@@ -350,3 +350,4 @@ VERIFIED via curl: commission release→RELEASED, double release→400, hold→H
 - Refunds: POST /api/admin/orders/{id}/refund {amount?, reference, reason, cancel_order}; proportional clawback, idempotent per reference (order_refunds _id), partially_refunded status, BV refund-aware. Status→refunded via plain status change is blocked; cancelled never auto-reverses.
 - Cleanup preview DB: removed ANJ000219/ANJ000220 (synthetic), orphan ANJ000240 referral credit (ANJ000000 wallet 200→100), 1 orphan wallet. 4 users remain.
 - Isolated suite backend/tests/test_financial_engine_isolated.py: 60/60 PASS.
+- 15 Oct 2026: admin DELETE /orders/{id} now blocked for paid/refunded orders or orders with commissions (400); Delete button hidden for them. Team page EarningsExplainer card (₹1,500 → 70% pool chart, positions 1–9). Production read-only inspection requested via deployer agent (results pending — do NOT clean production without owner approval).

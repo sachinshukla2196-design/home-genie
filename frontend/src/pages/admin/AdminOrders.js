@@ -162,9 +162,11 @@ export default function AdminOrders() {
                       Refund{o.refunded_amount ? ` (₹${o.refunded_amount} done)` : ""}
                     </button>
                   )}
+                  {o.payment_status !== "paid" && o.payment_status !== "partially_refunded" && o.payment_status !== "refunded" && (
                   <button onClick={() => deleteOrder(o)} className="inline-flex items-center gap-1.5 rounded-full border border-danger/40 px-3 py-1.5 text-xs font-semibold text-danger transition-all hover:bg-danger/10" data-testid={`delete-order-${o.order_number}`}>
                     <Trash2 size={13} /> Delete
                   </button>
+                  )}
                 </td>
               </tr>
             ))}

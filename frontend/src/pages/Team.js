@@ -57,6 +57,8 @@ export default function Team() {
 
       <InviteCard user={user} t={t} />
 
+      <EarningsExplainer />
+
       {!hasTeam ? (
         <EmptyState icon={Users} title={t("empty.team")} desc={t("landing.step3d")} testid="team-empty" />
       ) : view === "levels" ? (
@@ -78,6 +80,45 @@ export default function Team() {
           <SummaryCard label="Active" value={data.active} accent />
           <SummaryCard label="Total Income" value={money(data.total_income)} />
           <SummaryCard label="Ranks Reached" value={levels.filter((l) => l.count > 0).length} sub="of 9" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+const EXPLAINER_ROWS = [
+  { pos: 1, code: "GD", pct: 0, amt: 0, extra: "+ ₹37.50 team income" },
+  { pos: 2, code: "BD", pct: 15, amt: 157.5 }, { pos: 3, code: "AD", pct: 5, amt: 52.5 },
+  { pos: 4, code: "CD", pct: 5, amt: 52.5 }, { pos: 5, code: "PD", pct: 5, amt: 52.5 },
+  { pos: 6, code: "MD", pct: 5, amt: 52.5 }, { pos: 7, code: "RD", pct: 4, amt: 42 },
+  { pos: 8, code: "DD", pct: 3, amt: 31.5 }, { pos: 9, code: "MDD", pct: 3, amt: 31.5 },
+];
+
+function EarningsExplainer() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-2xl border border-brand-50 bg-white shadow-card" data-testid="earnings-explainer">
+      <button onClick={() => setOpen(!open)} className="flex w-full items-center justify-between px-5 py-4 text-left" data-testid="earnings-explainer-toggle">
+        <div>
+          <div className="font-display text-base font-semibold text-ink">How a ₹1,500 team purchase pays you</div>
+          <div className="text-xs text-muted2">Count how many steps below you the buyer is. Product value ₹1,500 (excl. GST) → commission pool 70% = ₹1,050. You must be GREEN to receive.</div>
+        </div>
+        <ChevronDown size={18} className={`shrink-0 text-muted2 transition-transform ${open ? "rotate-180" : ""}`} />
+      </button>
+      {open && (
+        <div className="border-t border-brand-50 px-5 py-4">
+          <div className="grid grid-cols-3 gap-2 sm:grid-cols-9">
+            {EXPLAINER_ROWS.map((r) => (
+              <div key={r.pos} className="rounded-xl border border-brand-50 bg-brand-50/30 p-3 text-center" data-testid={`explainer-pos-${r.pos}`}>
+                <div className="text-[10px] uppercase tracking-wide text-muted2">{r.pos} step{r.pos > 1 ? "s" : ""} below</div>
+                <div className="font-display text-sm font-bold text-forest">{r.code}</div>
+                <div className="text-xs text-muted2">{r.pct}% of pool</div>
+                <div className="mt-1 font-display text-base font-semibold text-brand">{money(r.amt)}</div>
+                {r.extra && <div className="text-[10px] text-gold">{r.extra}</div>}
+              </div>
+            ))}
+          </div>
+          <p className="mt-3 text-xs text-muted2">Plus Team Purchase Income 2.5% of product value (₹37.50) at every step 1–9 while you are GREEN. Total matrix payout on this order: ₹472.50. If a position is RED or empty, it earns ₹0 and nothing shifts. ₹100 referral reward and 5% repurchase income are separate.</p>
         </div>
       )}
     </div>

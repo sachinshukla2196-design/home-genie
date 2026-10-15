@@ -243,6 +243,8 @@ async def delete_order(order_id: str, request: Request, admin: dict = Depends(re
     o = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not o:
         raise HTTPException(status_code=404, detail="Order not found.")
+    if o.get("payment_status") in ("paid", "partially_refunded", "refunded") or await db.commissions.count_documents({"reference_order_id": order_id}):
+        raise HTTPException(status_code=400, detail="Paid orders with financial history cannot be deleted. Use Refund to reverse it; the record stays for audit.")
     await db.orders.delete_one({"id": order_id})
     await db.payment_transactions.delete_many({"order_id": order_id})
     await log_audit(admin, "order_deleted", "order", order_id,
