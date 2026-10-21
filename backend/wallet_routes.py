@@ -182,6 +182,12 @@ async def mark_all_read(user: dict = Depends(get_current_user)):
 
 
 # ---------------- Dashboard ----------------
+@router.get("/badge")
+async def my_badge(user: dict = Depends(get_current_user)):
+    from badges import monthly_badge
+    return await monthly_badge(user["id"])
+
+
 @router.get("/dashboard")
 async def dashboard(user: dict = Depends(get_current_user)):
     settings = await get_settings()
@@ -223,6 +229,7 @@ async def dashboard(user: dict = Depends(get_current_user)):
         "stats": {"total_income": total_income, "today_income": today_income, "total_orders": total_orders,
                   "referral_count": ref_count, "sales_count": sales_count,
                   "pending_commission": round(pending_comm, 2), "team_commission": round(team_sales, 2)},
+        "badge": await __import__("badges").monthly_badge(user["id"]),
         "plan": {"direct_pct": settings.get("commission_direct_pct", 30.0),
                  "referral_pct": settings.get("commission_referral_pct", 10.0),
                  "team_pct": settings.get("commission_team_pct", 5.0),

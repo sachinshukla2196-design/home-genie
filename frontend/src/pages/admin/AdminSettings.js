@@ -46,6 +46,14 @@ export default function AdminSettings() {
           <F label="Point value (Rs per point)" type="number" value={s.point_value} onChange={set("point_value")} testid="set-point-value" />
           <F label="GST %" type="number" value={s.gst_percent} onChange={set("gst_percent")} testid="set-gst" />
         </div>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <F label="Cash handling fee (COD)" type="number" value={s.cod_fee} onChange={set("cod_fee")} testid="set-cod-fee" />
+          <F label="Bronze badge — monthly sales" type="number" value={s.badge_t1_sales} onChange={set("badge_t1_sales")} testid="set-badge-1" />
+          <F label="Silver badge — monthly sales" type="number" value={s.badge_t2_sales} onChange={set("badge_t2_sales")} testid="set-badge-2" />
+          <F label="Gold badge — monthly sales" type="number" value={s.badge_t3_sales} onChange={set("badge_t3_sales")} testid="set-badge-3" />
+          <F label="Diamond badge — monthly sales" type="number" value={s.badge_t4_sales} onChange={set("badge_t4_sales")} testid="set-badge-4" />
+        </div>
+        <label className="flex items-center justify-between rounded-lg border border-brand-50 p-3 text-sm"><span>Cash on delivery available</span><Switch checked={s.cod_enabled} onCheckedChange={(v) => setS((p) => ({ ...p, cod_enabled: v }))} data-testid="set-cod-enabled" /></label>
         <label className="flex items-center justify-between rounded-lg border border-brand-50 p-3 text-sm"><span>Allow point withdrawal to bank</span><Switch checked={s.points_withdrawal_enabled} onCheckedChange={(v) => setS((p) => ({ ...p, points_withdrawal_enabled: v }))} data-testid="set-withdraw-enabled" /></label>
         <label className="flex items-center justify-between rounded-lg border border-brand-50 p-3 text-sm"><span>Require identity verification before point withdrawal</span><Switch checked={s.require_kyc_for_withdrawal} onCheckedChange={(v) => setS((p) => ({ ...p, require_kyc_for_withdrawal: v }))} data-testid="set-kyc-req" /></label>
       </div>

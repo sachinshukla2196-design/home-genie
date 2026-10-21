@@ -44,6 +44,8 @@ async def public_settings():
         "commission_team_pct": s.get("commission_team_pct"),
         "return_window_days": s.get("return_window_days"),
         "point_value": s.get("point_value"),
+        "cod_enabled": s.get("cod_enabled"),
+        "cod_fee": s.get("cod_fee"),
         "currency_symbol": s.get("currency_symbol", "₹"),
         "gst_percent": s.get("gst_percent", 5.0),
         "company_name": s.get("company_name"),

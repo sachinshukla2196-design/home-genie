@@ -35,6 +35,7 @@ export default function Orders() {
                 <div className="flex items-center gap-2">
                   <span className="font-display font-semibold text-ink">{o.order_number}</span>
                   <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${STATUS_COLORS[o.status] || "bg-muted text-muted2"}`}>{o.status}</span>
+                  {o.payment_method === "cod" && <span className="rounded-full bg-gold-light px-2.5 py-0.5 text-[11px] font-semibold text-ink" data-testid={`cod-tag-${o.order_number}`}>{o.payment_status === "paid" ? t("order.cod") : t("order.codPending")}</span>}
                 </div>
                 <div className="mt-1 text-sm text-muted2">{(o.created_at || "").slice(0, 10)} · {o.items.length} {t("order.items")}</div>
               </div>

@@ -17,6 +17,7 @@ export default function Checkout() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
+  const [method, setMethod] = useState("online");
   const [showQr, setShowQr] = useState(null);
   const [cfg, setCfg] = useState({ currency_symbol: "₹", gst_percent: 5 });
   const [addr, setAddr] = useState({
@@ -26,6 +27,7 @@ export default function Checkout() {
   const sym = cfg.currency_symbol || "₹";
   const money = (v) => `${sym}${Number(v).toLocaleString("en-IN")}`;
   const gstPct = Number(cfg.gst_percent ?? 5);
+  const codFee = Number(cfg.cod_fee ?? 0);
   const gst = Math.round(subtotal * gstPct / 100);
   const total = subtotal + gst;
   const set = (k) => (e) => setAddr((a) => ({ ...a, [k]: e.target.value }));
@@ -43,7 +45,13 @@ export default function Checkout() {
     setLoading(true);
     try {
       const orderItems = items.map((i) => ({ product_id: i.product_id, quantity: i.quantity, variant: i.variant || null }));
-      const { data: order } = await API.post("/orders", { items: orderItems, address: addr, seller_ref: getSellerRef() });
+      const { data: order } = await API.post("/orders", { items: orderItems, address: addr, seller_ref: getSellerRef(), payment_method: method });
+      if (method === "cod") {
+        clear();
+        toast.success(t("checkout.codPlaced"));
+        navigate("/app/orders");
+        return;
+      }
       const { data: checkout } = await API.post("/payments/checkout", { order_id: order.id, origin_url: window.location.origin });
       clear();
       window.location.href = checkout.checkout_url;
@@ -57,7 +65,7 @@ export default function Checkout() {
     setLoading(true);
     try {
       const orderItems = items.map((i) => ({ product_id: i.product_id, quantity: i.quantity, variant: i.variant || null }));
-      const { data: order } = await API.post("/orders", { items: orderItems, address: addr, seller_ref: getSellerRef() });
+      const { data: order } = await API.post("/orders", { items: orderItems, address: addr, seller_ref: getSellerRef(), payment_method: method });
       await API.post("/payments/upi-claim", { order_id: order.id });
       clear();
       setShowQr(order);
@@ -77,7 +85,7 @@ export default function Checkout() {
     setLoading(true);
     try {
       const orderItems = items.map((i) => ({ product_id: i.product_id, quantity: i.quantity, variant: i.variant || null }));
-      const { data: order } = await API.post("/orders", { items: orderItems, address: addr, seller_ref: getSellerRef() });
+      const { data: order } = await API.post("/orders", { items: orderItems, address: addr, seller_ref: getSellerRef(), payment_method: method });
       const { data: rzp } = await API.post("/payments/razorpay/order", { order_id: order.id });
       const ok = await loadRzp();
       if (!ok) { toast.error("Could not load payment gateway."); setLoading(false); return; }
@@ -139,6 +147,18 @@ export default function Checkout() {
         </div>
         <div className="h-fit rounded-2xl border border-brand-50 bg-white p-6">
           <h3 className="font-display text-lg font-medium text-ink">{t("cart.summary")}</h3>
+          <div className="mt-4 space-y-2" data-testid="payment-method">
+            <div className="text-xs font-semibold uppercase tracking-wide text-muted2">{t("checkout.payBy")}</div>
+            {[["online", t("checkout.payOnline")], ["cod", t("checkout.payCod")]].map(([k, label]) => (
+              <button key={k} type="button" onClick={() => setMethod(k)} data-testid={`pay-method-${k}`}
+                className={`flex w-full items-center justify-between rounded-xl border px-4 py-3 text-left text-sm transition-colors ${method === k ? "border-brand bg-brand-50/60 font-semibold text-forest" : "border-brand-50 text-muted2 hover:bg-brand-50/40"}`}>
+                <span>{label}</span>
+                {k === "cod" && codFee > 0 && <span className="text-xs text-gold">+{money(codFee)}</span>}
+              </button>
+            ))}
+            {method === "cod" && <p className="rounded-lg bg-gold-light/50 px-3 py-2 text-xs text-ink" data-testid="cod-note">{t("checkout.codNote")}</p>}
+          </div>
+
           <div className="mt-4 space-y-2 text-sm">
             {items.map((i) => (
               <div key={i.product_id} className="flex justify-between text-muted2"><span className="line-clamp-1">{(lang === "hi" && i.name_hi ? i.name_hi : i.name)} ×{i.quantity}</span><span>{money(i.price * i.quantity)}</span></div>
@@ -146,21 +166,22 @@ export default function Checkout() {
             <div className="my-2 border-t border-brand-50" />
             <div className="flex justify-between text-muted2"><span>{t("order.subtotal")}</span><span>{money(subtotal)}</span></div>
             <div className="flex justify-between text-muted2"><span>{t("order.gst")} ({gstPct}%)</span><span>{money(gst)}</span></div>
+            {method === "cod" && codFee > 0 && <div className="flex justify-between text-muted2" data-testid="cod-fee-row"><span>{t("checkout.codFee")}</span><span>{money(codFee)}</span></div>}
             <div className="my-2 border-t border-brand-50" />
-            <div className="flex justify-between font-display text-lg font-semibold text-forest"><span>{t("order.total")}</span><span>{money(total)}</span></div>
+            <div className="flex justify-between font-display text-lg font-semibold text-forest"><span>{t("order.total")}</span><span>{money(total + (method === "cod" ? codFee : 0))}</span></div>
           </div>
           <Button type="submit" disabled={loading} className="mt-6 w-full rounded-full bg-forest hover:bg-brand" data-testid="place-order-btn">
             <CreditCard size={16} className="mr-1.5" /> {loading ? t("common.loading") : t("checkout.placeOrder")}
           </Button>
-          <div className="mt-4 border-t border-brand-50 pt-4">
-            <div className="mb-2 text-center text-xs font-medium uppercase tracking-wide text-muted2">or pay directly</div>
+          {method === "online" && <div className="mt-4 border-t border-brand-50 pt-4">
+            <div className="mb-2 text-center text-xs font-medium uppercase tracking-wide text-muted2">{t("checkout.orPayDirectly")}</div>
             <Button type="button" onClick={razorpayPay} disabled={loading} className="mb-2 w-full rounded-full bg-forest hover:bg-brand" data-testid="razorpay-pay-btn">
               Pay Online (Card / UPI / Netbanking)
             </Button>
             <Button type="button" onClick={upiPay} disabled={loading} variant="outline" className="w-full rounded-full border-forest/30 text-forest hover:bg-brand-50" data-testid="upi-pay-btn">
               Pay via UPI
             </Button>
-          </div>
+          </div>}
         </div>
       </form>
     </div>

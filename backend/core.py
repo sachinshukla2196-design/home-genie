@@ -152,6 +152,14 @@ DEFAULT_SETTINGS = {
     "return_window_days": 7,
     "point_value": 1.0,
     "points_withdrawal_enabled": True,
+    # Cash on delivery
+    "cod_enabled": True,
+    "cod_fee": 49.0,
+    # Monthly HomeGenie badges (sales value, before GST, in the current month)
+    "badge_t1_name": "Bronze", "badge_t1_sales": 10000.0,
+    "badge_t2_name": "Silver", "badge_t2_sales": 25000.0,
+    "badge_t3_name": "Gold", "badge_t3_sales": 50000.0,
+    "badge_t4_name": "Diamond", "badge_t4_sales": 100000.0,
     "require_kyc_for_withdrawal": True,
     "gst_percent": 5.0,
     "currency": "INR",

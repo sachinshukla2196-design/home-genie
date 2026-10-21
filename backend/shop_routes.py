@@ -70,6 +70,7 @@ class CreateOrder(BaseModel):
     items: List[OrderItemIn]
     address: AddressIn
     seller_ref: Optional[str] = None   # HomeGenie code from a share link (?ref=)
+    payment_method: str = "online"     # "online" | "cod"
 
 
 @router.post("/orders")
@@ -98,6 +99,11 @@ async def create_order(body: CreateOrder, request: Request, user: dict = Depends
             "total": round(total, 2),
         })
 
+    cod = (body.payment_method or "online").lower() == "cod"
+    if cod and not settings.get("cod_enabled", True):
+        raise HTTPException(status_code=400, detail="Cash on delivery is not available right now.")
+    cod_fee = float(settings.get("cod_fee", 0.0)) if cod else 0.0
+
     # Attribute the sale to the HomeGenie whose share link was used (if any).
     seller_user_id, seller_did = None, None
     ref = (body.seller_ref or "").strip().upper()
@@ -107,7 +113,7 @@ async def create_order(body: CreateOrder, request: Request, user: dict = Depends
             seller_user_id, seller_did = seller["id"], seller.get("distributor_id")
 
     gst_amount = round(subtotal * gst_percent / 100.0, 2)
-    grand_total = round(subtotal + gst_amount, 2)
+    grand_total = round(subtotal + gst_amount + cod_fee, 2)
     order_number = await next_sequence("order", "ORD", 6)
     oid = new_id()
     order = {
@@ -124,8 +130,11 @@ async def create_order(body: CreateOrder, request: Request, user: dict = Depends
         "address": body.address.model_dump(),
         "seller_user_id": seller_user_id,
         "seller_distributor_id": seller_did,
-        "status": "payment_pending",  # pending, payment_pending, paid, processing, packed, shipped, delivered, cancelled, refunded
-        "payment_status": "pending",
+        "payment_method": "cod" if cod else "online",
+        "cod_fee": cod_fee,
+        # pending, payment_pending, confirmed, paid, processing, packed, shipped, delivered, cancelled, refunded
+        "status": "confirmed" if cod else "payment_pending",
+        "payment_status": "cod_pending" if cod else "pending",
         "invoice_number": None,
         "created_at": now_iso(), "updated_at": now_iso(),
     }
@@ -133,6 +142,51 @@ async def create_order(body: CreateOrder, request: Request, user: dict = Depends
     await log_audit(user, "order_created", "order", oid, new_value={"total": grand_total}, request=request)
     order.pop("_id", None)
     return order
+
+
+@router.post("/orders/{order_id}/cod-collected")
+async def cod_collected(order_id: str, request: Request, user: dict = Depends(get_current_user)):
+    """Confirm that cash was collected for a COD order.
+
+    Allowed for the attributed HomeGenie (own sale) and for admins. Commission is credited
+    only at this point, never when the COD order is placed.
+    """
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    if order.get("payment_method") != "cod":
+        raise HTTPException(status_code=400, detail="This is not a cash-on-delivery order.")
+    is_admin = user.get("role") in ("admin", "super_admin")
+    if not is_admin and order.get("seller_user_id") != user["id"]:
+        raise HTTPException(status_code=403, detail="Only the HomeGenie for this sale or an admin can confirm collection.")
+    if order.get("payment_status") == "paid":
+        return {"ok": True, "already": True}
+
+    claim = await db.orders.update_one(
+        {"id": order_id, "payment_status": "cod_pending"},
+        {"$set": {"payment_status": "paid", "status": "delivered",
+                  "cod_collected_by": user["id"],
+                  "cod_collected_by_id": user.get("distributor_id"),
+                  "cod_collected_role": "admin" if is_admin else "homegenie",
+                  "cod_collected_at": now_iso(), "paid_at": now_iso(), "updated_at": now_iso()}})
+    if claim.modified_count != 1:
+        return {"ok": True, "already": True}
+
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    buyer = await db.users.find_one({"id": order["user_id"]}, {"_id": 0})
+    if not order.get("invoice_number"):
+        inv = await next_sequence("invoice", "INV", 6)
+        await db.orders.update_one({"id": order_id}, {"$set": {"invoice_number": inv}})
+        order["invoice_number"] = inv
+    from commission import distribute_sale_commissions
+    result = await distribute_sale_commissions(order, buyer or {}, request)
+    await log_audit(user, "cod_collected", "order", order_id,
+                    new_value={"amount": order.get("total"), "commissions": result}, request=request)
+    await create_notification(order["user_id"], "order", "Order delivered",
+                              f"Cash received for order {order['order_number']}. Thank you!",
+                              "ऑर्डर डिलीवर हुआ",
+                              f"ऑर्डर {order['order_number']} के लिए नकद प्राप्त हुआ। धन्यवाद!")
+    return {"ok": True, "commissions": result}
 
 
 @router.get("/orders")

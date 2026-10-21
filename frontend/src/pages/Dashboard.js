@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
   Coins, Package, ShoppingBag, Share2, LifeBuoy, User, ArrowRight,
-  Sparkles, CheckCircle2, Users, Info, TrendingUp,
+  Sparkles, CheckCircle2, Users, Info, TrendingUp, Award,
 } from "lucide-react";
 import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 import { StatCard } from "@/components/StatCard";
@@ -118,6 +118,34 @@ export default function Dashboard() {
             <div className="mt-1 font-display text-lg font-semibold text-forest">{pts(d.stats.team_commission)}</div>
           </div>
         </div>
+      </div>
+
+      {/* Monthly badge */}
+      <div className="rounded-2xl border border-brand-50 bg-white p-5 shadow-card" data-testid="badge-card">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h3 className="font-display text-base font-semibold text-ink">{t("badge.title")}</h3>
+          {d.badge?.badge ? (
+            <span className="inline-flex items-center gap-1.5 rounded-full btn-gold px-3 py-1 text-xs font-bold" data-testid="badge-earned">
+              <Award size={13} /> {d.badge.badge}
+            </span>
+          ) : (
+            <span className="rounded-full bg-brand-50 px-3 py-1 text-xs font-semibold text-muted2" data-testid="badge-none">{t("badge.none")}</span>
+          )}
+        </div>
+        <div className="mt-3 flex flex-wrap gap-6 text-sm">
+          <div><div className="text-xs uppercase tracking-wide text-muted2">{t("badge.sales")}</div>
+            <div className="font-display text-lg font-semibold text-forest" data-testid="badge-sales">{money(d.badge?.sales_value)}</div></div>
+          {d.badge?.next_badge && (
+            <div><div className="text-xs uppercase tracking-wide text-muted2">{t("badge.next")}</div>
+              <div className="font-display text-lg font-semibold text-gold" data-testid="badge-next">{d.badge.next_badge} · {money(d.badge.remaining)} {t("badge.toGo")}</div></div>
+          )}
+        </div>
+        {d.badge?.next_badge && (
+          <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-brand-50">
+            <div className="h-full rounded-full btn-grad transition-all" style={{ width: `${d.badge.progress_pct}%` }} data-testid="badge-progress" />
+          </div>
+        )}
+        <p className="mt-3 text-xs text-muted2">{t("badge.note")}</p>
       </div>
 
       {/* Points note */}

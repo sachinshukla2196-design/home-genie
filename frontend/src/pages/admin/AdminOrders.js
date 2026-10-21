@@ -28,6 +28,15 @@ export default function AdminOrders() {
 
   const change = async (id, status) => { try { await API.put(`/admin/orders/${id}/status`, { status }); toast.success(t("cta.save")); load(); } catch (e) { toast.error(apiError(e)); } };
 
+  const markCollected = async (o) => {
+    if (!window.confirm(`Confirm cash of ${money(o.total)} collected for ${o.order_number}? This credits the HomeGenie commission.`)) return;
+    try {
+      await API.post(`/orders/${o.id}/cod-collected`);
+      toast.success("Cash collected — commission credited");
+      load();
+    } catch (err) { toast.error(apiError(err)); }
+  };
+
   const refundOrder = async (o) => {
     const remaining = (o.total - (o.refunded_amount || 0)).toFixed(2);
     const amt = window.prompt(`Refund amount for ${o.order_number} (max ₹${remaining}). Leave as is for FULL refund:`, remaining);
@@ -145,6 +154,7 @@ export default function AdminOrders() {
                 <td className="p-4 text-muted2">{(o.created_at || "").slice(0, 10)}</td>
                 <td className="p-4 text-right font-medium text-ink">{money(o.total)}</td>
                 <td className="p-4"><span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${o.payment_status === "paid" ? "bg-brand-50 text-brand" : o.payment_status === "claimed" ? "bg-gold-light text-gold" : "bg-danger/10 text-danger"}`}>{o.payment_status}</span>
+                  {o.payment_method === "cod" && o.payment_status === "cod_pending" && <button onClick={() => markCollected(o)} className="ml-2 rounded-full bg-gold px-2.5 py-1 text-[11px] font-semibold text-forest transition-all hover:-translate-y-0.5" data-testid={`cod-collect-${o.order_number}`}>Cash collected</button>}
                   {o.payment_status === "claimed" && <button onClick={() => { setConfirmFor(o); setReference(o.upi_reference || ""); }} className="ml-2 rounded-full bg-forest px-2.5 py-1 text-[11px] font-semibold text-white transition-all hover:bg-brand hover:-translate-y-0.5" data-testid={`upi-confirm-${o.order_number}`}>Confirm UPI</button>}
                 </td>
                 <td className="p-4 text-xs text-muted2">{o.payment_method || "—"}</td>

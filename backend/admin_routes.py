@@ -460,6 +460,12 @@ class SettingsBody(BaseModel):
     return_window_days: Optional[int] = None
     point_value: Optional[float] = None
     points_withdrawal_enabled: Optional[bool] = None
+    cod_enabled: Optional[bool] = None
+    cod_fee: Optional[float] = None
+    badge_t1_sales: Optional[float] = None
+    badge_t2_sales: Optional[float] = None
+    badge_t3_sales: Optional[float] = None
+    badge_t4_sales: Optional[float] = None
     require_kyc_for_withdrawal: Optional[bool] = None
     gst_percent: Optional[float] = None
     company_name: Optional[str] = None

@@ -1,11 +1,13 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Logo } from "@/components/Logo";
 import { useI18n } from "@/context/I18nContext";
-import { API } from "@/lib/api";
+import { toast } from "sonner";
+import { useAuth } from "@/context/AuthContext";
+import { API, apiError } from "@/lib/api";
 
 export default function OrderDetail() {
   const { id } = useParams();
@@ -13,8 +15,18 @@ export default function OrderDetail() {
   const navigate = useNavigate();
   const [o, setO] = useState(null);
   const money = (v) => `₹${Number(v).toLocaleString("en-IN")}`;
+  const { user } = useAuth();
 
-  useEffect(() => { API.get(`/orders/${id}`).then(({ data }) => setO(data)).catch(() => {}); }, [id]);
+  const load = useCallback(() => { API.get(`/orders/${id}`).then(({ data }) => setO(data)).catch(() => {}); }, [id]);
+  useEffect(() => { load(); }, [load]);
+
+  const markCollected = async () => {
+    try {
+      await API.post(`/orders/${id}/cod-collected`);
+      toast.success(t("order.collectedOk"));
+      load();
+    } catch (err) { toast.error(apiError(err)); }
+  };
   if (!o) return <Skeleton className="h-96 rounded-2xl" />;
 
   return (
@@ -65,7 +77,12 @@ export default function OrderDetail() {
           <div className="flex justify-between text-muted2"><span>{t("order.gst")} ({o.gst_percent}%)</span><span>{money(o.gst_amount)}</span></div>
           <div className="flex justify-between border-t border-brand-50 pt-2 font-display text-lg font-semibold text-forest"><span>{t("order.total")}</span><span>{money(o.total)}</span></div>
         </div>
-        {o.payment_status !== "paid" && (
+        {o.payment_method === "cod" && o.payment_status === "cod_pending" && o.seller_user_id === user?.id && (
+          <Button onClick={markCollected} className="mt-6 w-full rounded-full btn-gold" data-testid="order-cod-collected">
+            {t("order.markCollected")}
+          </Button>
+        )}
+        {o.payment_status !== "paid" && o.payment_method !== "cod" && (
           <Button onClick={() => navigate("/app/checkout")} className="mt-6 w-full rounded-full bg-forest hover:bg-brand" data-testid="order-paynow">{t("order.payNow")}</Button>
         )}
       </div>

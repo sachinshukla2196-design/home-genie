@@ -82,7 +82,7 @@ export default function AdminSecureLogin() {
         <form onSubmit={submit} className="mt-8 space-y-4">
           <div>
             <Label className="text-sm text-white/80">Admin Username</Label>
-            <Input type="text" required value={username} onChange={(e) => setUsername(e.target.value)} placeholder="admin.rahulnirwana" className="mt-1.5 h-11 rounded-lg border-white/25 bg-white/[0.14] text-white placeholder:text-white/50 focus-visible:ring-gold" data-testid="admin-email" />
+            <Input type="text" required value={username} onChange={(e) => setUsername(e.target.value)} placeholder="admin" className="mt-1.5 h-11 rounded-lg border-white/25 bg-white/[0.14] text-white placeholder:text-white/50 focus-visible:ring-gold" data-testid="admin-email" />
           </div>
           <SecretField label="Password" value={password} onChange={(e) => setPassword(e.target.value)} testid="admin-password" placeholder="Your password" />
           <SecretField label="Admin Passcode" value={passcode} onChange={(e) => setPasscode(e.target.value)} testid="admin-passcode" placeholder="Secret passcode" />
