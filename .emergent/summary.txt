@@ -1,0 +1,154 @@
+<analysis>**original_problem_statement**: Continue development and maintenance of Anjali Herbal Life Ayurveda India LLP's React + FastAPI + MongoDB MLM/e-commerce application. Focus on financial correctness, production readiness, precise distributor earnings, and strict preservation of real data (no unauthorized data cleanup or financial changes). 
+
+**User's preferred language**: English (INSTRUCT next agent to respond in English only)
+
+**what currently exists?**: A mature, production-ready full-stack MLM app featuring complex commission logic (30% company direct, 70% commission pool), immutable wallet ledgers, refund/clawback handlers, dynamic income rules (Personal/Team Repurchase, Monthly Fixed Income, Club/Royalty), and integrations with Razorpay, Twilio, and Emergent Google Sign-In. Extensive financial diagnostic and audit reports have been generated.
+
+**Last working item**:
+- Last item agent was working: Guiding the user on how to commit and push code using the platform's Save to Github UI button. Prior to this, the agent was waiting for critical business decisions (D-1, D-2, D-3) regarding production data cleanup and secrets configuration.
+- Status: BLOCKED (Waiting on user decisions for data cleanup, production secrets, and for the user to click the Github UI button).
+- Agent Testing Done: N
+- Which testing method agent to use? NA (No code changes made in this session).
+- User Testing Done: N
+
+**All Pending/In progress Issue list**:
+Issue 1: Production Secrets & Integrations Missing (P0)
+Issue 2: Historical Commission Formula Drift [D-1] (P1)
+Issue 3: Ledger Hygiene & Orphan Data Cleanup [D-2 & D-3] (P2)
+
+Issues Detail:
+- Issue 1: Production Secrets & Integrations Missing
+  - Attempted fixes: Informed user that production lacks Twilio credentials, Razorpay webhook secret, and cron secret, and Razorpay is in test mode.
+  - Next debug checklist: Check backend env/logs or ask user to confirm once live keys are updated in the deployment secrets.
+  - Why fix this issue and what will be achieved with the fix? Real payments, OTPs, and monthly cron jobs will fail in production without correct live credentials.
+  - Status: USER VERIFICATION PENDING
+  - Is recurring issue? N
+  - Should Test frontend/backend/both after fix? backend (verify OTP, webhook, cron)
+  - Blocked on other issue: User adding secrets.
+
+- Issue 2: Historical Commission Formula Drift [Decision D-1]
+  - Attempted fixes: Waiting for user instruction. 9 historical matrix orders used the old subtotal base (resulting in overpayment compared to the new 70% pool rule).
+  - Next debug checklist: Ask user if they want to grandfather (leave as is) or recalculate/clawback.
+  - Why fix this issue and what will be achieved with the fix? Ensures financial consistency.
+  - Status: BLOCKED
+  - Is recurring issue? N
+  - Should Test frontend/backend/both after fix? backend
+  - Blocked on other issue: User decision.
+
+- Issue 3: Ledger Hygiene & Orphan Data Cleanup [Decisions D-2 & D-3]
+  - Attempted fixes: Identified 3 legacy wallet rows causing visual discrepancy, 2 missing wallet docs, and 4 HELD orphan commissions. Waiting for user authorization to clean.
+  - Next debug checklist: Clean specific test IDs ONLY upon explicit user approval.
+  - Why fix this issue and what will be achieved with the fix? Cleans up production DB artifacts.
+  - Status: BLOCKED
+  - Is recurring issue? N
+  - Should Test frontend/backend/both after fix? backend
+  - Blocked on other issue: User decision.
+
+**In progress Task List**:
+None currently active. Agent is awaiting user instructions.
+
+**Upcoming and Future Tasks**:
+Upcoming Tasks:
+- Post-secret Validation (P0): Once the user confirms secrets are configured, verify 1 real OTP flow, 1 payment/webhook event, and the monthly cron authorization.
+- Legal Pages Content Update (P1): Update  with final T&C, Privacy Policy, and Refund Policy (or provide draft templates).
+Future Tasks:
+- Remove BETA TESTING badge from homepage (P2).
+- Code Quality Refactoring (P2): Address previous React hook warnings and migrate localStorage auth to httpOnly cookie/session handling (Requires separate auth integration review).
+
+**Completed work in this session**:
+- No code was changed in this session. Assisted user with Git commit instructions via the platform UI.
+
+**Earlier issues found/mentioned but not fixed**:
+- All listed under the pending issue list (D-1, D-2, D-3 and Missing Secrets).
+
+**Known issue recurrence from previous fork**:
+- Issue recurrence in previous fork: Twilio OTP trial error .
+- Recurrence count: 1
+- Status: BLOCKED (This is a Twilio trial limitation blocking custom SMS body delivery. DO NOT try to fix this in code. The user must upgrade their Twilio account and complete India DLT setup).
+
+**Code Architecture**:
+- Frontend: React, Tailwind CSS, Shadcn UI ()
+- Backend: FastAPI/Python ()
+- Database: MongoDB via Motor
+- Deployment: Kubernetes container environment with supervisor-managed hot reload.
+
+**Key Technical Concepts**:
+React, FastAPI, MongoDB, Twilio OTP, Razorpay Payments & Webhooks, Emergent Managed Google Sign-In, platform crons (), complex matrix MLM calculation algorithms.
+
+**key DB schema**:
+- users: {id, sponsor_id, status, kyc, role}
+- wallets: {user_id, balance}
+- wallet_transactions: {wallet_id, amount, type, order_ref}
+- orders: {user_id, subtotal, status, commissions_paid}
+- commissions: {order_id, user_id, amount, status}
+
+**changes in tech stack**:
+None
+
+**All files of reference**:
+-  (Core financial commission & payment webhooks)
+- 
+- 
+-  (Tree builder logic)
+-  & 
+- 
+-  (Twilio logic)
+-  & 
+-  & 
+
+**Areas that need refactoring**:
+- Auth migration from  to  cookies.
+- React /hook dependency warnings and linting items previously flagged.
+
+**key api endpoints**:
+- 
+- 
+- 
+- 
+
+**Critical Info for New Agent**:
+- **CRITICAL DATA PRESERVATION:** NEVER alter production financial records, users, sponsors, KYC, or commissions without explicit user approval. Do NOT perform database resets.
+- Master ID  must be preserved.
+- **Twilio Trial:** Do not attempt to fix Twilio SMS sending issues in code. It is an account-level limitation requiring the user to upgrade.
+- **Razorpay:** A webhook secret is required for production. Do not test in production without user confirmation of secrets.
+- **Action Required:** Your first move should be confirming if the user has completed the Save to Github step or if they are ready to provide decisions on D-1, D-2, and D-3.
+
+**documents and test reports created in this job**:
+-  (Updated in prior forks)
+- 
+
+**Last 10 User Messages and any pending HUMAN messages**:
+- Message 1: (Handoff Summary detailing pending decisions D-1, D-2, D-3 and missing secrets) - PENDING USER DECISION
+- Message 2: commit and push on main - RESOLVED (Agent guided to UI button)
+- Message 3: Save to Github - RESOLVED (Agent clarified it's a UI button, not a chat command)
+
+**Project Health Check**:
+- Broken: Nothing in code.
+- Blocked: Production readiness blocked on user credentials (Twilio, Razorpay, Cron) and cleanup approvals.
+
+**3rd Party Integrations**:
+- Razorpay (Payments) — requires User API Key (Currently using test mode prefix)
+- Twilio (SMS/OTP) — requires User API Key (Currently hitting trial limits)
+- Emergent Managed Google Sign-In — requires Emergent integration
+- Emergent Object Storage — requires Emergent integration
+
+**Testing status**:
+- Testing agent used after significant changes: NA
+- Troubleshoot agent used after agent stuck in loop: NA
+- Test files created: None this session. (Prior suite  passed 60/60).
+- Known regressions: None.
+
+**Credentials to test flow**:
+Refer to 
+
+**What agent forgot to execute**:
+Nothing. The agent successfully recognized that the user was trying to trigger a platform UI feature via chat and provided the correct instructions.
+
+**Debugging checklist for current issue**
+    Issue: Waiting on user decisions and secrets setup.
+
+    Frontend files to check: NA
+  
+    Backend files to check: NA
+
+    Database to check: NA</analysis>

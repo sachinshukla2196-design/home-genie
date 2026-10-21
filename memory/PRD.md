@@ -354,3 +354,10 @@ VERIFIED via curl: commission release→RELEASED, double release→400, hold→H
 - 15 Oct 2026: EarningsExplainer bilingual (EN/HI via useI18n lang). Redeploy dispatched (needs WEBHOOK_CRON_SECRET in prod secrets). Production read-only inspection results still pending from diagnostics agent — present candidates to owner before ANY production cleanup.
 - 15 Oct 2026 code-review pass: tests use `secrets` instead of `random`; Landing banner keys = src; AdminOrders/AdminProducts `load` memoised with useCallback. Declined (documented): localStorage→cookie auth migration, refactoring verified financial functions, bogus `is None` and skeleton-key findings.
 - 15 Oct 2026: GET /api/admin/final-report.pdf (admin JWT) serves /app/FINAL_APPLICATION_REPORT.pdf; download button on Admin → Reports.
+
+## Jun 2026 — Owner decisions D-1/D-2/D-3 CLOSED (no code/data change)
+- D-1 Historical commission drift (9 old matrix orders on the older, higher base): **GRANDFATHERED** — owner chose "leave them as they are". No recalculation, no clawback. New orders continue on the 30/70 pool rule. CLOSED.
+- D-2/D-3 Ledger hygiene (3 stray wallet rows, 2 missing wallet docs, 4 HELD orphan commissions in production): **NO CLEANUP** — owner chose "leave the database untouched". Minor display discrepancy accepted. CLOSED (re-open only on owner request).
+- Production secrets (Twilio live, RAZORPAY_WEBHOOK_SECRET, WEBHOOK_CRON_SECRET): **NOT YET SET** — owner staying in test mode. Post-secret validation (OTP flow, webhook event, monthly cron auth) remains the next P0 once secrets are added.
+- Services verified healthy this session (supervisor all RUNNING, /api/health 200). No code changed.
+- Remaining backlog: Legal page final wording (P1), remove "BETA TESTING" badge (P2), localStorage→httpOnly cookie auth migration (P2), React hook lint warnings (P2).
