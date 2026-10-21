@@ -9,6 +9,7 @@ import { Logo, LogoHero } from "@/components/Logo";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { Button } from "@/components/ui/button";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import { captureSellerRef } from "@/lib/sellerRef";
 import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
 
@@ -57,6 +58,7 @@ export default function Landing() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const homeLink = user ? "/app/dashboard" : "/register";
+  React.useEffect(() => { captureSellerRef(); }, []);
 
   return (
     <div className="min-h-screen bg-background" data-testid="landing-page">

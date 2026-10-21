@@ -17,6 +17,7 @@ const NAV = [
   { to: "/admin/users", icon: Users, key: "nav.users" },
   { to: "/admin/products", icon: Package, key: "nav.products" },
   { to: "/admin/orders", icon: ShoppingCart, key: "nav.orders" },
+  { to: "/admin/withdrawals", icon: Banknote, key: "nav.withdrawals" },
   { to: "/admin/reports", icon: FileBarChart, key: "nav.reports" },
   { to: "/admin/settings", icon: Settings, key: "nav.settings" },
   { to: "/admin/audit", icon: ScrollText, key: "nav.audit" },

@@ -27,20 +27,20 @@ export default function Cart() {
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-3 lg:col-span-2">
           {items.map((i) => (
-            <div key={i.product_id} className="flex items-center gap-4 rounded-2xl border border-brand-50 bg-white p-4" data-testid={`cart-item-${i.sku}`}>
+            <div key={`${i.product_id}-${i.variant || ""}`} className="flex items-center gap-4 rounded-2xl border border-brand-50 bg-white p-4" data-testid={`cart-item-${i.sku}`}>
               <img src={i.image} alt={i.name} className="h-20 w-20 rounded-lg object-cover" />
               <div className="flex-1">
                 <div className="font-medium text-ink">{lang === "hi" && i.name_hi ? i.name_hi : i.name}</div>
-                <div className="text-sm text-muted2">{money(i.price)}</div>
+                <div className="text-sm text-muted2">{money(i.price)}{i.variant ? ` · ${i.variant}` : ""}</div>
                 <div className="mt-2 inline-flex items-center rounded-full border border-brand-50">
-                  <button onClick={() => setQty(i.product_id, i.quantity - 1)} className="p-1.5 text-forest"><Minus size={14} /></button>
+                  <button onClick={() => setQty(i.product_id, i.quantity - 1, i.variant)} className="p-1.5 text-forest"><Minus size={14} /></button>
                   <span className="w-8 text-center text-sm font-semibold">{i.quantity}</span>
-                  <button onClick={() => setQty(i.product_id, i.quantity + 1)} className="p-1.5 text-forest"><Plus size={14} /></button>
+                  <button onClick={() => setQty(i.product_id, i.quantity + 1, i.variant)} className="p-1.5 text-forest"><Plus size={14} /></button>
                 </div>
               </div>
               <div className="text-right">
                 <div className="font-display font-semibold text-forest">{money(i.price * i.quantity)}</div>
-                <button onClick={() => remove(i.product_id)} className="mt-2 text-danger hover:opacity-70" data-testid={`remove-${i.sku}`}><Trash2 size={16} /></button>
+                <button onClick={() => remove(i.product_id, i.variant)} className="mt-2 text-danger hover:opacity-70" data-testid={`remove-${i.sku}`}><Trash2 size={16} /></button>
               </div>
             </div>
           ))}

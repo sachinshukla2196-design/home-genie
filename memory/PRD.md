@@ -1,6 +1,6 @@
 # HOME GENIES — Product Requirements & Status
 
-_Forked from the Anjali Herbal Life codebase. The original project is separate and must never be
+_Forked from the Anjali Herbal Life codebase. That original project is separate and must never be
 opened or modified from this workspace._
 
 ## 1. Product
@@ -8,64 +8,58 @@ opened or modified from this workspace._
 - **Purpose:** a women-focused home-business and social-commerce platform. HomeGenies buy useful
   products, share product links with customers, sell without compulsory inventory, and track
   eligible sales and HomeGenie Points.
-- **Honesty rule (non-negotiable):** recruitment alone NEVER generates commission. No fabricated
-  products, balances, testimonials or earnings promises anywhere in the product.
+- **Honesty rule (non-negotiable):** recruitment alone NEVER earns commission. No fabricated
+  products, balances, testimonials or earnings promises.
 - **Four fixed pillars:** Sarees · Fashion Products · Makeup, Beauty & Skincare · Household Essentials.
-- **Design:** deep royal purple `#2E1065` / `#6D28D9`, metallic gold `#C9A227`, magenta `#C026A3`,
-  ivory surfaces; Fraunces display + Inter body; mobile-first.
-- **Languages:** English + Hindi (250 keys each, kept strictly parallel).
+- **Design:** royal purple `#2E1065`/`#6D28D9`, gold `#C9A227`, magenta `#C026A3`, ivory surfaces;
+  Fraunces display + Inter; mobile-first. Logo: girl peeping from an ornate genie lamp
+  (`/brand/logo-full.jpg`, `/brand/logo-icon.jpg`).
+- **Languages:** English + Hindi, 271 parallel keys.
 
 ## 2. Architecture
-React 19 (CRA/craco) + Tailwind + shadcn/ui · FastAPI + Motor/MongoDB · preview pod with supervisor.
+React 19 (CRA/craco) + Tailwind + shadcn/ui · FastAPI + Motor/MongoDB · supervisor preview pod.
+Backend modules: `server, core, auth_routes, shop_routes, wallet_routes, admin_routes,
+commission, cron_routes, providers, storage`.
 
-## 3. Isolation status (vs the Anjali original)
-| Area | State |
+## 3. Commission engine — LIVE (owner-approved 21 Jun 2026)
+| Rule | Value |
 |---|---|
-| Database | `DB_NAME=homegenies`, localhost only — **needs a backend restart to take effect** |
-| Payout cron | Removed from `.emergent/crons.yml` and **confirmed de-registered** in the pod |
-| Secrets | JWT / OTP pepper / cron secret rotated; Razorpay, Stripe, Twilio, email keys blanked |
-| CORS | Anjali domains removed; preview origin only |
-| Admin identity | seeded id is `HGADMIN001`; **`ADMIN_EMAIL` + password rotation still pending owner input** |
-| Storage | namespace `home-genies` |
-| Anjali DB dumps | `/app/backups` deleted from the tree (git history purge NOT executed — separate decision) |
-| Branding | fully replaced across frontend + backend |
+| Base | product price **before GST** (`order.subtotal`) |
+| Direct | **30%** to the HomeGenie whose share link produced the sale |
+| Permanent referral | **10%** to the person who invited that HomeGenie |
+| Team sales | **5%** to the person who invited that referrer |
+| Credit | as **PENDING**, released to AVAILABLE after `return_window_days` (7) |
+| Point value | 1 point = Rs 1 |
+| Withdrawal | enabled, requires a verified identity/bank record, no minimum |
 
-## 4. Removed Anjali business logic (21 Jun 2026)
-Commission matrix (30/70 pool, GD..MDD), personal-repurchase 5%, team-purchase 2.5%, monthly fixed
-income, club/royalty income, rank/BV, RED→GREEN activation, genealogy tree, master code `MST000001`,
-the ₹100 registration referral reward, `ANJ` id prefix, mandatory sponsor, Aadhaar-at-signup,
-the Anjali starter kit seed and the PhonePe merchant QR. Files deleted: `club_income.py`,
-`income_rules.py`, `income_config.py`, `cron_routes.py`, `Team.js`, `Kyc.js`, `Withdrawals.js`,
-`IdCard.js`, `TreeView.js`, `AdminKyc/AdminWithdrawals/AdminCommissions/AdminMonthlyIncome/AdminIncomeRules`.
+Eligibility: order paid · sale attributed via `?ref=<HomeGenieID>` (stored 30 days) · seller ≠ buyer
+· seller approved (green) · each upline recipient approved. Idempotent via an atomic order claim;
+refunds claw back proportionally (pending cancelled, released debited).
+Release cron: `points-release`, 01:30 IST daily → `POST /api/cron/release-points` (bearer secret).
+Rates editable in Admin → Settings → Commission & Points.
 
-## 5. Preserved
-Auth + RBAC, Google sign-in, registration→admin approval, catalogue + cart + orders with
-server-side pricing, Razorpay/webhook verification with idempotency, refund + clawback,
-immutable wallet ledger, notifications, audit log, CSV reports, object-storage uploads, i18n.
+## 4. Isolation from the original (complete)
+Own DB `homegenies` (localhost) · own admin identity `HGADMIN001` /
+`sansardeveloperssachin@gmail.com` · rotated JWT/OTP/cron secrets · provider keys blanked ·
+CORS trimmed · storage namespace `home-genies` · Anjali dumps deleted from the tree
+(git-history purge still a separate, unexecuted decision).
 
-## 6. Pending / backlog
-**P0 — blocking**
-1. Owner's HOME GENIES admin email + a safe channel for new admin password/passcode.
-2. Authorised backend restart so `DB_NAME=homegenies` takes effect (fresh, empty DB).
-3. A distinct HOME GENIES hostname (fork currently shares the original's preview host).
+## 5. Removed Anjali logic (not renamed)
+Commission matrix (30/70 pool, GD..MDD), personal repurchase, team purchase, monthly fixed income,
+club/royalty income, rank/BV, RED→GREEN activation, genealogy tree, master code MST000001,
+the ₹100 registration reward, ANJ prefix, mandatory sponsor, Aadhaar-at-signup, starter-kit seed,
+PhonePe merchant QR, legacy Stripe keys.
 
-**P1**
-4. HOME GENIES commission engine (30% direct / 10% permanent referral / 5% team) — **not built**;
-   every surface currently says "Pending configuration".
-5. HomeGenie Points ledger (1 pt = ₹1), redemption + withdrawal rules (compliance review needed).
-6. Provider accounts: Razorpay merchant + webhook secret, Twilio sender + India DLT, email sender.
-7. Seller/HomeGenie role separation on one login + per-seller data scoping.
-8. COD, shipping and returns workflow; supplier / hybrid-fulfilment model.
-
-**P2**
-9. Product variants (size/shade) + catalogue search; badges & monthly activity tracking.
-10. Session hardening (localStorage → httpOnly), pagination on admin lists.
-11. Git-history purge of the old DB dumps (plan prepared, NOT executed).
+## 6. Backlog
+**P1** — Razorpay merchant + webhook secret · Twilio sender + India DLT · email sender ·
+seller/customer dual role on one login + per-seller data scoping · COD, shipping, returns workflow ·
+supplier / hybrid fulfilment · badges & monthly activity tracking.
+**P2** — catalogue search · per-variant stock and price · session hardening (localStorage →
+httpOnly) · admin list pagination · git-history purge · distinct HOME GENIES hostname.
 
 ## 7. Verification (21 Jun 2026)
-Backend compiles; all live endpoints 200; every removed MLM endpoint returns 404; webpack compiles
-clean; testing agent (iteration_16) passed homepage, EN/HI, 5 legal pages, login, all 7 admin routes,
-dashboard and removed-route redirects. Its 7 findings (referral wrongly required, mobile header
-overflow, dead rank UI, duplicate labels, logo alignment, MLM column headers, points shown as rupees)
-were all fixed and re-verified. Authenticated UI was exercised with the admin account; the legacy
-HomeGenie test login is stale (401).
+`tests/test_commission_engine.py` passes: 30/10/5 on a pre-GST base, pending→available release,
+idempotency, refund clawback. Cron endpoint returns 401 unauthorised / 200 + duplicate-safe when
+authorised, and is registered in the pod. Admin login with the new credentials works; Settings,
+Withdrawals (admin + HomeGenie), dashboard commission panel and the variant → cart flow verified
+at 390px and 1920px with no overflow. Catalogue intentionally empty (4 pillar categories only).

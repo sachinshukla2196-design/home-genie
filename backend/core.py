@@ -144,9 +144,14 @@ async def next_sequence(name: str, prefix: str, width: int = 6) -> str:
 # ---------- business settings ----------
 DEFAULT_SETTINGS = {
     "id": "business_settings",
-    "activation_amount": 1500.0,
-    "activation_product_sku": "ANJ-STARTER",
-    "referral_commission": 100.0,
+    # HOME GENIES commission plan (percent of product price, before GST)
+    "commission_direct_pct": 30.0,
+    "commission_referral_pct": 10.0,
+    "commission_team_pct": 5.0,
+    # HomeGenie Points
+    "return_window_days": 7,
+    "point_value": 1.0,
+    "points_withdrawal_enabled": True,
     "require_kyc_for_withdrawal": True,
     "gst_percent": 5.0,
     "currency": "INR",
@@ -217,6 +222,11 @@ async def add_wallet_transaction(user_id: str, txn_type: str, amount: float, sta
                                     {"$inc": inc, "$set": {"updated_at": now_iso()}})
     txn.pop("_id", None)
     return txn
+
+
+def money2(v) -> float:
+    """Round to 2 decimals for money/points."""
+    return round(float(v) + 1e-9, 2)
 
 
 # ---------- notifications ----------

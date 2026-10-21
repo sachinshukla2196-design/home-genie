@@ -39,8 +39,11 @@ async def health_root():
 async def public_settings():
     s = await get_settings()
     return {
-        "activation_amount": s.get("activation_amount"),
-        "referral_commission": s.get("referral_commission"),
+        "commission_direct_pct": s.get("commission_direct_pct"),
+        "commission_referral_pct": s.get("commission_referral_pct"),
+        "commission_team_pct": s.get("commission_team_pct"),
+        "return_window_days": s.get("return_window_days"),
+        "point_value": s.get("point_value"),
         "currency_symbol": s.get("currency_symbol", "₹"),
         "gst_percent": s.get("gst_percent", 5.0),
         "company_name": s.get("company_name"),
@@ -54,6 +57,8 @@ app.include_router(shop_routes.router)
 app.include_router(wallet_routes.router)
 app.include_router(admin_routes.router)
 app.include_router(storage.router)
+import cron_routes
+app.include_router(cron_routes.router)
 
 _cors_raw = os.environ.get("CORS_ALLOWED_ORIGINS") or os.environ.get("CORS_ORIGINS", "")
 _cors = [o.strip() for o in _cors_raw.split(",") if o.strip() and o.strip() != "*"]
@@ -151,7 +156,13 @@ async def _init_db():
     if not admin_email or not admin_password:
         logger.error("ADMIN_EMAIL / ADMIN_PASSWORD not configured; skipping admin seed.")
         return
-    existing = await db.users.find_one({"email": admin_email})
+    existing = await db.users.find_one({"$or": [{"email": admin_email},
+                                                {"role": "super_admin", "mobile": "9999999999"}]})
+    if existing and existing.get("email") != admin_email:
+        # owner changed ADMIN_EMAIL: move the seeded admin to the new identity
+        await db.users.update_one({"id": existing["id"]},
+                                  {"$set": {"email": admin_email, "updated_at": now_iso()}})
+        existing["email"] = admin_email
     if not existing:
         await db.users.insert_one({
             "id": new_id(), "distributor_id": "HGADMIN001", "full_name": "Platform Administrator",

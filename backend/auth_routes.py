@@ -216,7 +216,6 @@ async def register(body: RegisterBody, request: Request):
         "address": body.address, "state": body.state, "city": body.city, "pincode": body.pincode,
         "aadhaar_number": body.aadhaar_number.strip(),
         "kyc_status": "not_started",
-        "activation_date": None, "activation_order_id": None, "activation_amount": None,
         "created_at": now_iso(), "updated_at": now_iso(),
     }
     await db.users.insert_one(dict(user))

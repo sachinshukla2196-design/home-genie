@@ -1,5 +1,5 @@
 """Admin panel routes: dashboard, users, products, orders, KYC, withdrawals,
-commissions, activations, settings, audit logs, reports (with CSV export)."""
+commissions, settings, audit logs, reports (with CSV export)."""
 import io
 import csv
 import math
@@ -65,7 +65,7 @@ async def admin_dashboard(admin: dict = Depends(require_admin)):
         return {field: {"$regex": f"^{today}"}}
 
     today_regs = await db.users.count_documents({"created_at": {"$regex": f"^{today}"}})
-    today_acts = await db.activation_records.count_documents({"created_at": {"$regex": f"^{today}"}})
+    today_acts = await db.users.count_documents({"status": "green", "approved_at": {"$regex": f"^{today}"}})
     today_orders = await db.orders.count_documents({"created_at": {"$regex": f"^{today}"}, "payment_status": "paid"})
 
     revenue_docs = await db.orders.find({"payment_status": "paid", "created_at": {"$regex": f"^{today}"}},
@@ -126,9 +126,11 @@ class ProductBody(BaseModel):
     selling_price: float
     gst_percent: float = 5.0
     stock: int = 100
-    category: str = "General"
+    category: str = "Household Essentials"
     is_active: bool = True
-    is_activation_product: bool = False
+    # Optional purchase options, e.g. [{"name": "Size", "values": ["Free Size"]},
+    #                                  {"name": "Shade", "values": ["Maroon", "Gold"]}]
+    options: List[dict] = []
 
 
 @router.post("/products")
@@ -268,11 +270,6 @@ async def admin_payments(admin: dict = Depends(require_admin)):
 
 
 # ---------------- Activations / Referrals / Commissions ----------------
-@router.get("/activations")
-async def admin_activations(admin: dict = Depends(require_admin)):
-    return await db.activation_records.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
-
-
 @router.get("/referrals")
 async def admin_referrals(admin: dict = Depends(require_admin)):
     return await db.referral_relationships.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
@@ -457,9 +454,12 @@ async def admin_get_settings(admin: dict = Depends(require_admin)):
 
 
 class SettingsBody(BaseModel):
-    activation_amount: Optional[float] = None
-    activation_product_sku: Optional[str] = None
-    referral_commission: Optional[float] = None
+    commission_direct_pct: Optional[float] = None
+    commission_referral_pct: Optional[float] = None
+    commission_team_pct: Optional[float] = None
+    return_window_days: Optional[int] = None
+    point_value: Optional[float] = None
+    points_withdrawal_enabled: Optional[bool] = None
     require_kyc_for_withdrawal: Optional[bool] = None
     gst_percent: Optional[float] = None
     company_name: Optional[str] = None
@@ -529,7 +529,6 @@ async def approve_registration_request(req_id: str, request: Request, admin: dic
         "id": new_id(), "distributor_id": did, "full_name": r["full_name"],
         "email": r.get("email") or None, "mobile": r["mobile"], "password_hash": r["password_hash"],
         "role": "distributor", "status": "red", "account_status": "active",
-        "activation_status": "inactive",
         "mobile_verified": False, "email_verified": bool(r.get("email_verified")),
         "google_linked": bool(r.get("google_linked")),
         "sponsor_id": r.get("sponsor_id") or None, "sponsor_user_id": None,

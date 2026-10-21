@@ -42,7 +42,7 @@ async def referral_info(user: dict = Depends(get_current_user)):
         "distributor_id": user.get("distributor_id"),
         "referral_code": user.get("distributor_id"),
         "eligible": user.get("status") == "green",
-        "commission": settings.get("referral_commission", 100.0),
+        "direct_pct": settings.get("commission_direct_pct", 30.0),
         "total_referrals": count,
         "active_referrals": active,
     }
@@ -123,13 +123,15 @@ async def my_withdrawals(user: dict = Depends(get_current_user)):
 @router.post("/withdrawals")
 async def request_withdrawal(body: WithdrawBody, request: Request, user: dict = Depends(get_current_user)):
     if user.get("status") != "green":
-        raise HTTPException(status_code=403, detail="Activate your account (GREEN) to request withdrawals.")
+        raise HTTPException(status_code=403, detail="Your HomeGenie selling role must be approved before you can withdraw points.")
     settings = await get_settings()
-    # No minimum withdrawal amount — user may request any amount within available balance.
+    if not settings.get("points_withdrawal_enabled", True):
+        raise HTTPException(status_code=400, detail="Point withdrawal is not enabled yet.")
+    # No minimum withdrawal amount - any amount within the available balance may be requested.
     if settings.get("require_kyc_for_withdrawal", True):
         kyc = await db.kyc_records.find_one({"user_id": user["id"]})
         if not kyc or kyc.get("status") != "verified":
-            raise HTTPException(status_code=400, detail="Complete and verify your KYC before withdrawing.")
+            raise HTTPException(status_code=400, detail="Verify your identity and bank details before withdrawing points.")
     await get_or_create_wallet(user["id"])
     # Atomic conditional debit: only succeeds if available_balance >= amount.
     moved = await db.wallets.update_one(
@@ -190,13 +192,18 @@ async def dashboard(user: dict = Depends(get_current_user)):
     today = datetime.now(timezone.utc).date().isoformat()
     today_income = 0.0
     total_income = wallet["total_earned"]
-    commissions = await db.commissions.find({"sponsor_id": user["id"], "status": "CREDITED"},
-                                             {"_id": 0, "amount": 1, "created_at": 1}).to_list(2000)
+    commissions = await db.commissions.find(
+        {"user_id": user["id"], "status": {"$in": ["PENDING", "RELEASED", "PARTIALLY_REVERSED"]}},
+        {"_id": 0, "amount": 1, "created_at": 1, "status": 1, "type": 1}).to_list(2000)
     for c in commissions:
         if (c.get("created_at") or "")[:10] == today:
             today_income += c.get("amount", 0.0)
 
     ref_count = await db.referral_relationships.count_documents({"sponsor_id": user["id"]})
+    sales_count = await db.orders.count_documents({"seller_user_id": user["id"], "payment_status": "paid"})
+    pending_comm = sum(c.get("amount", 0.0) for c in commissions if c.get("status") == "PENDING")
+    team_sales = sum(c.get("amount", 0.0) for c in commissions
+                     if c.get("type") in ("COMMISSION_REFERRAL", "COMMISSION_TEAM"))
     txns = await db.wallet_transactions.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(5)
     notif = await db.notifications.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(5)
 
@@ -214,7 +221,14 @@ async def dashboard(user: dict = Depends(get_current_user)):
         "wallet": {"available_balance": wallet["available_balance"], "pending_balance": wallet["pending_balance"],
                    "total_earned": wallet["total_earned"], "total_withdrawn": wallet["total_withdrawn"]},
         "stats": {"total_income": total_income, "today_income": today_income, "total_orders": total_orders,
-                  "referral_count": ref_count},
+                  "referral_count": ref_count, "sales_count": sales_count,
+                  "pending_commission": round(pending_comm, 2), "team_commission": round(team_sales, 2)},
+        "plan": {"direct_pct": settings.get("commission_direct_pct", 30.0),
+                 "referral_pct": settings.get("commission_referral_pct", 10.0),
+                 "team_pct": settings.get("commission_team_pct", 5.0),
+                 "return_window_days": settings.get("return_window_days", 7),
+                 "point_value": settings.get("point_value", 1.0),
+                 "withdrawal_enabled": settings.get("points_withdrawal_enabled", True)},
         "recent_orders": recent_orders,
         "recent_transactions": txns,
         "notifications": notif,

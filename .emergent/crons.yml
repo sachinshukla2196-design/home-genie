@@ -1,1 +1,9 @@
-crons: []
+crons:
+  - name: points-release
+    description: "Releases pending HomeGenie Points to available once the return window has passed"
+    cron: "30 1 * * *"
+    timezone: "Asia/Kolkata"
+    endpoint: "{{BASE_URL}}/api/cron/release-points"
+    method: POST
+    # Cron endpoints must ack 2xx immediately; enqueue/background the actual work.
+    enabled: true

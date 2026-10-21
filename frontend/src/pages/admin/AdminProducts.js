@@ -11,7 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useI18n } from "@/context/I18nContext";
 import { API, apiError } from "@/lib/api";
 
-const EMPTY = { sku: "", name: "", name_hi: "", description: "", description_hi: "", images: [""], mrp: 0, selling_price: 0, gst_percent: 5, stock: 100, category: "Household Essentials", is_active: true, is_activation_product: false };
+const EMPTY = { sku: "", name: "", name_hi: "", description: "", description_hi: "", images: [""], mrp: 0, selling_price: 0, gst_percent: 5, stock: 100, category: "Household Essentials", is_active: true, options: [] };
 
 export default function AdminProducts() {
   const { t } = useI18n();

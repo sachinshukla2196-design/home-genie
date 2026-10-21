@@ -15,10 +15,14 @@ export default function ProductDetail() {
   const navigate = useNavigate();
   const [p, setP] = useState(null);
   const [qty, setQty] = useState(1);
+  const [picked, setPicked] = useState({});
   const sym = "₹";
 
   useEffect(() => { API.get(`/products/${id}`).then(({ data }) => setP(data)).catch(() => {}); }, [id]);
   const money = (v) => `${sym}${Number(v).toLocaleString("en-IN")}`;
+  const variantLabel = () => (p?.options || []).map((o) => `${o.name}: ${picked[o.name] || ""}`).filter((x) => !x.endsWith(": ")).join(" / ");
+  const missingChoice = () => (p?.options || []).some((o) => (o.values || []).length > 0 && !picked[o.name]);
+  const guard = () => { if (missingChoice()) { toast.error(t("product.chooseOptions")); return false; } return true; };
 
   if (!p) return <div className="grid gap-8 lg:grid-cols-2"><Skeleton className="h-96 rounded-2xl" /><Skeleton className="h-96 rounded-2xl" /></div>;
 
@@ -40,6 +44,28 @@ export default function ProductDetail() {
           <p className="mt-5 leading-relaxed text-muted2">{lang === "hi" && p.description_hi ? p.description_hi : p.description}</p>
           <div className="mt-4 text-sm text-muted2">GST: {p.gst_percent}% · SKU: {p.sku} · Stock: {p.stock}</div>
 
+          {(p.options || []).length > 0 && (
+            <div className="mt-6 space-y-4" data-testid="variant-options">
+              {(p.options || []).map((opt) => (
+                <div key={opt.name}>
+                  <div className="text-xs font-semibold uppercase tracking-wide text-muted2">{opt.name}</div>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {(opt.values || []).map((v) => {
+                      const active = picked[opt.name] === v;
+                      return (
+                        <button key={v} type="button" onClick={() => setPicked((x) => ({ ...x, [opt.name]: v }))}
+                          data-testid={`variant-${opt.name}-${v}`}
+                          className={`rounded-full border px-4 py-1.5 text-sm font-medium transition-colors ${active ? "border-brand bg-brand text-white" : "border-brand-50 text-forest hover:bg-brand-50"}`}>
+                          {v}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="mt-6 flex items-center gap-4">
             <div className="flex items-center rounded-full border border-brand-50">
               <button onClick={() => setQty((q) => Math.max(1, q - 1))} className="p-2.5 text-forest" data-testid="qty-minus"><Minus size={16} /></button>
@@ -48,8 +74,8 @@ export default function ProductDetail() {
             </div>
           </div>
           <div className="mt-6 flex flex-wrap gap-3">
-            <Button onClick={() => { add(p, qty); toast.success(t("cta.addToCart")); }} variant="outline" className="rounded-full border-forest/20 px-7 text-forest hover:bg-brand-50" data-testid="detail-add-cart">{t("cta.addToCart")}</Button>
-            <Button onClick={() => { add(p, qty); navigate("/app/cart"); }} className="rounded-full bg-forest px-7 hover:bg-brand" data-testid="detail-buy-now">{t("cta.buyNow")}</Button>
+            <Button onClick={() => { if (!guard()) return; add(p, qty, variantLabel()); toast.success(t("cta.addToCart")); }} variant="outline" className="rounded-full border-forest/20 px-7 text-forest hover:bg-brand-50" data-testid="detail-add-cart">{t("cta.addToCart")}</Button>
+            <Button onClick={() => { if (!guard()) return; add(p, qty, variantLabel()); navigate("/app/cart"); }} className="rounded-full bg-forest px-7 hover:bg-brand" data-testid="detail-buy-now">{t("cta.buyNow")}</Button>
           </div>
         </div>
       </div>

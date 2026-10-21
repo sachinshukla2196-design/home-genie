@@ -9,6 +9,7 @@ import { useI18n } from "@/context/I18nContext";
 import { useCart } from "@/context/CartContext";
 import { useAuth } from "@/context/AuthContext";
 import { API, apiError } from "@/lib/api";
+import { getSellerRef } from "@/lib/sellerRef";
 
 export default function Checkout() {
   const { t, lang } = useI18n();
@@ -41,8 +42,8 @@ export default function Checkout() {
     e.preventDefault();
     setLoading(true);
     try {
-      const orderItems = items.map((i) => ({ product_id: i.product_id, quantity: i.quantity }));
-      const { data: order } = await API.post("/orders", { items: orderItems, address: addr });
+      const orderItems = items.map((i) => ({ product_id: i.product_id, quantity: i.quantity, variant: i.variant || null }));
+      const { data: order } = await API.post("/orders", { items: orderItems, address: addr, seller_ref: getSellerRef() });
       const { data: checkout } = await API.post("/payments/checkout", { order_id: order.id, origin_url: window.location.origin });
       clear();
       window.location.href = checkout.checkout_url;
@@ -55,8 +56,8 @@ export default function Checkout() {
   const upiPay = async () => {
     setLoading(true);
     try {
-      const orderItems = items.map((i) => ({ product_id: i.product_id, quantity: i.quantity }));
-      const { data: order } = await API.post("/orders", { items: orderItems, address: addr });
+      const orderItems = items.map((i) => ({ product_id: i.product_id, quantity: i.quantity, variant: i.variant || null }));
+      const { data: order } = await API.post("/orders", { items: orderItems, address: addr, seller_ref: getSellerRef() });
       await API.post("/payments/upi-claim", { order_id: order.id });
       clear();
       setShowQr(order);
@@ -75,8 +76,8 @@ export default function Checkout() {
   const razorpayPay = async () => {
     setLoading(true);
     try {
-      const orderItems = items.map((i) => ({ product_id: i.product_id, quantity: i.quantity }));
-      const { data: order } = await API.post("/orders", { items: orderItems, address: addr });
+      const orderItems = items.map((i) => ({ product_id: i.product_id, quantity: i.quantity, variant: i.variant || null }));
+      const { data: order } = await API.post("/orders", { items: orderItems, address: addr, seller_ref: getSellerRef() });
       const { data: rzp } = await API.post("/payments/razorpay/order", { order_id: order.id });
       const ok = await loadRzp();
       if (!ok) { toast.error("Could not load payment gateway."); setLoading(false); return; }

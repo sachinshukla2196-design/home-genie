@@ -37,6 +37,8 @@ import AdminReports from "@/pages/admin/AdminReports";
 import AdminSettings from "@/pages/admin/AdminSettings";
 import AdminAuditLogs from "@/pages/admin/AdminAuditLogs";
 import Legal from "@/pages/Legal";
+import Withdrawals from "@/pages/Withdrawals";
+import AdminWithdrawals from "@/pages/admin/AdminWithdrawals";
 
 function App() {
   return (
@@ -82,6 +84,7 @@ function AppRoutes() {
                   <Route path="orders" element={<Orders />} />
                   <Route path="orders/:id" element={<OrderDetail />} />
                   <Route path="wallet" element={<Wallet />} />
+                  <Route path="withdrawals" element={<Withdrawals />} />
                   <Route path="referral" element={<Referral />} />
                   <Route path="notifications" element={<Notifications />} />
                   <Route path="profile" element={<Profile />} />
@@ -92,6 +95,7 @@ function AppRoutes() {
                   <Route path="users" element={<AdminUsers />} />
                   <Route path="products" element={<AdminProducts />} />
                   <Route path="orders" element={<AdminOrders />} />
+                  <Route path="withdrawals" element={<AdminWithdrawals />} />
                   <Route path="reports" element={<AdminReports />} />
                   <Route path="settings" element={<AdminSettings />} />
                   <Route path="audit" element={<AdminAuditLogs />} />

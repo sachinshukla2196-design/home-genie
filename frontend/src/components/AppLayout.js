@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, Outlet } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  LayoutDashboard, ShoppingBag, Package, Coins, Share2,
+  LayoutDashboard, ShoppingBag, Package, Coins, Share2, Banknote,
   Bell, User, LogOut, Menu, ChevronLeft, MoreHorizontal, ShoppingCart,
 } from "lucide-react";
 import { Logo } from "@/components/Logo";
@@ -20,6 +20,7 @@ const NAV = [
   { to: "/app/products", icon: ShoppingBag, key: "nav.products" },
   { to: "/app/orders", icon: Package, key: "nav.orders" },
   { to: "/app/wallet", icon: Coins, key: "nav.wallet" },
+  { to: "/app/withdrawals", icon: Banknote, key: "nav.withdrawals" },
   { to: "/app/referral", icon: Share2, key: "nav.referral" },
   { to: "/app/notifications", icon: Bell, key: "nav.notifications" },
   { to: "/app/profile", icon: User, key: "nav.profile" },
@@ -30,6 +31,7 @@ const BOTTOM = [
   { to: "/app/products", icon: ShoppingBag, key: "nav.products" },
   { to: "/app/referral", icon: Share2, key: "nav.referral" },
   { to: "/app/wallet", icon: Coins, key: "nav.wallet" },
+  { to: "/app/withdrawals", icon: Banknote, key: "nav.withdrawals" },
 ];
 
 export function AppLayout() {

@@ -54,6 +54,7 @@ async def categories():
 class OrderItemIn(BaseModel):
     product_id: str
     quantity: int = Field(ge=1, le=50)
+    variant: Optional[str] = None      # e.g. "Size: Free Size / Shade: Maroon"
 
 
 class AddressIn(BaseModel):
@@ -68,6 +69,7 @@ class AddressIn(BaseModel):
 class CreateOrder(BaseModel):
     items: List[OrderItemIn]
     address: AddressIn
+    seller_ref: Optional[str] = None   # HomeGenie code from a share link (?ref=)
 
 
 @router.post("/orders")
@@ -79,7 +81,6 @@ async def create_order(body: CreateOrder, request: Request, user: dict = Depends
 
     line_items = []
     subtotal = 0.0
-    is_activation_order = False
     product_ids = [it.product_id for it in body.items]
     products = {p["id"]: p for p in await db.products.find(
         {"id": {"$in": product_ids}}, {"_id": 0}).to_list(len(product_ids) or 1)}
@@ -90,13 +91,20 @@ async def create_order(body: CreateOrder, request: Request, user: dict = Depends
         price = float(p["selling_price"])
         total = price * it.quantity
         subtotal += total
-        if p.get("is_activation_product"):
-            is_activation_order = True
         line_items.append({
             "product_id": p["id"], "sku": p["sku"], "name": p["name"], "name_hi": p.get("name_hi", ""),
             "image": (p.get("images") or [None])[0], "price": price, "quantity": it.quantity,
+            "variant": (it.variant or "").strip(),
             "total": round(total, 2),
         })
+
+    # Attribute the sale to the HomeGenie whose share link was used (if any).
+    seller_user_id, seller_did = None, None
+    ref = (body.seller_ref or "").strip().upper()
+    if ref:
+        seller = await db.users.find_one({"distributor_id": ref, "status": "green"}, {"_id": 0})
+        if seller and seller["id"] != user["id"]:
+            seller_user_id, seller_did = seller["id"], seller.get("distributor_id")
 
     gst_amount = round(subtotal * gst_percent / 100.0, 2)
     grand_total = round(subtotal + gst_amount, 2)
@@ -114,7 +122,8 @@ async def create_order(body: CreateOrder, request: Request, user: dict = Depends
         "total": grand_total,
         "currency": settings.get("currency", "INR"),
         "address": body.address.model_dump(),
-        "is_activation_order": is_activation_order,
+        "seller_user_id": seller_user_id,
+        "seller_distributor_id": seller_did,
         "status": "payment_pending",  # pending, payment_pending, paid, processing, packed, shipped, delivered, cancelled, refunded
         "payment_status": "pending",
         "invoice_number": None,
@@ -290,7 +299,7 @@ async def razorpay_webhook(request: Request):
     return {"status": "ok"}
 
 
-ORDER_INCOME_TYPES = ["PURCHASE_LEVEL_COMMISSION", "REFERRAL_COMMISSION", "PERSONAL_REPURCHASE_INCOME", "TEAM_PURCHASE_INCOME"]
+HG_COMMISSION_TYPES = ["COMMISSION_DIRECT", "COMMISSION_REFERRAL", "COMMISSION_TEAM"]
 
 
 async def reverse_order_financials(order_id: str, actor: dict = None, request: Request = None,
@@ -327,9 +336,10 @@ async def reverse_order_financials(order_id: str, actor: dict = None, request: R
         return {"reversed": 0, "refund_amount": 0.0, "conflict": True}
     fraction = amt / total if total else 1.0
     n = 0
+    # Clawback HOME GENIES commissions tied to this order, in the refunded proportion.
     comms = await db.commissions.find(
-        {"reference_order_id": order_id, "status": {"$in": ["CREDITED", "PARTIALLY_REVERSED"]},
-         "type": {"$in": ORDER_INCOME_TYPES}}).to_list(1000)
+        {"order_id": order_id, "status": {"$in": ["PENDING", "RELEASED", "PARTIALLY_REVERSED"]},
+         "type": {"$in": HG_COMMISSION_TYPES}}).to_list(1000)
     for c in comms:
         credited = float(c["amount"]); done = float(c.get("reversed_amount") or 0)
         claw = round(credited * fraction, 2) if fraction < 1 else round(credited - done, 2)
@@ -337,31 +347,33 @@ async def reverse_order_financials(order_id: str, actor: dict = None, request: R
         if claw <= 0:
             continue
         new_done = round(done + claw, 2)
+        was_pending = c.get("status") == "PENDING"
         await db.commissions.update_one({"id": c["id"]}, {"$set": {
             "reversed_amount": new_done, "reversed_at": now_iso(),
             "status": "REVERSED" if new_done >= credited - 0.005 else "PARTIALLY_REVERSED"}})
-        await add_wallet_transaction(
-            c["sponsor_id"], "COMMISSION_CLAWBACK", claw, "CLAWBACK",
-            reference=event_id, direction="debit",
-            description=f"Clawback of {c.get('type')} on refund of order {order.get('order_number')} (₹{amt:g} refunded)")
+        if was_pending:
+            # never released: simply remove it from the pending pool
+            await db.wallets.update_one({"user_id": c["user_id"]},
+                                        {"$inc": {"pending_balance": -claw},
+                                         "$set": {"updated_at": now_iso()}})
+            await add_wallet_transaction(
+                c["user_id"], "COMMISSION_CLAWBACK", claw, "INFO",
+                reference=event_id, direction="debit",
+                description=f"Pending commission cancelled - refund of order {order.get('order_number')}")
+        else:
+            await add_wallet_transaction(
+                c["user_id"], "COMMISSION_CLAWBACK", claw, "CLAWBACK",
+                reference=event_id, direction="debit",
+                description=f"Clawback of {c.get('type')} on refund of order {order.get('order_number')}")
         n += 1
     await db.order_refunds.update_one({"id": event_id}, {"$set": {"status": "completed", "clawbacks": n}})
-    # If the activation order is FULLY refunded, revert the account to RED.
-    if order and order.get("is_activation_order") and round(already + amt, 2) >= total:
-        buyer = await db.users.find_one({"id": order["user_id"]})
-        if buyer and buyer.get("activation_order_id") == order_id:
-            await db.users.update_one({"id": buyer["id"]},
-                {"$set": {"status": "red", "activation_status": "inactive",
-                          "activation_order_id": None, "updated_at": now_iso()}})
-            await db.activation_records.update_many({"order_id": order_id},
-                {"$set": {"status": "reversed", "updated_at": now_iso()}})
     await log_audit(actor, "order_financials_reversed", "order", order_id,
                     new_value={"reversed_entries": n, "refund_amount": amt, "reference": reference, "reason": reason}, request=request)
     return {"reversed": n, "refund_amount": amt, "refund_event": event_id}
 
 
 async def _process_paid_order(session_id: str, request: Request = None):
-    """Idempotent: mark order paid, generate invoice, run GREEN activation + referral commission."""
+    """Idempotent: mark order paid, generate the invoice and credit pending sale commissions."""
     tx = await db.payment_transactions.find_one({"session_id": session_id})
     if not tx:
         return
@@ -393,10 +405,10 @@ async def _process_paid_order(session_id: str, request: Request = None):
                               "भुगतान सफल",
                               f"ऑर्डर {order['order_number']} का भुगतान प्राप्त हुआ। इनवॉइस {invoice_number} बन गया।")
 
-    # ---- HOME GENIES commission engine: NOT CONFIGURED ----
-    # No sales commission, referral commission or team-sales commission is calculated
-    # or credited on a paid order. The approved HOME GENIES rules and eligibility
-    # conditions must be implemented before any earning is recorded.
+    # ---- HOME GENIES commission engine (30% direct / 10% referral / 5% team) ----
+    # Credited as PENDING points; released after the return window by the points cron.
+    from commission import distribute_sale_commissions
+    await distribute_sale_commissions(order, user, request)
 
 
 # Positional TEAM SALES commission matrix (FINAL, locked). Position 1 = buyer's IMMEDIATE sponsor.
@@ -454,31 +466,7 @@ async def upi_claim(body: UpiClaim, request: Request, user: dict = Depends(get_c
         "upi_reference": body.reference, "updated_at": now_iso()}})
     await log_audit(user, "upi_payment_claimed", "order", order["id"],
                     new_value={"reference": body.reference}, request=request)
-    return {"message": "Payment submitted. Admin will verify and activate shortly.", "order_id": order["id"]}
-
-
-async def _create_activation_order(user: dict) -> dict:
-    settings = await get_settings()
-    amt = float(settings.get("activation_amount", 1500.0))
-    prod = await db.products.find_one({"is_activation_product": True}, {"_id": 0})
-    items = []
-    if prod:
-        items = [{"product_id": prod["id"], "sku": prod.get("sku"), "name": prod.get("name"),
-                  "name_hi": prod.get("name_hi", ""), "image": (prod.get("images") or [None])[0],
-                  "price": amt, "quantity": 1, "total": amt}]
-    order = {
-        "id": new_id(), "order_number": await next_sequence("order", "ORD", 6),
-        "user_id": user["id"], "distributor_id": user.get("distributor_id"),
-        "items": items, "subtotal": amt, "gst_amount": 0.0, "total": amt, "currency": "INR",
-        "payment_status": "pending", "status": "payment_pending", "is_activation_order": True,
-        "payment_method": "admin_manual",
-        "address": {"full_name": user.get("full_name"), "mobile": user.get("mobile", ""),
-                    "line1": user.get("address", ""), "city": user.get("city", ""),
-                    "state": user.get("state", ""), "pincode": user.get("pincode", "")},
-        "created_at": now_iso(), "updated_at": now_iso(),
-    }
-    await db.orders.insert_one(dict(order))
-    return order
+    return {"message": "Payment submitted. Our team will verify it shortly.", "order_id": order["id"]}
 
 
 class ManualPayBody(BaseModel):
@@ -502,7 +490,7 @@ async def manual_payment_by_distributor(body: ManualPayBody, request: Request, a
     order = await db.orders.find_one({"user_id": user["id"], "payment_status": {"$ne": "paid"}},
                                      sort=[("created_at", -1)])
     if not order:
-        order = await _create_activation_order(user)
+        raise HTTPException(status_code=404, detail="This member has no pending order to mark as paid.")
     if order.get("payment_status") == "paid":
         return {"message": "This member's latest order is already paid.", "order_id": order["id"]}
     prev = order.get("payment_status")
@@ -547,6 +535,6 @@ async def upi_confirm(order_id: str, body: UpiConfirm, request: Request, admin: 
             "id": new_id(), "session_id": sid, "order_id": order_id, "user_id": order["user_id"],
             "amount": order["total"], "currency": order.get("currency", "INR"), "reference": ref,
             "status": "manual", "payment_status": "paid", "created_at": now_iso(), "updated_at": now_iso()})
-    await _process_paid_order(sid, request)  # reuses verified activation + commission (idempotent)
+    await _process_paid_order(sid, request)  # idempotent: invoice + pending commissions
     await log_audit(admin, "upi_payment_confirmed", "order", order_id, new_value={"reference": ref}, request=request)
     return {"message": "Payment confirmed and account activated.", "reference": ref}

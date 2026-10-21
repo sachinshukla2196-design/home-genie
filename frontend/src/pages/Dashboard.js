@@ -32,6 +32,7 @@ export default function Dashboard() {
     { key: "qa.share", icon: Share2, to: "/app/referral" },
     { key: "qa.orders", icon: Package, to: "/app/orders" },
     { key: "qa.wallet", icon: Coins, to: "/app/wallet" },
+    { key: "nav.withdrawals", icon: Coins, to: "/app/withdrawals" },
     { key: "qa.profile", icon: User, to: "/app/profile" },
     { key: "qa.support", icon: LifeBuoy, to: "/legal/support" },
   ];
@@ -83,18 +84,38 @@ export default function Dashboard() {
         <StatCard testid="stat-points-released" icon={TrendingUp} accent="ink" label={t("wallet.withdrawn")} value={pts(d.wallet.total_withdrawn)} index={3} />
       </div>
 
-      {/* Commission & team sales — explicitly pending */}
-      <div className="rounded-2xl border border-dashed border-brand-50 bg-brand-50/30 p-5" data-testid="commission-pending-card">
-        <div className="flex items-start gap-3">
-          <Info size={18} className="mt-0.5 shrink-0 text-brand" />
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h3 className="font-display text-base font-semibold text-ink">{t("dash.commissionTitle")}</h3>
-              <span className="rounded-full bg-gold-light px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-ink" data-testid="commission-pending-badge">
-                {t("common.pendingConfig")}
-              </span>
+      {/* Commission — live rules */}
+      <div className="rounded-2xl border border-brand-50 bg-white p-5 shadow-card" data-testid="commission-card">
+        <h3 className="font-display text-base font-semibold text-ink">{t("plan.title")}</h3>
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          {[
+            { k: "plan.direct", v: d.plan?.direct_pct, id: "direct" },
+            { k: "plan.referral", v: d.plan?.referral_pct, id: "referral" },
+            { k: "plan.team", v: d.plan?.team_pct, id: "team" },
+          ].map((x) => (
+            <div key={x.k} className="rounded-xl bg-brand-50/50 p-4" data-testid={`plan-${x.id}`}>
+              <div className="font-display text-2xl font-semibold text-brand">{Number(x.v || 0)}%</div>
+              <div className="mt-1 text-sm text-muted2">{t(x.k)}</div>
             </div>
-            <p className="mt-1.5 text-sm text-muted2">{t("dash.commissionPending")}</p>
+          ))}
+        </div>
+        <ul className="mt-4 space-y-1.5 text-xs text-muted2">
+          <li>· {t("plan.base")}</li>
+          <li>· {t("plan.release")} ({d.plan?.return_window_days} {t("common.days")})</li>
+          <li>· {t("plan.rules")}</li>
+        </ul>
+        <div className="mt-4 grid gap-3 sm:grid-cols-3">
+          <div className="rounded-xl border border-brand-50 p-3" data-testid="my-sales">
+            <div className="text-xs uppercase tracking-wide text-muted2">{t("dash.mySales")}</div>
+            <div className="mt-1 font-display text-lg font-semibold text-forest">{d.stats.sales_count ?? 0}</div>
+          </div>
+          <div className="rounded-xl border border-brand-50 p-3" data-testid="pending-commission">
+            <div className="text-xs uppercase tracking-wide text-muted2">{t("dash.pendingCommission")}</div>
+            <div className="mt-1 font-display text-lg font-semibold text-gold">{pts(d.stats.pending_commission)}</div>
+          </div>
+          <div className="rounded-xl border border-brand-50 p-3" data-testid="team-commission">
+            <div className="text-xs uppercase tracking-wide text-muted2">{t("dash.teamCommission")}</div>
+            <div className="mt-1 font-display text-lg font-semibold text-forest">{pts(d.stats.team_commission)}</div>
           </div>
         </div>
       </div>
@@ -102,7 +123,7 @@ export default function Dashboard() {
       {/* Points note */}
       <div className="rounded-2xl border border-brand-50 bg-white p-5 shadow-card" data-testid="points-card">
         <h3 className="font-display text-base font-semibold text-ink">{t("dash.pointsTitle")}</h3>
-        <p className="mt-1.5 text-sm text-muted2">{t("dash.pointsNote")}</p>
+        <p className="mt-1.5 text-sm text-muted2">{t("withdraw.note")}</p>
         <p className="mt-2 text-xs font-medium text-brand-700">{t("wallet.rate")}</p>
       </div>
 

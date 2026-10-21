@@ -26,7 +26,7 @@ export default function Wallet() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="font-display text-2xl font-semibold text-ink">{t("wallet.title")}</h1>
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-gold-light px-3 py-1.5 text-xs font-semibold text-ink" data-testid="wallet-withdraw-pending"><Banknote size={14} /> {t("wallet.withdraw")} · {t("common.pendingConfig")}</span>
+        <Button onClick={() => navigate("/app/withdrawals")} className="btn-grad rounded-full" data-testid="wallet-withdraw-btn"><Banknote size={16} className="mr-1.5" /> {t("wallet.withdraw")}</Button>
       </div>
 
       {/* Premium wallet card */}
