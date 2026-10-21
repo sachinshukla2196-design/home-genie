@@ -234,10 +234,10 @@ async def register(body: RegisterBody, request: Request):
                                   "नया रेफ़रल जुड़ा",
                                   f"{user['full_name']} ({distributor_id}) ने आपके रेफ़रल से रजिस्टर किया।")
 
-    await create_notification(uid, "welcome", "Welcome to Anjali Herbal Life",
-                              f"Your Distributor ID is {distributor_id}. Activate your account to unlock income.",
-                              "अंजलि हर्बल लाइफ में आपका स्वागत है",
-                              f"आपकी डिस्ट्रीब्यूटर आईडी {distributor_id} है। आय अनलॉक करने के लिए खाता सक्रिय करें।")
+    await create_notification(uid, "welcome", "Welcome to HOME GENIES",
+                              f"Your Member ID is {distributor_id}.",
+                              "होम जीनीज़ में आपका स्वागत है",
+                              f"आपकी मेंबर आईडी {distributor_id} है।")
     await log_audit(clean_user(user), "register", "user", uid, request=request)
 
     # Best-effort: SMS the new distributor their Account ID (never the password).

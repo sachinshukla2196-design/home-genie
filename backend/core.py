@@ -1,4 +1,4 @@
-"""Shared core: db, auth, helpers for Anjali Herbal Life Ayurveda platform."""
+"""Shared core: db, auth, helpers for the HOME GENIES platform."""
 import os
 import uuid
 import jwt
@@ -15,7 +15,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
-logger = logging.getLogger("anjali")
+logger = logging.getLogger("homegenies")
 
 mongo_url = os.environ["MONGO_URL"]
 client = AsyncIOMotorClient(
@@ -158,7 +158,7 @@ async def next_distributor_id() -> str:
         return_document=True,
     )
     seq = doc["seq"]
-    return f"ANJ{seq:06d}"
+    return f"HG{seq:06d}"
 
 
 async def next_sequence(name: str, prefix: str, width: int = 6) -> str:
@@ -181,10 +181,10 @@ DEFAULT_SETTINGS = {
     "gst_percent": 5.0,
     "currency": "INR",
     "currency_symbol": "₹",
-    "company_name": "Anjali Herbal Life Ayurveda India LLP",
-    "company_email": "support@anjaliherbal.life",
-    "company_phone": "+91 90000 00000",
-    "company_address": "Anjali Herbal Life Ayurveda India LLP, India",
+    "company_name": "HOME GENIES",
+    "company_email": "",
+    "company_phone": "",
+    "company_address": "",
 }
 
 
@@ -292,7 +292,7 @@ async def log_audit(user: Optional[dict], action: str, entity: str, entity_id: s
 # ---------- email (Emergent managed Resend) ----------
 EMAIL_BASE_URL = "https://integrations.emergentagent.com"
 EMAIL_KEY = os.environ.get("EMERGENT_EMAIL_KEY")
-EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "Anjali Herbal Life Ayurveda")
+EMAIL_FROM_NAME = os.environ.get("EMAIL_FROM_NAME", "HOME GENIES")
 
 
 async def send_email(to: str, subject: str, html: str) -> bool:
@@ -318,7 +318,7 @@ def email_shell(title: str, body_html: str) -> str:
   <tr><td align="center">
     <table width="480" cellpadding="0" cellspacing="0" style="background:#ffffff;border:1px solid #EAF5ED;border-radius:16px;overflow:hidden;">
       <tr><td style="background:#0B4D2E;padding:22px 28px;">
-        <span style="color:#F6EFD5;font-size:18px;font-weight:bold;">Anjali <span style="color:#C9A227;">Herbal Life</span></span>
+        <span style="color:#FBF3DA;font-size:18px;font-weight:bold;">HOME <span style="color:#C9A227;">GENIES</span></span>
         <div style="color:rgba(255,255,255,0.6);font-size:10px;letter-spacing:2px;">AYURVEDA INDIA LLP</div>
       </td></tr>
       <tr><td style="padding:32px 28px;">
@@ -326,7 +326,7 @@ def email_shell(title: str, body_html: str) -> str:
         {body_html}
       </td></tr>
       <tr><td style="padding:18px 28px;background:#EAF5ED;color:#66736B;font-size:12px;">
-        © Anjali Herbal Life Ayurveda India LLP
+        © HOME GENIES
       </td></tr>
     </table>
   </td></tr>

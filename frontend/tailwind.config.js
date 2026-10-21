@@ -18,20 +18,24 @@ module.exports = {
         sm: 'calc(var(--radius) - 4px)'
       },
       colors: {
-        forest: '#0B4D2E',
+        forest: '#2E1065',
         brand: {
-          DEFAULT: '#176B43',
-          50: '#EAF5ED',
-          100: '#EAF5ED',
-          600: '#176B43',
-          700: '#0B4D2E',
+          DEFAULT: '#6D28D9',
+          50: '#F5F0FF',
+          100: '#EDE4FF',
+          600: '#6D28D9',
+          700: '#2E1065',
         },
         gold: {
           DEFAULT: '#C9A227',
-          light: '#F6EFD5',
+          light: '#FBF3DA',
         },
-        ink: '#17201B',
-        muted2: '#66736B',
+        magenta: {
+          DEFAULT: '#C026A3',
+          light: '#FBE8F6',
+        },
+        ink: '#1B1024',
+        muted2: '#6B6475',
         danger: '#C62828',
         background: 'hsl(var(--background))',
         foreground: 'hsl(var(--foreground))',

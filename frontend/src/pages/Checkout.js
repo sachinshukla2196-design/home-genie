@@ -82,7 +82,7 @@ export default function Checkout() {
       if (!ok) { toast.error("Could not load payment gateway."); setLoading(false); return; }
       const rz = new window.Razorpay({
         key: rzp.key_id, amount: rzp.amount, currency: rzp.currency,
-        name: "Anjali Herbal Life", description: `Order ${rzp.order_number}`,
+        name: "HOME GENIES", description: `Order ${rzp.order_number}`,
         order_id: rzp.razorpay_order_id,
         prefill: { name: rzp.name, email: rzp.email, contact: rzp.contact },
         theme: { color: "#0B4D2E" },
@@ -108,7 +108,9 @@ export default function Checkout() {
       <div className="rounded-2xl border border-brand-50 bg-white p-6 shadow-card">
         <h1 className="font-display text-xl font-semibold text-ink">Scan & Pay via PhonePe / UPI</h1>
         <p className="mt-1 text-sm text-muted2">Pay <b className="text-forest">{money(showQr.total)}</b> for order <b>{showQr.order_number}</b></p>
-        <img src="/phonepe-qr.webp" alt="PhonePe QR" className="mx-auto mt-4 w-64 rounded-xl border border-brand-50" data-testid="phonepe-qr" />
+        <div className="mx-auto mt-4 w-64 rounded-xl border border-brand-50 bg-brand-50/40 px-4 py-6 text-sm text-muted2" data-testid="upi-not-configured">
+          UPI payment is not configured yet. Your order is saved — our team will contact you to arrange payment.
+        </div>
         <p className="mt-3 rounded-lg bg-brand-50 px-4 py-2.5 text-xs text-forest">After paying, our admin will verify the payment and activate your account. You'll be notified — no need to pay again.</p>
         <Button onClick={() => navigate("/app/orders")} className="mt-5 w-full rounded-full btn-grad" data-testid="upi-done-btn">I've paid — View my orders</Button>
       </div>

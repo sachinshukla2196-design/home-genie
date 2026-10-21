@@ -12,7 +12,7 @@ from datetime import datetime, timezone, timedelta
 from fastapi import HTTPException
 from core import db, now_iso
 
-logger = logging.getLogger("anjali")
+logger = logging.getLogger("homegenies")
 
 OTP_TTL = int(os.environ.get("OTP_TTL_SECONDS", "300"))
 OTP_MAX_ATTEMPTS = int(os.environ.get("OTP_MAX_ATTEMPTS", "5"))
@@ -54,7 +54,7 @@ async def _send_sms_otp(mobile: str, code: str) -> None:
     data = {
         "To": _normalize_mobile(mobile),
         "From": TWILIO_FROM_NUMBER,
-        "Body": f"Welcome to Anjali Herbal Life - a world of possibilities! Your verification code is {code}. It expires in 5 minutes. Do not share it with anyone.",
+        "Body": f"Welcome to HOME GENIES! Your verification code is {code}. It expires in 5 minutes. Do not share it with anyone.",
     }
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
@@ -75,7 +75,7 @@ async def send_account_id_sms(mobile: str, distributor_id: str) -> bool:
     data = {
         "To": _normalize_mobile(mobile),
         "From": TWILIO_FROM_NUMBER,
-        "Body": f"Welcome to Anjali Herbal Life - a world of possibilities! Your Distributor ID is {distributor_id}. Keep it safe to log in.",
+        "Body": f"Welcome to HOME GENIES! Your Member ID is {distributor_id}. Keep it safe to log in.",
     }
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:

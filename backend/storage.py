@@ -8,13 +8,13 @@ from fastapi import APIRouter, HTTPException, Request, Depends, UploadFile, File
 from fastapi.responses import Response
 from core import db, now_iso, new_id, get_current_user, require_admin
 
-logger = logging.getLogger("anjali")
+logger = logging.getLogger("homegenies")
 router = APIRouter(prefix="/api", tags=["files"])
 
 STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
 STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
 EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
-APP_NAME = "anjali-herbal-life"
+APP_NAME = "home-genies"
 MAX_BYTES = 5 * 1024 * 1024
 ALLOWED = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
 _storage_key = None

@@ -1,4 +1,4 @@
-"""Anjali Herbal Life Ayurveda - Distributor & E-Commerce Platform (Phase 1)."""
+"""HOME GENIES - Marketplace Platform (Phase 1)."""
 import os
 import asyncio
 import logging
@@ -17,12 +17,12 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("anjali")
 
-app = FastAPI(title="Anjali Herbal Life Ayurveda API")
+app = FastAPI(title="HOME GENIES API")
 
 
 @app.get("/api/")
 async def root():
-    return {"message": "Anjali Herbal Life Ayurveda API"}
+    return {"message": "HOME GENIES API"}
 
 
 @app.get("/api/health")
@@ -70,16 +70,9 @@ app.add_middleware(
 )
 
 
-PRODUCT_SEED = [
-    {"sku": "ANJ-STARTER", "name": "Distributor Starter Kit", "name_hi": "डिस्ट्रीब्यूटर स्टार्टर किट",
-     "description": "Official activation kit with a curated set of Ayurvedic wellness products. Qualifying purchase to activate your distributor account.",
-     "description_hi": "आधिकारिक सक्रियण किट, चुनिंदा आयुर्वेदिक वेलनेस उत्पादों के साथ। डिस्ट्रीब्यूटर खाता सक्रिय करने हेतु योग्य खरीद।",
-     "images": ["https://customer-assets-jt897jd0.emergentagent.net/job_anjali-ayurveda-mvp/artifacts/0fcbr7nv_Screenshot_2026_1003_024227.jpg"],
-     "mrp": 1800.0, "selling_price": 1500.0, "gst_percent": 5.0, "stock": 999,
-     "category": "Starter Kit", "is_active": True, "is_activation_product": True},
-]
+PRODUCT_SEED = []
 
-CATEGORY_SEED = ["Starter Kit", "Immunity", "Wellness", "Personal Care"]
+CATEGORY_SEED = ["Sarees", "Fashion Products", "Makeup, Beauty & Skincare", "Household Essentials"]
 
 
 @app.on_event("startup")
@@ -163,7 +156,7 @@ async def _init_db():
     existing = await db.users.find_one({"email": admin_email})
     if not existing:
         await db.users.insert_one({
-            "id": new_id(), "distributor_id": "ADMIN001", "full_name": "Platform Administrator",
+            "id": new_id(), "distributor_id": "HGADMIN001", "full_name": "Platform Administrator",
             "email": admin_email, "username": admin_username, "mobile": "9999999999",
             "password_hash": hash_password(admin_password),
             "role": "super_admin", "status": "green", "mobile_verified": True, "email_verified": True,

@@ -1,9 +1,9 @@
 // Bilingual dictionary (English + Hindi). Keys are dot-namespaced.
 export const translations = {
   en: {
-    "brand.name": "Anjali Herbal Life",
-    "brand.full": "Anjali Herbal Life Ayurveda India LLP",
-    "brand.tagline": "Premium Ayurveda. Modern Business.",
+    "brand.name": "HOME GENIES",
+    "brand.full": "HOME GENIES",
+    "brand.tagline": "Establish Yourself.",
 
     "nav.home": "Home", "nav.dashboard": "Dashboard", "nav.products": "Products",
     "nav.orders": "Orders", "nav.wallet": "Wallet", "nav.income": "Income",
@@ -21,7 +21,7 @@ export const translations = {
     "cta.share": "Share", "cta.copy": "Copy", "cta.export": "Export CSV", "cta.back": "Back",
 
     "landing.heroTitle": "Build a wellness business rooted in Ayurveda",
-    "landing.heroSub": "Join Anjali Herbal Life as a distributor. Premium Ayurvedic products, transparent referral income, and a modern platform to grow.",
+    "landing.heroSub": "Shop sarees, fashion, beauty and household essentials — and build your own business with HOME GENIES.",
     "landing.trust1": "100% Ayurvedic", "landing.trust2": "Secure Payments", "landing.trust3": "Transparent Income",
     "landing.productsTitle": "Our Wellness Range", "landing.productsSub": "Authentic Ayurvedic products, crafted with heritage recipes.",
     "landing.oppTitle": "The Distributor Opportunity", "landing.oppSub": "Activate once, earn on every referral you empower.",
@@ -31,7 +31,7 @@ export const translations = {
     "landing.ctaTitle": "Ready to begin your Ayurveda journey?",
 
     "auth.welcomeBack": "Welcome back", "auth.loginSub": "Log in to your distributor account",
-    "auth.createAccount": "Create your account", "auth.registerSub": "Join Anjali Herbal Life in a few steps",
+    "auth.createAccount": "Create your account", "auth.registerSub": "Join HOME GENIES in a few steps",
     "auth.fullName": "Full Name", "auth.email": "Email", "auth.mobile": "Mobile Number",
     "auth.password": "Password", "auth.confirmPassword": "Confirm Password",
     "auth.sponsorId": "Sponsor / Referral ID", "auth.sponsorRequired": "Enter the referral ID of the person who invited you. This is required.", "auth.aadhaar": "Aadhaar Number", "auth.address": "Address",
@@ -102,9 +102,9 @@ export const translations = {
     "common.all": "All", "common.search": "Search",
   },
   hi: {
-    "brand.name": "अंजलि हर्बल लाइफ",
-    "brand.full": "अंजलि हर्बल लाइफ आयुर्वेद इंडिया एलएलपी",
-    "brand.tagline": "प्रीमियम आयुर्वेद। आधुनिक व्यापार।",
+    "brand.name": "होम जीनीज़",
+    "brand.full": "होम जीनीज़",
+    "brand.tagline": "स्वयं को स्थापित करें।",
 
     "nav.home": "होम", "nav.dashboard": "डैशबोर्ड", "nav.products": "उत्पाद",
     "nav.orders": "ऑर्डर", "nav.wallet": "वॉलेट", "nav.income": "आय",
@@ -122,7 +122,7 @@ export const translations = {
     "cta.share": "शेयर करें", "cta.copy": "कॉपी करें", "cta.export": "CSV निर्यात", "cta.back": "वापस",
 
     "landing.heroTitle": "आयुर्वेद पर आधारित वेलनेस व्यापार बनाएं",
-    "landing.heroSub": "अंजलि हर्बल लाइफ में डिस्ट्रीब्यूटर के रूप में जुड़ें। प्रीमियम आयुर्वेदिक उत्पाद, पारदर्शी रेफ़रल आय और बढ़ने का आधुनिक मंच।",
+    "landing.heroSub": "साड़ी, फ़ैशन, ब्यूटी और घरेलू ज़रूरतें खरीदें — और होम जीनीज़ के साथ अपना व्यवसाय बनाएं।",
     "landing.trust1": "100% आयुर्वेदिक", "landing.trust2": "सुरक्षित भुगतान", "landing.trust3": "पारदर्शी आय",
     "landing.productsTitle": "हमारी वेलनेस रेंज", "landing.productsSub": "प्रामाणिक आयुर्वेदिक उत्पाद, पारंपरिक व्यंजनों से बने।",
     "landing.oppTitle": "डिस्ट्रीब्यूटर अवसर", "landing.oppSub": "एक बार सक्रिय करें, हर रेफ़रल पर कमाएँ।",
@@ -132,7 +132,7 @@ export const translations = {
     "landing.ctaTitle": "अपनी आयुर्वेद यात्रा शुरू करने के लिए तैयार हैं?",
 
     "auth.welcomeBack": "वापसी पर स्वागत है", "auth.loginSub": "अपने डिस्ट्रीब्यूटर खाते में लॉगिन करें",
-    "auth.createAccount": "अपना खाता बनाएं", "auth.registerSub": "कुछ ही चरणों में अंजलि हर्बल लाइफ से जुड़ें",
+    "auth.createAccount": "अपना खाता बनाएं", "auth.registerSub": "कुछ ही चरणों में होम जीनीज़ से जुड़ें",
     "auth.fullName": "पूरा नाम", "auth.email": "ईमेल", "auth.mobile": "मोबाइल नंबर",
     "auth.password": "पासवर्ड", "auth.confirmPassword": "पासवर्ड पुष्टि करें",
     "auth.sponsorId": "स्पॉन्सर / रेफ़रल आईडी", "auth.sponsorRequired": "जिसने आपको आमंत्रित किया है उसकी रेफ़रल आईडी दर्ज करें। यह अनिवार्य है।", "auth.aadhaar": "आधार नंबर", "auth.address": "पता",
