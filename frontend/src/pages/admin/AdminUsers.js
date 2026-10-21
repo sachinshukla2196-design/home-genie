@@ -139,7 +139,7 @@ export default function AdminUsers() {
           <div className="text-sm text-ink">
             New password for <b>{pwResult.full_name}</b> ({pwResult.distributor_id}):
             <button onClick={() => copy(pwResult.password)} className="ml-2 inline-flex items-center gap-1.5 rounded-lg bg-white px-2.5 py-1 font-mono font-semibold text-forest shadow-sm hover:shadow" data-testid="pw-reset-value">{pwResult.password} <Copy size={13} /></button>
-            <span className="ml-2 text-xs text-muted2">Share this with the distributor. They can log in and change it.</span>
+            <span className="ml-2 text-xs text-muted2">Share this with the HomeGenie. She can log in and change it.</span>
           </div>
           <button onClick={() => setPwResult(null)} className="text-muted2 hover:text-ink" data-testid="pw-reset-dismiss"><X size={18} /></button>
         </div>
@@ -149,7 +149,7 @@ export default function AdminUsers() {
       {pwReqs.length > 0 && (
         <div className="rounded-2xl border border-gold/40 bg-gold-light/30 p-6 shadow-card" data-testid="password-reset-requests-card">
           <h3 className="font-display text-lg font-medium text-ink">Password Reset Requests</h3>
-          <p className="text-xs text-muted2">Distributors who forgot their password. Reset it and share the new password with them (no OTP/email).</p>
+          <p className="text-xs text-muted2">HomeGenies who forgot their password. Reset it and share the new password with her (no OTP/email).</p>
           <div className="mt-4 space-y-2">
             {pwReqs.map((r) => (
               <div key={r.id} className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-brand-50 bg-white p-3" data-testid={`pw-req-${r.distributor_id}`}>
@@ -167,7 +167,7 @@ export default function AdminUsers() {
       {/* Registration requests */}
       <div className="rounded-2xl border border-brand-50 bg-white p-6 shadow-card" data-testid="registration-requests-card">
         <h3 className="font-display text-lg font-medium text-ink">Registration Requests</h3>
-        <p className="text-xs text-muted2">Approve to generate a Distributor ID (RED, active). No OTP — verify the applicant manually.</p>
+        <p className="text-xs text-muted2">Approve to generate a HomeGenie ID. The selling role is enabled on approval — verify the applicant manually.</p>
         <div className="mt-4 overflow-x-auto">
           <table className="w-full text-sm">
             <thead><tr className="border-b border-brand-50 text-left text-muted2"><th className="p-3">Name</th><th className="p-3">Mobile</th><th className="p-3">Email</th><th className="p-3">Submitted</th><th className="p-3">Status</th><th className="p-3">Action</th></tr></thead>
@@ -200,7 +200,7 @@ export default function AdminUsers() {
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-50 text-forest"><Ticket size={20} /></div>
             <div>
               <h3 className="font-display text-lg font-medium text-ink">Referral Codes</h3>
-              <p className="text-xs text-muted2">Generate a code and share it to onboard new distributors (referral is mandatory at signup).</p>
+              <p className="text-xs text-muted2">Generate a code and share it to onboard new HomeGenies.</p>
             </div>
           </div>
           <Button onClick={generate} disabled={genLoading} className="rounded-full bg-forest hover:bg-brand" data-testid="generate-referral-code-btn">

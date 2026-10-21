@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 from core import (db, now_iso, new_id, require_admin, get_settings,
                   add_wallet_transaction, create_notification, log_audit,
-                  clean_user, mask_aadhaar, build_referral_tree)
+                  clean_user, mask_aadhaar)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -25,7 +25,7 @@ async def final_report_pdf(admin: dict = Depends(require_admin)):
     path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "FINAL_APPLICATION_REPORT.pdf")
     if not _os.path.exists(path):
         raise HTTPException(status_code=404, detail="Report not found.")
-    return FileResponse(path, media_type="application/pdf", filename="Anjali_Final_Application_Report.pdf")
+    return FileResponse(path, media_type="application/pdf", filename="HOME_GENIES_Report.pdf")
 
 
 def _mask_pan(p: str) -> str:
@@ -343,7 +343,7 @@ class KycEditBody(BaseModel):
 
 @router.put("/kyc/{user_id}/edit")
 async def admin_edit_kyc(user_id: str, body: KycEditBody, request: Request, admin: dict = Depends(require_admin)):
-    """Admin completes/corrects a distributor's KYC details. Saved to the real DB, audited."""
+    """Admin completes/corrects a member's identity details. Saved to the real DB, audited."""
     upd = {k: (v.strip() if isinstance(v, str) else v) for k, v in body.model_dump().items() if v is not None}
     if "pan" in upd:
         upd["pan"] = upd["pan"].upper()
@@ -506,38 +506,6 @@ async def delete_referral_code(code: str, request: Request, admin: dict = Depend
     return {"ok": True}
 
 
-class MasterStatusBody(BaseModel):
-    active: bool
-
-
-@router.get("/master")
-async def master_info(admin: dict = Depends(require_admin)):
-    if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Super admin only.")
-    m = await db.referral_codes.find_one({"code": "MST000001"}, {"_id": 0})
-    direct = await db.referral_relationships.count_documents({"sponsor_distributor_id": "MST000001"})
-    network = await db.users.count_documents({"role": "distributor"})
-    return {"code": "MST000001", "active": bool(m.get("active", True)) if m else False,
-            "direct_referrals": direct, "network_members": network}
-
-
-@router.put("/master/status")
-async def master_status(body: MasterStatusBody, request: Request, admin: dict = Depends(require_admin)):
-    if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Super admin only.")
-    await db.referral_codes.update_one({"code": "MST000001"}, {"$set": {"active": body.active}})
-    await log_audit(admin, "master_status_changed", "master", "MST000001",
-                    new_value={"active": body.active}, request=request)
-    return {"ok": True, "active": body.active}
-
-
-@router.get("/tree")
-async def admin_tree(admin: dict = Depends(require_admin)):
-    if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Super admin only.")
-    return await build_referral_tree("MST000001")
-
-
 class ResetBody(BaseModel):
     confirm: str
 
@@ -574,13 +542,13 @@ async def approve_registration_request(req_id: str, request: Request, admin: dic
     except Exception:
         raise HTTPException(status_code=400, detail="Could not create distributor (possibly a duplicate email or mobile). Please check and try again.")
     await get_or_create_wallet(user["id"])
-    # The ₹100 DIRECT REFERRAL REWARD is paid once, here at approval, to the sponsor below.
+    # HOME GENIES: approval records the sponsor link only. No reward is paid.
     sp_did = r.get("sponsor_id")
     if sp_did:
         rc = await db.referral_codes.find_one({"code": sp_did, "active": True})
         if rc:
             sponsor = await db.users.find_one({"id": rc.get("created_by")}) or await db.users.find_one({"role": "super_admin"})
-            parent_label = rc["code"]  # e.g. MST000001 — the code itself is the tree parent/root
+            parent_label = rc["code"]  # the referral code itself is the recorded parent
         else:
             sponsor = await db.users.find_one({"distributor_id": sp_did})
             parent_label = sp_did
@@ -594,44 +562,12 @@ async def approve_registration_request(req_id: str, request: Request, admin: dic
                     "referred_user_id": user["id"], "referred_distributor_id": did,
                     "commission_paid": False, "created_at": now_iso(),
                 })
-            # ---- ₹100 DIRECT REFERRAL REWARD: paid once, at registration approval,
-            # to the immediate sponsor regardless of the sponsor's own status. Idempotent. ----
-            settings = await get_settings()
-            reward = float(settings.get("referral_commission", 100.0))
-            already = await db.commissions.find_one(
-                {"referred_user_id": user["id"], "type": "REFERRAL_COMMISSION"})
-            if not already:
-                marked = await db.referral_relationships.update_one(
-                    {"referred_user_id": user["id"], "commission_paid": {"$ne": True}},
-                    {"$set": {"commission_paid": True, "commission_paid_at": now_iso()}})
-                if marked.modified_count == 1:
-                    comm = {
-                        "id": new_id(), "sponsor_id": sponsor["id"],
-                        "sponsor_distributor_id": sponsor.get("distributor_id"),
-                        "referred_user_id": user["id"], "referred_distributor_id": did,
-                        "type": "REFERRAL_COMMISSION", "amount": reward,
-                        "reference_order_id": None, "status": "CREDITED",
-                        "description": f"Direct referral reward for registration of {did}",
-                        "created_at": now_iso(),
-                    }
-                    await db.commissions.insert_one(dict(comm))
-                    await add_wallet_transaction(
-                        sponsor["id"], "REFERRAL_COMMISSION", reward, "CREDITED",
-                        reference=user["id"], direction="credit",
-                        description=f"Direct referral reward: {did} registered")
-                    await create_notification(
-                        sponsor["id"], "commission",
-                        f"You earned ₹{int(reward)}",
-                        f"Direct referral reward credited for registration of {did}.",
-                        f"आपने ₹{int(reward)} कमाए",
-                        f"{did} के पंजीकरण पर प्रत्यक्ष रेफ़रल इनाम क्रेडिट हुआ।")
-                    await log_audit(admin, "referral_reward_credited", "commission", comm["id"],
-                                    new_value={"amount": reward, "sponsor": sponsor.get("distributor_id"), "referred": did},
-                                    request=request)
+            # HOME GENIES: no reward is paid for a registration. Recruitment alone
+            # never generates commission — only the sponsor link is recorded above.
     await db.registration_requests.update_one({"id": req_id},
         {"$set": {"status": "approved", "distributor_id": did, "approved_by": admin["id"], "approved_at": now_iso()}})
     await log_audit(admin, "registration_approved", "user", user["id"], new_value={"distributor_id": did}, request=request)
-    return {"message": f"Approved. Distributor ID {did} created (RED, active).", "distributor_id": did}
+    return {"message": f"Approved. HomeGenie ID {did} created.", "distributor_id": did}
 
 
 class RejectReqBody(BaseModel):
@@ -741,180 +677,6 @@ async def admin_wallet_credit(body: WalletCreditBody, request: Request, admin: d
             "available_balance": round(float((w or {}).get("available_balance", 0)), 2)}
 
 
-async def _compute_mfi(month: str):
-    """Monthly Fixed Income snapshot: 1% of eligible product-sales turnover (subtotal excl GST),
-    shared equally among GREEN distributor IDs. Read-only computation."""
-    orders = await db.orders.find({"payment_status": "paid"},
-                                  {"_id": 0, "subtotal": 1, "status": 1, "created_at": 1}).to_list(100000)
-    turnover = 0.0
-    for o in orders:
-        if not str(o.get("created_at", "")).startswith(month):
-            continue
-        if o.get("status") in ("cancelled", "refunded", "reversed"):
-            continue
-        turnover += float(o.get("subtotal") or 0)
-    turnover = round(turnover, 2)
-    from income_config import resolve_rate
-    mfi_rule = await resolve_rate("MONTHLY_FIXED_INCOME", 1.0)
-    pool = round(turnover * mfi_rule["rate"] / 100.0, 2)
-    n = await db.users.count_documents({"role": "distributor", "status": "green"})
-    per = (math.floor((pool / n) * 100) / 100) if n else 0.0
-    distributed = round(per * n, 2)
-    residual = round(pool - distributed, 2)
-    run = await db.monthly_income_runs.find_one({"id": f"MFI:{month}"}, {"_id": 0})
-    return {"month": month, "turnover": turnover, "pool": pool, "eligible_green_ids": n,
-            "per_id_allocation": per, "total_distributed": distributed, "rounding_residual": residual,
-            "status": (run or {}).get("status", "not_processed"), "processed_at": (run or {}).get("processed_at")}
-
-
-@router.get("/monthly-income/preview")
-async def monthly_income_preview(month: str, admin: dict = Depends(require_admin)):
-    if not re.match(r"^\d{4}-\d{2}$", month or ""):
-        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
-    return await _compute_mfi(month)
-
-
-class MonthBody(BaseModel):
-    month: str
-
-
-@router.post("/monthly-income/distribute")
-async def monthly_income_distribute(body: MonthBody, request: Request, admin: dict = Depends(require_admin)):
-    month = (body.month or "").strip()
-    if not re.match(r"^\d{4}-\d{2}$", month):
-        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
-    run = await db.monthly_income_runs.find_one({"id": f"MFI:{month}"})
-    if run and run.get("status") == "completed":
-        raise HTTPException(status_code=409,
-                            detail=f"{month} already processed: ₹{run.get('per_id_allocation')} x {run.get('eligible_green_ids')} IDs.")
-    calc = await _compute_mfi(month)
-    base = {"id": f"MFI:{month}", "month": month, "turnover": calc["turnover"], "pool": calc["pool"],
-            "eligible_green_ids": calc["eligible_green_ids"], "per_id_allocation": calc["per_id_allocation"],
-            "total_distributed": calc["total_distributed"], "rounding_residual": calc["rounding_residual"],
-            "processed_at": now_iso(), "processed_by": admin.get("distributor_id")}
-    if calc["eligible_green_ids"] == 0:
-        base.update({"total_distributed": 0.0, "rounding_residual": calc["pool"], "status": "no_eligible"})
-        await db.monthly_income_runs.update_one({"id": f"MFI:{month}"}, {"$set": base}, upsert=True)
-        return {"message": f"No eligible GREEN IDs for {month}. Pool ₹{calc['pool']} not distributed.", **calc, "status": "no_eligible"}
-    per = calc["per_id_allocation"]
-    greens = await db.users.find({"role": "distributor", "status": "green"}, {"_id": 0, "id": 1}).to_list(100000)
-    newly = 0
-    for g in greens:
-        if await db.wallet_transactions.find_one({"user_id": g["id"], "type": "MONTHLY_FIXED_INCOME", "reference": f"MFI:{month}"}):
-            continue  # resumable: already credited this month
-        await add_wallet_transaction(g["id"], "MONTHLY_FIXED_INCOME", per, "CREDITED",
-                                     reference=f"MFI:{month}", direction="credit",
-                                     description=f"Monthly Fixed Income {month}")
-        await create_notification(g["id"], "income", f"₹{per} Monthly Fixed Income",
-                                  f"Your equal share of the {month} company pool: ₹{per}.",
-                                  f"₹{per} मासिक निश्चित आय", f"{month} कंपनी पूल में आपका बराबर हिस्सा: ₹{per}।")
-        newly += 1
-    base["status"] = "completed"
-    await db.monthly_income_runs.update_one({"id": f"MFI:{month}"}, {"$set": base}, upsert=True)
-    await log_audit(admin, "monthly_income_distributed", "monthly_income", f"MFI:{month}",
-                    new_value={"month": month, "pool": calc["pool"], "per_id": per,
-                               "ids": calc["eligible_green_ids"], "newly_credited": newly}, request=request)
-    return {"message": f"Distributed ₹{calc['total_distributed']} to {calc['eligible_green_ids']} GREEN IDs for {month} (₹{per} each).",
-            **calc, "status": "completed", "newly_credited": newly}
-
-
-@router.get("/club-income/preview")
-async def club_income_preview(month: str, admin: dict = Depends(require_admin)):
-    if not re.match(r"^\d{4}-\d{2}$", month or ""):
-        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
-    from club_income import compute_club_income
-    return await compute_club_income(month)
-
-
-@router.post("/club-income/distribute")
-async def club_income_distribute(body: MonthBody, request: Request, admin: dict = Depends(require_admin)):
-    month = (body.month or "").strip()
-    if not re.match(r"^\d{4}-\d{2}$", month):
-        raise HTTPException(status_code=400, detail="month must be YYYY-MM")
-    from club_income import distribute_club_income
-    res = await distribute_club_income(month, admin.get("distributor_id"))
-    await log_audit(admin, "club_income_distributed", "monthly_income", f"CLUB:{month}",
-                    new_value={"month": month, "qualifiers": res["qualifiers"], "total": res["total_payout"],
-                               "newly_credited": res["newly_credited"]}, request=request)
-    return res
-
-
-@router.get("/income-rules")
-async def income_rules(admin: dict = Depends(require_admin)):
-    """Read-only: locked rates + status for the five additional income categories.
-    These are PENDING_BUSINESS_CLARIFICATION — rates are locked but no payout is active
-    until the business supplies the missing bases/qualification/period definitions."""
-    from income_rules import ADDITIONAL_INCOME_RULES
-    return {"rules": ADDITIONAL_INCOME_RULES,
-            "note": "Monthly Fixed Income (1% pool) is handled separately and is fully active."}
-
-
-class IncomeConfigBody(BaseModel):
-    rate_percent: float
-    enabled: bool = True
-    effective_at: Optional[str] = None
-    reason: str = ""
-
-
-@router.get("/income-config")
-async def income_config_list(admin: dict = Depends(require_admin)):
-    from income_config import INCOME_CATEGORIES, resolve_rate
-    out = []
-    for c in INCOME_CATEGORIES:
-        latest = await db.income_rule_configs.find_one(
-            {"category": c["key"], "status": "published"}, sort=[("version", -1)], projection={"_id": 0})
-        applied = await resolve_rate(c["key"], c["default_rate"])
-        out.append({**c, "applied_rate": applied["rate"], "applied_version": applied["version"],
-                    "applied_enabled": applied["enabled"], "current": latest})
-    return {"categories": out,
-            "note": "Rates apply prospectively from their effective time. Already-posted commissions keep their original rule version and are never recalculated."}
-
-
-@router.get("/income-config/{category}/history")
-async def income_config_history(category: str, admin: dict = Depends(require_admin)):
-    from income_config import CATEGORY_KEYS
-    if category not in CATEGORY_KEYS:
-        raise HTTPException(status_code=404, detail="Unknown income category.")
-    versions = await db.income_rule_configs.find({"category": category}, {"_id": 0}).sort("version", -1).to_list(500)
-    return {"category": category, "versions": versions}
-
-
-@router.post("/income-config/{category}")
-async def income_config_publish(category: str, body: IncomeConfigBody, request: Request, admin: dict = Depends(require_admin)):
-    from datetime import datetime as _dt, timezone as _tz
-    from income_config import CATEGORY_KEYS, DEFAULT_RATES
-    if category not in CATEGORY_KEYS:
-        raise HTTPException(status_code=404, detail="Unknown income category.")
-    rate = round(float(body.rate_percent), 4)
-    if rate < 0 or rate > 100:
-        raise HTTPException(status_code=400, detail="Rate must be between 0 and 100.")
-    eff = (body.effective_at or "").strip() or now_iso()
-    try:
-        _eff_dt = _dt.fromisoformat(eff.replace("Z", "+00:00"))
-    except ValueError:
-        raise HTTPException(status_code=400, detail="effective_at must be a valid ISO datetime.")
-    if _eff_dt.tzinfo is None:
-        _eff_dt = _eff_dt.replace(tzinfo=_tz.utc)
-    eff = _eff_dt.isoformat()
-    reason = (body.reason or "").strip()
-    if len(reason) < 3:
-        raise HTTPException(status_code=400, detail="Please provide a change reason (min 3 characters).")
-    latest = await db.income_rule_configs.find_one({"category": category, "status": "published"}, sort=[("version", -1)])
-    old_rate = float(latest["rate_percent"]) if latest else DEFAULT_RATES.get(category)
-    version = (int(latest["version"]) + 1) if latest else 1
-    doc = {"id": new_id(), "category": category, "version": version, "rate_percent": rate,
-           "enabled": bool(body.enabled), "effective_at": eff, "status": "published",
-           "old_rate": old_rate, "reason": reason, "created_by": admin.get("distributor_id"),
-           "created_by_id": admin.get("id"), "created_at": now_iso()}
-    await db.income_rule_configs.insert_one(dict(doc))
-    await log_audit(admin, "income_config_published", "income_config", f"{category}:v{version}",
-                    new_value={"category": category, "version": version, "old_rate": old_rate,
-                               "new_rate": rate, "enabled": body.enabled, "effective_at": eff, "reason": reason},
-                    request=request)
-    doc.pop("_id", None)
-    return {"message": f"{category} v{version} published at {rate}% (effective {eff}).", "config": doc}
-
-
 class AdminPwBody(BaseModel):
     password: Optional[str] = None
 
@@ -974,7 +736,6 @@ async def clear_audit_logs(request: Request, admin: dict = Depends(require_admin
 REPORTS = {
     "registrations": ("users", {"role": {"$in": ["distributor", "customer"]}},
                       ["distributor_id", "full_name", "email", "mobile", "status", "state", "city", "created_at"]),
-    "activations": ("activation_records", {}, ["distributor_id", "order_id", "amount", "status", "activation_date"]),
     "sales": ("orders", {"payment_status": "paid"},
               ["order_number", "distributor_id", "subtotal", "gst_amount", "total", "status", "created_at"]),
     "orders": ("orders", {}, ["order_number", "distributor_id", "total", "status", "payment_status", "created_at"]),

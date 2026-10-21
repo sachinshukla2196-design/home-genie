@@ -30,7 +30,6 @@ export default function ProductDetail() {
           <img src={p.images?.[0]} alt={p.name} className="aspect-square w-full object-cover" />
         </div>
         <div>
-          {p.is_activation_product && <span className="inline-flex items-center gap-1 rounded-full bg-gold px-3 py-1 text-xs font-bold text-forest"><Sparkles size={12} /> Activation Product</span>}
           <div className="mt-3 text-xs font-semibold uppercase tracking-wide text-gold">{p.category}</div>
           <h1 className="mt-1 font-display text-3xl font-semibold text-ink">{lang === "hi" && p.name_hi ? p.name_hi : p.name}</h1>
           <div className="mt-4 flex items-baseline gap-3">

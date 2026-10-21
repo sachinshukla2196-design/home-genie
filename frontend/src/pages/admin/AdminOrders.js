@@ -65,7 +65,7 @@ export default function AdminOrders() {
   const recordManual = async () => {
     const did = manual.distributor_id.trim().toUpperCase();
     const ref = manual.reference.trim();
-    if (!did) { toast.error("Enter a Distributor ID"); return; }
+    if (!did) { toast.error("Enter a HomeGenie ID"); return; }
     if (!ref) { toast.error("Enter a payment reference / reason"); return; }
     setManualBusy(true);
     try {
@@ -100,18 +100,18 @@ export default function AdminOrders() {
         </div>
       </div>
 
-      {/* Manual payment by Distributor ID */}
+      {/* Manual payment by HomeGenie ID */}
       <div className="rounded-2xl border border-brand-50 bg-white p-6 shadow-card" data-testid="manual-payment-card">
         <div className="flex items-center gap-2.5">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-50 text-forest"><BadgeIndianRupee size={20} /></div>
           <div>
             <h3 className="font-display text-lg font-medium text-ink">Record Manual Payment</h3>
-            <p className="text-xs text-muted2">Enter an existing Distributor ID to mark their payment as PAID (admin/manual). Recorded &amp; audited.</p>
+            <p className="text-xs text-muted2">Enter an existing HomeGenie ID to mark the payment as PAID (admin/manual). Recorded &amp; audited.</p>
           </div>
         </div>
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-4">
           <div>
-            <Label className="text-xs text-muted2">Distributor ID</Label>
+            <Label className="text-xs text-muted2">HomeGenie ID</Label>
             <Input value={manual.distributor_id} onChange={(e) => setManual((m) => ({ ...m, distributor_id: e.target.value }))} placeholder="ANJ000123" className="mt-1 h-10 font-mono uppercase" data-testid="manual-distributor-id" />
           </div>
           <div>
@@ -136,7 +136,7 @@ export default function AdminOrders() {
 
       <div className="overflow-x-auto rounded-2xl border border-brand-50 bg-white shadow-card" data-testid={tab === "paid" ? "paid-list" : "orders-list"}>
         <table className="w-full text-sm">
-          <thead><tr className="border-b border-brand-50 text-left text-muted2"><th className="p-4">{t("order.number")}</th><th className="p-4">Distributor</th><th className="p-4">Date</th><th className="p-4 text-right">{t("order.total")}</th><th className="p-4">Payment</th><th className="p-4">Method</th><th className="p-4">Reference ID</th><th className="p-4">{t("order.status")}</th><th className="p-4">Invoice</th><th className="p-4">Action</th></tr></thead>
+          <thead><tr className="border-b border-brand-50 text-left text-muted2"><th className="p-4">{t("order.number")}</th><th className="p-4">HomeGenie</th><th className="p-4">Date</th><th className="p-4 text-right">{t("order.total")}</th><th className="p-4">Payment</th><th className="p-4">Method</th><th className="p-4">Reference ID</th><th className="p-4">{t("order.status")}</th><th className="p-4">Invoice</th><th className="p-4">Action</th></tr></thead>
           <tbody>
             {shown.map((o) => (
               <tr key={o.id} className="border-b border-brand-50/60 transition-colors hover:bg-brand-50/30" data-testid={`admin-order-${o.order_number}`}>

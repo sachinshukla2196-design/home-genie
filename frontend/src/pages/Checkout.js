@@ -60,7 +60,7 @@ export default function Checkout() {
       await API.post("/payments/upi-claim", { order_id: order.id });
       clear();
       setShowQr(order);
-      toast.success(`Order ${order.order_number} placed — scan the QR to pay`);
+      toast.success(`Order ${order.order_number} placed`);
     } catch (err) { toast.error(apiError(err)); } finally { setLoading(false); }
   };
 
@@ -106,7 +106,7 @@ export default function Checkout() {
   if (showQr) return (
     <div className="mx-auto max-w-md text-center" data-testid="upi-qr-panel">
       <div className="rounded-2xl border border-brand-50 bg-white p-6 shadow-card">
-        <h1 className="font-display text-xl font-semibold text-ink">Scan & Pay via PhonePe / UPI</h1>
+        <h1 className="font-display text-xl font-semibold text-ink">Pay via UPI</h1>
         <p className="mt-1 text-sm text-muted2">Pay <b className="text-forest">{money(showQr.total)}</b> for order <b>{showQr.order_number}</b></p>
         <div className="mx-auto mt-4 w-64 rounded-xl border border-brand-50 bg-brand-50/40 px-4 py-6 text-sm text-muted2" data-testid="upi-not-configured">
           UPI payment is not configured yet. Your order is saved — our team will contact you to arrange payment.
@@ -157,7 +157,7 @@ export default function Checkout() {
               Pay Online (Card / UPI / Netbanking)
             </Button>
             <Button type="button" onClick={upiPay} disabled={loading} variant="outline" className="w-full rounded-full border-forest/30 text-forest hover:bg-brand-50" data-testid="upi-pay-btn">
-              Pay via PhonePe / UPI (QR)
+              Pay via UPI
             </Button>
           </div>
         </div>

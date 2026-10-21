@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Users, UserCheck, UserX, Zap, ShoppingCart, IndianRupee, ShieldCheck, Banknote, TrendingUp } from "lucide-react";
+import { Users, UserCheck, UserX, Zap, ShoppingCart, IndianRupee, TrendingUp } from "lucide-react";
 import { StatCard } from "@/components/StatCard";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useI18n } from "@/context/I18nContext";
@@ -26,8 +26,6 @@ export default function AdminDashboard() {
         <StatCard testid="adm-today-orders" icon={ShoppingCart} accent="ink" label={t("admin.todayOrders")} value={s.today_orders} index={5} />
         <StatCard testid="adm-today-rev" icon={IndianRupee} accent="gold" label={t("admin.todayRevenue")} value={money(s.today_revenue)} index={6} />
         <StatCard testid="adm-total-rev" icon={TrendingUp} accent="brand" label={t("admin.totalRevenue")} value={money(s.total_revenue)} index={7} />
-        <StatCard testid="adm-pending-kyc" icon={ShieldCheck} accent="gold" label={t("admin.pendingKyc")} value={s.pending_kyc} index={8} />
-        <StatCard testid="adm-pending-wd" icon={Banknote} accent="danger" label={t("admin.pendingWd")} value={s.pending_withdrawals} index={9} />
       </div>
     </div>
   );

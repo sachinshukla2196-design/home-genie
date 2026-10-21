@@ -101,7 +101,7 @@ export function ForgotPassword() {
           </div>
         ) : (
           <>
-            <Field label="Distributor ID or registered mobile" value={identifier} onChange={(e) => setIdentifier(e.target.value)} testid="forgot-identifier" />
+            <Field label="HomeGenie ID or registered mobile" value={identifier} onChange={(e) => setIdentifier(e.target.value)} testid="forgot-identifier" />
             <p className="text-xs text-muted2" data-testid="forgot-admin-note">There is no OTP. An admin will reset your password and share it with you.</p>
             <Button onClick={submit} disabled={loading || !identifier.trim()} className="h-11 w-full rounded-full btn-grad" data-testid="forgot-submit">
               {loading ? t("common.loading") : "Send request to admin"}

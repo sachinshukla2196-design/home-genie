@@ -11,7 +11,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useI18n } from "@/context/I18nContext";
 import { API, apiError } from "@/lib/api";
 
-const EMPTY = { sku: "", name: "", name_hi: "", description: "", description_hi: "", images: [""], mrp: 0, selling_price: 0, gst_percent: 5, stock: 100, category: "General", is_active: true, is_activation_product: false };
+const EMPTY = { sku: "", name: "", name_hi: "", description: "", description_hi: "", images: [""], mrp: 0, selling_price: 0, gst_percent: 5, stock: 100, category: "Household Essentials", is_active: true, is_activation_product: false };
 
 export default function AdminProducts() {
   const { t } = useI18n();
@@ -73,7 +73,6 @@ export default function AdminProducts() {
                 <h3 className="mt-1 font-display font-medium text-ink">{p.name}</h3>
                 <div className="mt-1 text-sm text-muted2">{p.sku}</div>
               </div>
-              {p.is_activation_product && <span className="rounded-full bg-gold px-2 py-0.5 text-[10px] font-bold text-forest">ACTIVATION</span>}
             </div>
             <div className="mt-3 flex items-baseline gap-2"><span className="font-display text-lg font-semibold text-forest">{money(p.selling_price)}</span><span className="text-sm text-muted2 line-through">{money(p.mrp)}</span></div>
             <div className="mt-1 text-xs text-muted2">Stock: {p.stock} · GST {p.gst_percent}%</div>
@@ -115,7 +114,6 @@ export default function AdminProducts() {
               <FF label="Price" type="number" value={form.selling_price} onChange={set("selling_price")} testid="pf-price" />
               <FF label="Stock" type="number" value={form.stock} onChange={set("stock")} testid="pf-stock" />
             </div>
-            <label className="flex items-center justify-between rounded-lg border border-brand-50 p-3 text-sm"><span>Activation / Qualifying Product</span><Switch checked={form.is_activation_product} onCheckedChange={(v) => setForm((f) => ({ ...f, is_activation_product: v }))} data-testid="pf-activation" /></label>
           </div>
           <DialogFooter><Button onClick={save} className="rounded-full bg-forest hover:bg-brand" data-testid="pf-save">{t("cta.save")}</Button></DialogFooter>
         </DialogContent>

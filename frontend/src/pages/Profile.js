@@ -2,7 +2,6 @@ import React, { useRef, useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { Mail, Phone, MapPin, LifeBuoy, Camera, Loader2, Trash2 } from "lucide-react";
-import { IdCard } from "@/components/IdCard";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
@@ -110,12 +109,10 @@ export default function Profile() {
         </div>
       )}
 
-      <IdCard user={user} />
-
       <div className="rounded-2xl border border-brand-50 bg-white p-6 shadow-card">
         <div className="flex items-center gap-2 font-medium text-ink"><LifeBuoy size={18} className="text-brand" /> {t("nav.support")}</div>
-        <p className="mt-1 text-sm text-muted2">Need help? Reach our support team.</p>
-        <a href="mailto:support@anjaliherbal.life" className="mt-3 inline-block text-sm font-medium text-brand hover:underline" data-testid="support-email">support@anjaliherbal.life</a>
+        <p className="mt-1 text-sm text-muted2">{t("trust.support.d")}</p>
+        <a href="/legal/support" className="mt-3 inline-block text-sm font-medium text-brand hover:underline" data-testid="support-link">{t("legal.support")}</a>
       </div>
 
       <Button onClick={logout} variant="outline" className="w-full rounded-full border-danger/30 text-danger hover:bg-danger/10" data-testid="profile-logout">{t("nav.logout")}</Button>

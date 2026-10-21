@@ -78,7 +78,6 @@ export default function Register() {
       if (form.password.length < 6) return toast.error("Password must be at least 6 characters.");
       if (form.password !== form.confirm_password) return toast.error("Passwords do not match.");
     }
-    if (!/^\d{12}$/.test(form.aadhaar_number.trim())) return toast.error("Enter a valid 12-digit Aadhaar number.");
     if (!form.sponsor_id.trim()) return toast.error("Please enter a valid Referral / Sponsor ID.");
     if (!form.state || !form.city || !form.pincode.trim()) return toast.error("State, City and Pincode are required.");
     setLoading(true);
@@ -105,7 +104,7 @@ export default function Register() {
           <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="mx-auto mt-16 w-full max-w-md text-center" data-testid="register-pending">
             <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-brand-50 text-forest"><CheckCircle2 size={34} /></div>
             <h1 className="mt-6 font-display text-2xl font-semibold text-ink">Request submitted</h1>
-            <p className="mt-2 text-muted2">Your registration request has been submitted.<br />Please wait for Admin approval. You'll be able to log in once your Distributor ID is created.</p>
+            <p className="mt-2 text-muted2">Your registration has been submitted.<br />Our team will review and approve your HomeGenie account. You'll be able to log in once your HomeGenie ID is created.</p>
             <Link to="/login"><Button className="mt-6 h-11 rounded-full bg-forest px-8 hover:bg-brand" data-testid="pending-to-login">Go to Login</Button></Link>
           </motion.div>
         ) : (
@@ -146,8 +145,7 @@ export default function Register() {
                 </div>
               )}
               <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2">
-                <Field label={`${t("auth.aadhaar")} *`} value={form.aadhaar_number} onChange={set("aadhaar_number")} required testid="reg-aadhaar" />
-                <Field label={`${t("auth.sponsorId")} *`} value={form.sponsor_id} onChange={set("sponsor_id")} required testid="reg-sponsor" />
+                <Field label={t("auth.sponsorId")} value={form.sponsor_id} onChange={set("sponsor_id")} testid="reg-sponsor" />
               </div>
               <Field label={`${t("auth.address")} (optional)`} value={form.address} onChange={set("address")} testid="reg-address" />
               <div className="grid grid-cols-1 gap-3.5 sm:grid-cols-3">

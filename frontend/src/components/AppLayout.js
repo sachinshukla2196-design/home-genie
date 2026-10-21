@@ -2,8 +2,8 @@ import React, { useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, Outlet } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  LayoutDashboard, ShoppingBag, Package, Wallet, TrendingUp, Share2, Users,
-  ShieldCheck, Banknote, Bell, FileBarChart, User, LifeBuoy, LogOut, Menu, ChevronLeft, MoreHorizontal, ShoppingCart,
+  LayoutDashboard, ShoppingBag, Package, Coins, Share2,
+  Bell, User, LogOut, Menu, ChevronLeft, MoreHorizontal, ShoppingCart,
 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
@@ -19,20 +19,17 @@ const NAV = [
   { to: "/app/dashboard", icon: LayoutDashboard, key: "nav.dashboard" },
   { to: "/app/products", icon: ShoppingBag, key: "nav.products" },
   { to: "/app/orders", icon: Package, key: "nav.orders" },
-  { to: "/app/wallet", icon: Wallet, key: "nav.wallet" },
+  { to: "/app/wallet", icon: Coins, key: "nav.wallet" },
   { to: "/app/referral", icon: Share2, key: "nav.referral" },
-  { to: "/app/team", icon: Users, key: "nav.team" },
-  { to: "/app/kyc", icon: ShieldCheck, key: "nav.kyc" },
-  { to: "/app/withdrawals", icon: Banknote, key: "nav.withdrawals" },
   { to: "/app/notifications", icon: Bell, key: "nav.notifications" },
   { to: "/app/profile", icon: User, key: "nav.profile" },
 ];
 
 const BOTTOM = [
   { to: "/app/dashboard", icon: LayoutDashboard, key: "nav.home" },
-  { to: "/app/wallet", icon: TrendingUp, key: "nav.income" },
-  { to: "/app/team", icon: Users, key: "nav.team" },
-  { to: "/app/orders", icon: Package, key: "nav.orders" },
+  { to: "/app/products", icon: ShoppingBag, key: "nav.products" },
+  { to: "/app/referral", icon: Share2, key: "nav.referral" },
+  { to: "/app/wallet", icon: Coins, key: "nav.wallet" },
 ];
 
 export function AppLayout() {

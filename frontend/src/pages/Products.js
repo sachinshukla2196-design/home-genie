@@ -56,7 +56,6 @@ export default function Products() {
               className="group flex flex-col overflow-hidden rounded-2xl border border-brand-50 bg-white shadow-card hover:shadow-soft transition-all" data-testid={`product-card-${p.sku}`}>
               <div className="relative aspect-[4/3] cursor-pointer overflow-hidden bg-brand-50" onClick={() => navigate(`/app/products/${p.id}`)}>
                 <img src={p.images?.[0]} alt={p.name} className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105" />
-                {p.is_activation_product && <span className="absolute left-3 top-3 inline-flex items-center gap-1 rounded-full bg-gold px-2.5 py-1 text-[11px] font-bold text-forest"><Sparkles size={11} /> Activation</span>}
               </div>
               <div className="flex flex-1 flex-col p-5">
                 <div className="text-xs font-semibold uppercase tracking-wide text-gold">{p.category}</div>

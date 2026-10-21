@@ -6,7 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useI18n } from "@/context/I18nContext";
 import { API } from "@/lib/api";
 
-const REPORTS = ["registrations", "activations", "sales", "orders", "payments", "referrals", "commissions", "wallet", "withdrawals"];
+const REPORTS = ["registrations", "sales", "orders", "payments", "referrals", "wallet"];
 const BACKEND = process.env.REACT_APP_BACKEND_URL;
 
 export default function AdminReports() {
@@ -32,7 +32,7 @@ export default function AdminReports() {
     const res = await fetch(`${BACKEND}/api/admin/final-report.pdf`, { headers: { Authorization: `Bearer ${token}` } });
     const blob = await res.blob();
     const url = window.URL.createObjectURL(blob);
-    const a = document.createElement("a"); a.href = url; a.download = "Anjali_Final_Application_Report.pdf"; a.click();
+    const a = document.createElement("a"); a.href = url; a.download = "HOME_GENIES_Report.pdf"; a.click();
   };
 
   return (

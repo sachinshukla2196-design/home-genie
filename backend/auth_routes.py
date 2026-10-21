@@ -60,7 +60,7 @@ def _valid_email(e: str) -> bool:
 
 
 async def _resolve_sponsor(sid_raw: str) -> dict:
-    """Referral ID mandatory + must be an ACTIVE (GREEN) distributor, an admin, or an admin-generated code."""
+    """Optional referral: when given it must match an active member or an admin-generated code."""
     sid = (sid_raw or "").strip().upper()
     if not sid:
         raise HTTPException(status_code=400, detail="A referral / sponsor ID is required to register.")
@@ -74,7 +74,7 @@ async def _resolve_sponsor(sid_raw: str) -> dict:
     if not sponsor:
         raise HTTPException(status_code=400, detail="Invalid referral / sponsor ID. Please check and try again.")
     if sponsor.get("role") not in ADMIN_ROLES and sponsor.get("status") != "green":
-        raise HTTPException(status_code=400, detail="This referral ID belongs to an inactive member. Please use an active (GREEN) distributor's referral ID.")
+        raise HTTPException(status_code=400, detail="This referral ID belongs to an inactive member. Please use an active HomeGenie referral ID.")
     return sponsor
 
 
@@ -128,18 +128,20 @@ async def register_request(body: RegRequestBody):
         if body.password != body.confirm_password:
             raise HTTPException(status_code=400, detail="Passwords do not match.")
         pw_hash = hash_password(body.password)
-    if not _valid_aadhaar(body.aadhaar_number):
-        raise HTTPException(status_code=400, detail="A valid 12-digit Aadhaar number is required.")
+    # HOME GENIES: Aadhaar is NOT collected at signup. If an identity document is
+    # ever required (e.g. for point withdrawal), it is captured separately.
+    if body.aadhaar_number and not _valid_aadhaar(body.aadhaar_number):
+        raise HTTPException(status_code=400, detail="Enter a valid 12-digit Aadhaar number or leave it blank.")
     if not body.state.strip() or not body.city.strip() or not body.pincode.strip():
         raise HTTPException(status_code=400, detail="State, City and Pincode are required.")
     sponsor_raw = (body.sponsor_id or "").strip().upper()
-    if not sponsor_raw:
-        raise HTTPException(status_code=400, detail="Sponsor / Referral ID is required.")
-    sponsor_ok = (sponsor_raw == "ANJ000000"
-                  or await db.referral_codes.find_one({"code": sponsor_raw, "active": True})
-                  or await db.users.find_one({"distributor_id": sponsor_raw}))
-    if not sponsor_ok:
-        raise HTTPException(status_code=400, detail="Invalid referral / sponsor ID. Enter a valid Distributor ID or referral code.")
+    # HOME GENIES: a referral is OPTIONAL. Anyone may register and shop; the
+    # HomeGenie selling role is granted by admin approval, not by a sponsor.
+    if sponsor_raw:
+        sponsor_ok = (await db.referral_codes.find_one({"code": sponsor_raw, "active": True})
+                      or await db.users.find_one({"distributor_id": sponsor_raw}))
+        if not sponsor_ok:
+            raise HTTPException(status_code=400, detail="Invalid referral ID. Leave it blank if you were not referred.")
     if await db.users.find_one({"mobile": mobile}):
         raise HTTPException(status_code=400, detail="An account already exists for this mobile number.")
     if email and await db.users.find_one({"email": email}):
@@ -188,8 +190,10 @@ async def register(body: RegisterBody, request: Request):
 
     await otp_verify(mobile, "register", body.otp)
 
-    if not _valid_aadhaar(body.aadhaar_number):
-        raise HTTPException(status_code=400, detail="A valid 12-digit Aadhaar number is required.")
+    # HOME GENIES: Aadhaar is NOT collected at signup. If an identity document is
+    # ever required (e.g. for point withdrawal), it is captured separately.
+    if body.aadhaar_number and not _valid_aadhaar(body.aadhaar_number):
+        raise HTTPException(status_code=400, detail="Enter a valid 12-digit Aadhaar number or leave it blank.")
 
     # sponsor resolution — referral ID is mandatory + must be an active (GREEN) member or admin-generated code
     sponsor = await _resolve_sponsor(body.sponsor_id)
@@ -265,7 +269,7 @@ async def login(body: LoginBody, request: Request):
     if not user or not verify_password(body.password, user.get("password_hash", "")):
         await db.login_attempts.update_one({"identifier": ident},
                                            {"$inc": {"count": 1}, "$set": {"last": now_iso()}}, upsert=True)
-        raise HTTPException(status_code=401, detail="Invalid credentials. Use your Distributor ID / email / mobile and password.")
+        raise HTTPException(status_code=401, detail="Invalid credentials. Use your HomeGenie ID / email / mobile and password.")
     if user.get("blocked"):
         raise HTTPException(status_code=403, detail="Your account has been blocked. Please contact the admin.")
 
@@ -456,10 +460,10 @@ async def forgot_request(body: ForgotRequestBody):
     password manually. NO OTP, NO SMS, NO email reset, NO external service."""
     ident = (body.identifier or "").strip()
     if not ident:
-        raise HTTPException(status_code=400, detail="Enter your Distributor ID or registered mobile number.")
+        raise HTTPException(status_code=400, detail="Enter your HomeGenie ID or registered mobile number.")
     user = await db.users.find_one({"$or": [{"distributor_id": ident.upper()}, {"mobile": ident}]})
     if not user:
-        raise HTTPException(status_code=404, detail="No account found for that Distributor ID / mobile number.")
+        raise HTTPException(status_code=404, detail="No account found for that HomeGenie ID / mobile number.")
     if not await db.password_reset_requests.find_one({"user_id": user["id"], "status": "pending"}):
         await db.password_reset_requests.insert_one({
             "id": new_id(), "user_id": user["id"], "distributor_id": user.get("distributor_id"),

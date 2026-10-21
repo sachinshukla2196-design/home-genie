@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@400;500;600;700&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Noto+Sans+Devanagari:wght@400;500;600;700&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -8,97 +8,97 @@ body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    background-color: #F7F9F7;
-    color: #17201B;
+    background-color: #FBF9FD;
+    color: #1B1024;
 }
 
 .lang-hi, .lang-hi button, .lang-hi input, .lang-hi textarea {
     font-family: 'Noto Sans Devanagari', 'Inter', sans-serif;
 }
 
-::selection { background: #C9A227; color: #fff; }
+::selection { background: #C026A3; color: #fff; }
 
 @layer base {
     :root {
-        --background: 130 15% 97%;
-        --foreground: 140 24% 11%;
+        --background: 280 40% 98%;
+        --foreground: 272 39% 10%;
         --card: 0 0% 100%;
-        --card-foreground: 140 24% 11%;
+        --card-foreground: 272 39% 10%;
         --popover: 0 0% 100%;
-        --popover-foreground: 140 24% 11%;
-        --primary: 150 65% 25%;
+        --popover-foreground: 272 39% 10%;
+        --primary: 263 70% 50%;
         --primary-foreground: 0 0% 100%;
-        --secondary: 138 34% 94%;
-        --secondary-foreground: 150 70% 18%;
-        --muted: 138 20% 95%;
-        --muted-foreground: 150 6% 43%;
-        --accent: 138 34% 94%;
-        --accent-foreground: 150 70% 18%;
+        --secondary: 270 100% 97%;
+        --secondary-foreground: 272 72% 23%;
+        --muted: 270 40% 96%;
+        --muted-foreground: 272 8% 44%;
+        --accent: 270 100% 97%;
+        --accent-foreground: 272 72% 23%;
         --destructive: 0 66% 47%;
         --destructive-foreground: 0 0% 100%;
-        --border: 140 15% 90%;
-        --input: 140 15% 90%;
-        --ring: 150 65% 25%;
-        --chart-1: 150 65% 25%;
+        --border: 272 30% 91%;
+        --input: 272 30% 91%;
+        --ring: 263 70% 50%;
+        --chart-1: 263 70% 50%;
         --chart-2: 45 68% 47%;
-        --chart-3: 150 40% 45%;
+        --chart-3: 310 67% 45%;
         --chart-4: 45 55% 70%;
-        --chart-5: 150 24% 60%;
-        --radius: 0.75rem;
+        --chart-5: 272 24% 60%;
+        --radius: 0.9rem;
     }
 }
 
 @layer base {
     * { @apply border-border; }
     body { @apply bg-background text-foreground; }
-    h1, h2, h3, h4 { font-family: 'Poppins', sans-serif; }
+    h1, h2, h3, h4 { font-family: 'Fraunces', Georgia, serif; letter-spacing: -0.01em; }
 }
 
 /* ---------------- Dark mode (token remap) ---------------- */
-html.dark body { background-color: #0c1310; color: #e6ede8; }
+html.dark body { background-color: #120a1c; color: #ece7f3; }
 .dark {
-    --background: 150 18% 6%;
-    --foreground: 140 12% 91%;
-    --card: 150 14% 11%;
-    --card-foreground: 140 12% 91%;
-    --popover: 150 14% 11%;
-    --popover-foreground: 140 12% 91%;
-    --primary: 150 45% 45%;
-    --primary-foreground: 0 0% 100%;
-    --secondary: 150 14% 15%;
-    --secondary-foreground: 140 12% 91%;
-    --muted: 150 12% 15%;
-    --muted-foreground: 150 8% 62%;
-    --accent: 150 14% 16%;
-    --accent-foreground: 140 12% 91%;
-    --border: 150 12% 20%;
-    --input: 150 12% 20%;
-    --ring: 150 45% 45%;
+    --background: 272 45% 7%;
+    --foreground: 275 20% 92%;
+    --card: 272 32% 12%;
+    --card-foreground: 275 20% 92%;
+    --popover: 272 32% 12%;
+    --popover-foreground: 275 20% 92%;
+    --primary: 263 85% 72%;
+    --primary-foreground: 272 45% 10%;
+    --secondary: 272 28% 17%;
+    --secondary-foreground: 275 20% 92%;
+    --muted: 272 24% 17%;
+    --muted-foreground: 275 12% 66%;
+    --accent: 272 28% 18%;
+    --accent-foreground: 275 20% 92%;
+    --border: 272 22% 22%;
+    --input: 272 22% 22%;
+    --ring: 263 85% 72%;
 }
-.dark .bg-white { background-color: #16211c !important; }
-.dark .bg-white\/95 { background-color: rgba(22,33,28,0.95) !important; }
-.dark .text-ink { color: #e6ede8 !important; }
-.dark .text-muted2 { color: #93a39b !important; }
-.dark .text-forest { color: #57b487 !important; }
-.dark .text-brand { color: #57b487 !important; }
-.dark .border-brand-50 { border-color: #24352c !important; }
-.dark .border-brand-50\/60 { border-color: rgba(36,53,44,0.6) !important; }
-.dark .bg-brand-50 { background-color: #1a2a22 !important; }
-.dark .bg-brand-50\/40, .dark .bg-brand-50\/60 { background-color: rgba(26,42,34,0.6) !important; }
-.dark .bg-brand-50\/50 { background-color: #1a2a22 !important; }
-.dark .text-brand-700 { color: #7cc9a0 !important; }
+.dark .bg-white { background-color: #1c1228 !important; }
+.dark .bg-white\/95 { background-color: rgba(28,18,40,0.95) !important; }
+.dark .text-ink { color: #ece7f3 !important; }
+.dark .text-muted2 { color: #a79bb5 !important; }
+.dark .text-forest { color: #c4a6ff !important; }
+.dark .text-brand { color: #c4a6ff !important; }
+.dark .border-brand-50 { border-color: #2f2140 !important; }
+.dark .border-brand-50\/60 { border-color: rgba(47,33,64,0.6) !important; }
+.dark .bg-brand-50 { background-color: #241733 !important; }
+.dark .bg-brand-50\/40, .dark .bg-brand-50\/60 { background-color: rgba(36,23,51,0.6) !important; }
+.dark .bg-brand-50\/50 { background-color: #241733 !important; }
+.dark .text-brand-700 { color: #d3bcff !important; }
 .dark .text-danger { color: #f28a8a !important; }
 .dark .bg-danger\/10 { background-color: rgba(242,138,138,0.14) !important; }
-.dark .bg-gold-light { background-color: #2a2410 !important; }
-.dark .bg-gold-light\/40 { background-color: rgba(42,36,16,0.5) !important; }
+.dark .bg-gold-light { background-color: #2c2410 !important; }
+.dark .bg-gold-light\/40 { background-color: rgba(44,36,16,0.5) !important; }
 .dark .shadow-card { box-shadow: 0 2px 14px rgba(0,0,0,0.45) !important; }
 .dark .shadow-soft { box-shadow: 0 4px 24px rgba(0,0,0,0.5) !important; }
 .dark .shadow-lift { box-shadow: 0 12px 32px rgba(0,0,0,0.55) !important; }
 .dark .glass-nav {
-    background: rgba(12,19,16,0.82) !important;
+    background: rgba(18,10,28,0.82) !important;
     border-bottom: 1px solid rgba(255,255,255,0.06) !important;
 }
-.dark ::selection { background: #C9A227; color: #0c1310; }
+.dark ::selection { background: #C026A3; color: #fff; }
 
 /* ---------------- Global micro-interactions ---------------- */
 button, a { transition-property: color, background-color, border-color, box-shadow, transform, opacity; transition-duration: 200ms; transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1); }
@@ -111,20 +111,38 @@ button:not(:disabled):active { transform: scale(0.97); }
 .glass-nav {
     backdrop-filter: blur(16px);
     background: rgba(255,255,255,0.82);
-    border-bottom: 1px solid rgba(11,77,46,0.08);
+    border-bottom: 1px solid rgba(46,16,101,0.08);
 }
 
 @layer components {
     .btn-grad {
-        background-image: linear-gradient(135deg, #176B43 0%, #0B4D2E 100%);
+        background-image: linear-gradient(135deg, #6D28D9 0%, #2E1065 100%);
         color: #fff;
-        box-shadow: 0 8px 20px -6px rgba(11,77,46,0.45);
+        box-shadow: 0 8px 20px -6px rgba(46,16,101,0.45);
     }
-    .btn-grad:hover { filter: brightness(1.08); box-shadow: 0 10px 26px -6px rgba(11,77,46,0.55); }
+    .btn-grad:hover { filter: brightness(1.1); box-shadow: 0 10px 26px -6px rgba(46,16,101,0.55); }
     .btn-gold {
-        background-image: linear-gradient(135deg, #D8B43A 0%, #C9A227 100%);
-        color: #0B4D2E;
+        background-image: linear-gradient(135deg, #E0C254 0%, #C9A227 100%);
+        color: #2E1065;
         box-shadow: 0 8px 20px -6px rgba(201,162,39,0.5);
     }
     .btn-gold:hover { filter: brightness(1.05); }
+    .btn-magenta {
+        background-image: linear-gradient(135deg, #D63FB4 0%, #C026A3 100%);
+        color: #fff;
+        box-shadow: 0 8px 20px -6px rgba(192,38,163,0.45);
+    }
+    .btn-magenta:hover { filter: brightness(1.07); }
+    .hg-surface {
+        background: linear-gradient(160deg, #FFFFFF 0%, #FBF7FF 100%);
+    }
+    .hg-royal {
+        background: #2E1065;
+        background-image: radial-gradient(900px 400px at 85% -10%, rgba(192,38,163,0.38) 0%, transparent 60%),
+                          radial-gradient(700px 420px at 10% 110%, rgba(109,40,217,0.5) 0%, transparent 62%);
+    }
+    .hg-gold-rule {
+        height: 2px;
+        background: linear-gradient(90deg, transparent, #C9A227, transparent);
+    }
 }

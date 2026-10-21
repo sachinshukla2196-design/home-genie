@@ -15,7 +15,7 @@ import storage
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-logger = logging.getLogger("anjali")
+logger = logging.getLogger("homegenies")
 
 app = FastAPI(title="HOME GENIES API")
 
@@ -54,8 +54,6 @@ app.include_router(shop_routes.router)
 app.include_router(wallet_routes.router)
 app.include_router(admin_routes.router)
 app.include_router(storage.router)
-import cron_routes
-app.include_router(cron_routes.router)
 
 _cors_raw = os.environ.get("CORS_ALLOWED_ORIGINS") or os.environ.get("CORS_ORIGINS", "")
 _cors = [o.strip() for o in _cors_raw.split(",") if o.strip() and o.strip() != "*"]
@@ -170,18 +168,6 @@ async def _init_db():
                                             "role": "super_admin"}})
     # always keep the admin username in sync with env
     await db.users.update_one({"email": admin_email}, {"$set": {"username": admin_username}})
-
-    # master reference id — a permanent referral code (MST000001) that is the ROOT of the network.
-    admin_doc = await db.users.find_one({"email": admin_email})
-    if not await db.referral_codes.find_one({"code": "MST000001"}):
-        await db.referral_codes.insert_one({
-            "id": new_id(), "code": "MST000001", "active": True, "is_master": True,
-            "label": "Master ID (Root)",
-            "created_by": admin_doc["id"] if admin_doc else None,
-            "created_by_name": "System (Master)", "uses": 0, "created_at": now_iso(),
-        })
-    # enforce exactly ONE master: no other code may carry the master flag
-    await db.referral_codes.update_many({"code": {"$ne": "MST000001"}}, {"$set": {"is_master": False}})
 
     # demo data seeder is PERMANENTLY DISABLED — demo accounts/orders will never
     # be re-created on restart, regardless of the SEED_DEMO environment variable.

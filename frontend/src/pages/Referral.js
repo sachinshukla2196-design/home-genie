@@ -17,13 +17,13 @@ export default function Referral() {
 
   useEffect(() => { API.get("/referral").then(({ data }) => setInfo(data)).catch(() => {}); }, []);
   useEffect(() => {
-    QRCode.toDataURL(link, { margin: 1, width: 240, color: { dark: "#0B4D2E", light: "#ffffff" } })
+    QRCode.toDataURL(link, { margin: 1, width: 240, color: { dark: "#2E1065", light: "#ffffff" } })
       .then(setQr).catch(() => {});
   }, [link]);
 
   const copy = () => { navigator.clipboard.writeText(link); toast.success(t("referral.copied")); };
   const isGreen = user?.status === "green";
-  const msg = encodeURIComponent(`Join Anjali Herbal Life Ayurveda! Register with my referral: ${link}`);
+  const msg = encodeURIComponent(`Shop with me on HOME GENIES — useful products for your home and family: ${link}`);
 
   return (
     <div className="space-y-6">
@@ -47,7 +47,7 @@ export default function Referral() {
             </div>
             <div className="mt-5 flex flex-wrap gap-2">
               <a href={`https://wa.me/?text=${msg}`} target="_blank" rel="noreferrer" className="inline-flex items-center gap-2 rounded-full bg-brand-50 px-4 py-2 text-sm font-medium text-forest hover:bg-brand-50/70" data-testid="share-whatsapp"><MessageCircle size={16} /> WhatsApp</a>
-              <a href={`mailto:?subject=Join Anjali Herbal Life&body=${msg}`} className="inline-flex items-center gap-2 rounded-full bg-brand-50 px-4 py-2 text-sm font-medium text-forest hover:bg-brand-50/70" data-testid="share-email"><Mail size={16} /> Email</a>
+              <a href={`mailto:?subject=Shop with me on HOME GENIES&body=${msg}`} className="inline-flex items-center gap-2 rounded-full bg-brand-50 px-4 py-2 text-sm font-medium text-forest hover:bg-brand-50/70" data-testid="share-email"><Mail size={16} /> Email</a>
               <a href={`sms:?body=${msg}`} className="inline-flex items-center gap-2 rounded-full bg-brand-50 px-4 py-2 text-sm font-medium text-forest hover:bg-brand-50/70" data-testid="share-sms"><Share2 size={16} /> SMS</a>
             </div>
           </div>
@@ -55,7 +55,7 @@ export default function Referral() {
           {info && (
             <div className="grid grid-cols-2 gap-4">
               <div className="rounded-2xl border border-brand-50 bg-white p-5 shadow-card"><div className="text-xs uppercase tracking-wide text-muted2">{t("dash.referralCount")}</div><div className="mt-1 font-display text-2xl font-semibold text-forest" data-testid="total-referrals">{info.total_referrals}</div></div>
-              <div className="rounded-2xl border border-brand-50 bg-white p-5 shadow-card"><div className="text-xs uppercase tracking-wide text-muted2">{t("dash.activeTeam")}</div><div className="mt-1 font-display text-2xl font-semibold text-forest" data-testid="active-referrals">{info.active_referrals}</div></div>
+              <div className="rounded-2xl border border-brand-50 bg-white p-5 shadow-card"><div className="text-xs uppercase tracking-wide text-muted2">{t("dash.referralCount")}</div><div className="mt-1 font-display text-2xl font-semibold text-forest" data-testid="active-referrals">{info.active_referrals}</div></div>
             </div>
           )}
         </div>

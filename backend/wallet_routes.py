@@ -1,59 +1,13 @@
-"""Wallet, referral, KYC, withdrawals, notifications, dashboard for distributors."""
+"""HomeGenie Points wallet, sharing links, identity records, withdrawals, notifications, dashboard."""
 from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime, timezone, timedelta
 
 from core import (db, now_iso, new_id, get_current_user, get_settings, get_or_create_wallet,
-                  add_wallet_transaction, create_notification, log_audit, build_referral_tree)
+                  add_wallet_transaction, create_notification, log_audit)
 
-router = APIRouter(prefix="/api", tags=["distributor"])
-
-
-@router.get("/team/tree")
-async def team_tree(user: dict = Depends(get_current_user)):
-    return await build_referral_tree(user["distributor_id"])
-
-
-# ---------------- Rank / BV ----------------
-# BV = the distributor's own accumulated business volume (product value excl GST of their PAID orders).
-RANK_TIERS = [
-    ("GD", "Executive", 0, 20000),
-    ("BD", "Sr. Executive", 20000, 40000),
-    ("AD", "Asst. Organizer", 40000, 80000),
-    ("CD", "Organizer", 80000, 160000),
-    ("PD", "Sr. Organizer", 160000, 320000),
-    ("MD", "Manager", 320000, 640000),
-    ("RD", "Sr. Manager", 640000, 1280000),
-    ("DD", "Area Manager", 1280000, 2560000),
-    ("MDD", "Sr. Area Manager", 2560000, 5120000),
-    ("ZM", "Zonal Manager", 5120000, 10000000),
-]
-
-
-def compute_rank(bv) -> dict:
-    bv = float(bv or 0)
-    for i, (code, name, lo, hi) in enumerate(RANK_TIERS):
-        nxt = RANK_TIERS[i + 1] if i + 1 < len(RANK_TIERS) else None
-        if bv < hi or nxt is None:
-            span = (hi - lo) or 1
-            prog = round(min(100.0, max(0.0, (bv - lo) / span * 100.0)), 1)
-            return {"code": code, "current": code, "current_bv": bv,
-                    "next_code": nxt[0] if nxt else None, "next": nxt[0] if nxt else None,
-                    "next_bv": hi if nxt else None, "progress": prog, "is_max": nxt is None}
-    return {"code": RANK_TIERS[0][0], "current": RANK_TIERS[0][0], "current_bv": bv,
-            "next_code": RANK_TIERS[1][0], "next": RANK_TIERS[1][0],
-            "next_bv": RANK_TIERS[0][3], "progress": 0.0, "is_max": False}
-
-
-async def _personal_bv(user_id: str) -> float:
-    paid = await db.orders.find({"user_id": user_id, "payment_status": {"$in": ["paid", "partially_refunded"]}},
-                                {"_id": 0, "subtotal": 1, "total": 1, "refunded_amount": 1}).to_list(5000)
-    bv = 0.0
-    for o in paid:
-        sub = float(o.get("subtotal", 0) or 0); tot = float(o.get("total") or 0) or sub
-        bv += sub * max(0.0, 1 - float(o.get("refunded_amount") or 0) / tot)
-    return round(bv, 2)
+router = APIRouter(prefix="/api", tags=["homegenie"])
 
 
 def _mask(val: str, keep: int = 4) -> str:
@@ -79,11 +33,6 @@ async def wallet_txns(user: dict = Depends(get_current_user)):
 
 
 # ---------------- Referral ----------------
-@router.get("/rank")
-async def my_rank(user: dict = Depends(get_current_user)):
-    return compute_rank(await _personal_bv(user["id"]))
-
-
 @router.get("/referral")
 async def referral_info(user: dict = Depends(get_current_user)):
     settings = await get_settings()
@@ -99,93 +48,8 @@ async def referral_info(user: dict = Depends(get_current_user)):
     }
 
 
-MAX_TEAM_LEVEL = 9
 
 
-@router.get("/team")
-async def team(user: dict = Depends(get_current_user)):
-    """8-level team hierarchy (Level 1 → Level 8) built from referral_relationships,
-    with team size and income earned by the current user attributed to each level."""
-    seen = {user["id"]}
-    frontier = [user["id"]]
-    level_rels = {}  # level -> list of relationship docs (deduped)
-    for lvl in range(1, MAX_TEAM_LEVEL + 1):
-        if not frontier:
-            break
-        rels = await db.referral_relationships.find(
-            {"sponsor_id": {"$in": frontier}}, {"_id": 0}).to_list(10000)
-        new_rels, next_frontier = [], []
-        for r in rels:
-            rid = r.get("referred_user_id")
-            if not rid or rid in seen:
-                continue
-            seen.add(rid)
-            new_rels.append(r)
-            next_frontier.append(rid)
-        if not new_rels:
-            break
-        level_rels[lvl] = new_rels
-        frontier = next_frontier
-
-    all_ids = [r["referred_user_id"] for rels in level_rels.values() for r in rels]
-    users_map = {u["id"]: u for u in await db.users.find(
-        {"id": {"$in": all_ids}},
-        {"_id": 0, "id": 1, "full_name": 1, "distributor_id": 1, "status": 1,
-         "created_at": 1, "city": 1, "state": 1, "photo": 1}).to_list(len(all_ids) or 1)}
-
-    # income earned by this user, grouped per member they were credited for
-    income_by_member = {}
-    comms = await db.commissions.find(
-        {"sponsor_id": user["id"], "status": "CREDITED"}, {"_id": 0, "referred_user_id": 1, "amount": 1}).to_list(5000)
-    for c in comms:
-        rid = c.get("referred_user_id")
-        income_by_member[rid] = income_by_member.get(rid, 0.0) + c.get("amount", 0.0)
-
-    # direct downline count for each member
-    downline_map = {}
-    if all_ids:
-        agg = await db.referral_relationships.aggregate([
-            {"$match": {"sponsor_id": {"$in": all_ids}}},
-            {"$group": {"_id": "$sponsor_id", "c": {"$sum": 1}}},
-        ]).to_list(len(all_ids))
-        downline_map = {g["_id"]: g["c"] for g in agg}
-
-    levels_out, total_members, total_active, total_income = [], 0, 0, 0.0
-    for lvl in range(1, MAX_TEAM_LEVEL + 1):
-        rels = level_rels.get(lvl, [])
-        members, lvl_income = [], 0.0
-        for r in sorted(rels, key=lambda x: x.get("created_at") or "", reverse=True):
-            u = users_map.get(r["referred_user_id"])
-            if not u:
-                continue
-            inc = income_by_member.get(r["referred_user_id"], 0.0)
-            lvl_income += inc
-            members.append({
-                "full_name": u.get("full_name"), "distributor_id": u.get("distributor_id"),
-                "status": u.get("status"), "photo": u.get("photo"),
-                "level": lvl,
-                "city": u.get("city"), "state": u.get("state"),
-                "joined_at": r.get("created_at"),
-                "commission_paid": r.get("commission_paid", False),
-                "downline_count": downline_map.get(r["referred_user_id"], 0),
-                "income": inc,
-            })
-        active = sum(1 for m in members if m["status"] == "green")
-        total_members += len(members)
-        total_active += active
-        total_income += lvl_income
-        levels_out.append({"level": lvl, "count": len(members), "active": active,
-                           "income": lvl_income, "members": members})
-
-    root = {"full_name": user.get("full_name"), "distributor_id": user.get("distributor_id"),
-            "status": user.get("status"), "photo": user.get("photo")}
-    l1 = levels_out[0]["members"] if levels_out else []
-    return {"root": root, "levels": levels_out, "members": l1,
-            "total": total_members, "active": total_active,
-            "direct": len(l1), "total_income": total_income}
-
-
-# ---------------- KYC ----------------
 class KycBody(BaseModel):
     pan: str
     aadhaar: str
@@ -333,13 +197,8 @@ async def dashboard(user: dict = Depends(get_current_user)):
             today_income += c.get("amount", 0.0)
 
     ref_count = await db.referral_relationships.count_documents({"sponsor_id": user["id"]})
-    active_team = await db.users.count_documents({"sponsor_user_id": user["id"], "status": "green"})
     txns = await db.wallet_transactions.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(5)
     notif = await db.notifications.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(5)
-
-    # Personal BV = product value (excl GST) of this distributor's PAID orders → rank
-    personal_bv = await _personal_bv(user["id"])
-    rank = compute_rank(personal_bv)
 
     # 7-day income series
     series = []
@@ -348,40 +207,16 @@ async def dashboard(user: dict = Depends(get_current_user)):
         amt = sum(c.get("amount", 0.0) for c in commissions if (c.get("created_at") or "")[:10] == day)
         series.append({"date": day[5:], "income": amt})
 
-    # Income breakdown by source (net of reversed commissions) + monthly pool from the ledger
-    by_type = {}
-    async for r in db.commissions.aggregate([
-        {"$match": {"sponsor_id": user["id"], "status": "CREDITED"}},
-        {"$group": {"_id": "$type", "total": {"$sum": "$amount"}}},
-    ]):
-        by_type[r["_id"]] = r.get("total", 0.0)
-    pool_total = 0.0
-    async for r in db.wallet_transactions.aggregate([
-        {"$match": {"user_id": user["id"], "type": "MONTHLY_FIXED_INCOME", "direction": "credit"}},
-        {"$group": {"_id": None, "total": {"$sum": "$amount"}}},
-    ]):
-        pool_total = r.get("total", 0.0)
-    income_breakdown = [
-        {"key": "matrix", "label": "Team Matrix (70% pool)", "amount": round(by_type.get("PURCHASE_LEVEL_COMMISSION", 0.0), 2)},
-        {"key": "team", "label": "Team Purchase (2.5%)", "amount": round(by_type.get("TEAM_PURCHASE_INCOME", 0.0), 2)},
-        {"key": "repurchase", "label": "Personal Repurchase (5%)", "amount": round(by_type.get("PERSONAL_REPURCHASE_INCOME", 0.0), 2)},
-        {"key": "pool", "label": "Monthly Fixed Income", "amount": round(pool_total, 2)},
-    ]
-
     return {
         "user": {"distributor_id": user.get("distributor_id"), "full_name": user.get("full_name"),
                  "status": user.get("status"), "kyc_status": user.get("kyc_status")},
-        "settings": {"activation_amount": settings.get("activation_amount"),
-                     "referral_commission": settings.get("referral_commission"),
-                     "currency_symbol": settings.get("currency_symbol", "₹")},
+        "settings": {"currency_symbol": settings.get("currency_symbol", "₹")},
         "wallet": {"available_balance": wallet["available_balance"], "pending_balance": wallet["pending_balance"],
                    "total_earned": wallet["total_earned"], "total_withdrawn": wallet["total_withdrawn"]},
         "stats": {"total_income": total_income, "today_income": today_income, "total_orders": total_orders,
-                  "referral_count": ref_count, "active_team": active_team},
+                  "referral_count": ref_count},
         "recent_orders": recent_orders,
         "recent_transactions": txns,
         "notifications": notif,
         "income_series": series,
-        "income_breakdown": income_breakdown,
-        "rank": rank,
     }

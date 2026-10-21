@@ -26,9 +26,6 @@ import Orders from "@/pages/Orders";
 import OrderDetail from "@/pages/OrderDetail";
 import Wallet from "@/pages/Wallet";
 import Referral from "@/pages/Referral";
-import Team from "@/pages/Team";
-import Kyc from "@/pages/Kyc";
-import Withdrawals from "@/pages/Withdrawals";
 import Notifications from "@/pages/Notifications";
 import Profile from "@/pages/Profile";
 
@@ -36,11 +33,6 @@ import AdminDashboard from "@/pages/admin/AdminDashboard";
 import AdminUsers from "@/pages/admin/AdminUsers";
 import AdminProducts from "@/pages/admin/AdminProducts";
 import AdminOrders from "@/pages/admin/AdminOrders";
-import AdminKyc from "@/pages/admin/AdminKyc";
-import AdminWithdrawals from "@/pages/admin/AdminWithdrawals";
-import AdminCommissions from "@/pages/admin/AdminCommissions";
-import AdminMonthlyIncome from "@/pages/admin/AdminMonthlyIncome";
-import AdminIncomeRules from "@/pages/admin/AdminIncomeRules";
 import AdminReports from "@/pages/admin/AdminReports";
 import AdminSettings from "@/pages/admin/AdminSettings";
 import AdminAuditLogs from "@/pages/admin/AdminAuditLogs";
@@ -91,9 +83,6 @@ function AppRoutes() {
                   <Route path="orders/:id" element={<OrderDetail />} />
                   <Route path="wallet" element={<Wallet />} />
                   <Route path="referral" element={<Referral />} />
-                  <Route path="team" element={<Team />} />
-                  <Route path="kyc" element={<Kyc />} />
-                  <Route path="withdrawals" element={<Withdrawals />} />
                   <Route path="notifications" element={<Notifications />} />
                   <Route path="profile" element={<Profile />} />
                 </Route>
@@ -103,11 +92,6 @@ function AppRoutes() {
                   <Route path="users" element={<AdminUsers />} />
                   <Route path="products" element={<AdminProducts />} />
                   <Route path="orders" element={<AdminOrders />} />
-                  <Route path="kyc" element={<AdminKyc />} />
-                  <Route path="withdrawals" element={<AdminWithdrawals />} />
-                  <Route path="commissions" element={<AdminCommissions />} />
-                  <Route path="monthly-income" element={<AdminMonthlyIncome />} />
-                  <Route path="income-rules" element={<AdminIncomeRules />} />
                   <Route path="reports" element={<AdminReports />} />
                   <Route path="settings" element={<AdminSettings />} />
                   <Route path="audit" element={<AdminAuditLogs />} />
