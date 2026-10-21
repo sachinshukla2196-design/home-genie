@@ -55,7 +55,7 @@ export default function Referral() {
           {info && (
             <div className="grid grid-cols-2 gap-4">
               <div className="rounded-2xl border border-brand-50 bg-white p-5 shadow-card"><div className="text-xs uppercase tracking-wide text-muted2">{t("dash.referralCount")}</div><div className="mt-1 font-display text-2xl font-semibold text-forest" data-testid="total-referrals">{info.total_referrals}</div></div>
-              <div className="rounded-2xl border border-brand-50 bg-white p-5 shadow-card"><div className="text-xs uppercase tracking-wide text-muted2">{t("dash.referralCount")}</div><div className="mt-1 font-display text-2xl font-semibold text-forest" data-testid="active-referrals">{info.active_referrals}</div></div>
+              <div className="rounded-2xl border border-brand-50 bg-white p-5 shadow-card"><div className="text-xs uppercase tracking-wide text-muted2">{t("referral.activeCustomers")}</div><div className="mt-1 font-display text-2xl font-semibold text-forest" data-testid="active-referrals">{info.active_referrals}</div></div>
             </div>
           )}
         </div>

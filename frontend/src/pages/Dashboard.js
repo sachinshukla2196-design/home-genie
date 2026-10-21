@@ -24,6 +24,7 @@ export default function Dashboard() {
 
   const sym = d?.settings?.currency_symbol || "₹";
   const money = (v) => `${sym}${Number(v || 0).toLocaleString("en-IN")}`;
+  const pts = (v) => `${Number(v || 0).toLocaleString("en-IN")} pts`;
   const approved = user?.status === "green";
 
   const quick = [
@@ -78,8 +79,8 @@ export default function Dashboard() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard testid="stat-orders" icon={Package} accent="brand" label={t("dash.totalOrders")} value={d.stats.total_orders} index={0} />
         <StatCard testid="stat-customers" icon={Users} accent="gold" label={t("dash.referralCount")} value={d.stats.referral_count} index={1} />
-        <StatCard testid="stat-points-available" icon={Coins} accent="brand" label={t("wallet.available")} value={money(d.wallet.available_balance)} sub={`${t("wallet.pending")}: ${money(d.wallet.pending_balance)}`} index={2} />
-        <StatCard testid="stat-points-released" icon={TrendingUp} accent="ink" label={t("wallet.withdrawn")} value={money(d.wallet.total_withdrawn)} index={3} />
+        <StatCard testid="stat-points-available" icon={Coins} accent="brand" label={t("wallet.available")} value={pts(d.wallet.available_balance)} sub={`${t("wallet.pending")}: ${pts(d.wallet.pending_balance)}`} index={2} />
+        <StatCard testid="stat-points-released" icon={TrendingUp} accent="ink" label={t("wallet.withdrawn")} value={pts(d.wallet.total_withdrawn)} index={3} />
       </div>
 
       {/* Commission & team sales — explicitly pending */}
@@ -168,7 +169,7 @@ export default function Dashboard() {
               {d.recent_transactions.map((tx) => (
                 <div key={tx.id} className="flex items-center justify-between rounded-lg border border-brand-50 p-3">
                   <div><div className="font-medium text-ink">{tx.type.replace(/_/g, " ")}</div><div className="text-xs text-muted2">{(tx.created_at || "").slice(0, 10)}</div></div>
-                  <div className={`font-display font-semibold ${tx.direction === "credit" ? "text-brand" : "text-danger"}`}>{tx.direction === "credit" ? "+" : "-"}{money(tx.amount)}</div>
+                  <div className={`font-display font-semibold ${tx.direction === "credit" ? "text-brand" : "text-danger"}`}>{tx.direction === "credit" ? "+" : "-"}{pts(tx.amount)}</div>
                 </div>
               ))}
             </div>

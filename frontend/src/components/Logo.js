@@ -5,7 +5,7 @@ import React from "react";
  * variant: "full" (lamp + wordmark) | "icon" (lamp only) | "wordmark" (text only)
  * dark: render for dark/royal backgrounds.
  */
-export function Logo({ size = "md", dark = false, showText = true, variant }) {
+export function Logo({ size = "md", dark = false, showText = true, variant, className = "" }) {
   const h = size === "sm" ? 34 : size === "lg" ? 60 : 44;
   const v = variant || (showText ? "full" : "icon");
   const textSize = Math.max(13, Math.round(h * 0.37));
@@ -28,7 +28,7 @@ export function Logo({ size = "md", dark = false, showText = true, variant }) {
   );
 
   return (
-    <div className="inline-flex w-fit shrink-0 items-center gap-2.5 self-start" data-testid="brand-logo">
+    <div className={`inline-flex w-fit shrink-0 items-center gap-2.5 ${className}`} data-testid="brand-logo">
       {v !== "wordmark" && Lamp}
       {v !== "icon" && Wordmark}
     </div>

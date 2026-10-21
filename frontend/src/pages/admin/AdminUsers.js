@@ -229,7 +229,7 @@ export default function AdminUsers() {
 
       <div className="overflow-x-auto rounded-2xl border border-brand-50 bg-white shadow-card">
         <table className="w-full text-sm">
-          <thead><tr className="border-b border-brand-50 text-left text-muted2"><th className="p-4">ID</th><th className="p-4">{t("common.name")}</th><th className="p-4">{t("auth.email")}</th><th className="p-4">{t("common.status")}</th><th className="p-4">Sponsor</th><th className="p-4">KYC</th><th className="p-4">Joined</th><th className="p-4">Action</th></tr></thead>
+          <thead><tr className="border-b border-brand-50 text-left text-muted2"><th className="p-4">ID</th><th className="p-4">{t("common.name")}</th><th className="p-4">{t("auth.email")}</th><th className="p-4">{t("common.status")}</th><th className="p-4">Referred by</th><th className="p-4">Verification</th><th className="p-4">Joined</th><th className="p-4">Action</th></tr></thead>
           <tbody>
             {filtered.map((u) => (
               <tr key={u.id} className="border-b border-brand-50/60" data-testid={`admin-user-${u.distributor_id}`}>

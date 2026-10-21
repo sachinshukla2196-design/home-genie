@@ -78,7 +78,6 @@ export default function Register() {
       if (form.password.length < 6) return toast.error("Password must be at least 6 characters.");
       if (form.password !== form.confirm_password) return toast.error("Passwords do not match.");
     }
-    if (!form.sponsor_id.trim()) return toast.error("Please enter a valid Referral / Sponsor ID.");
     if (!form.state || !form.city || !form.pincode.trim()) return toast.error("State, City and Pincode are required.");
     setLoading(true);
     try {

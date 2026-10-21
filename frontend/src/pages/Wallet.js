@@ -13,7 +13,7 @@ export default function Wallet() {
   const navigate = useNavigate();
   const [w, setW] = useState(null);
   const [txns, setTxns] = useState(null);
-  const money = (v) => `₹${Number(v || 0).toLocaleString("en-IN")}`;
+  const money = (v) => `${Number(v || 0).toLocaleString("en-IN")} pts`;
 
   useEffect(() => {
     API.get("/wallet").then(({ data }) => setW(data)).catch(() => {});

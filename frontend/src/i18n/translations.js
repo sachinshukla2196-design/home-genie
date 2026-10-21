@@ -142,6 +142,7 @@ export const translations = {
 
     "referral.title": "Share & Sell", "referral.link": "Your sharing link",
     "referral.code": "Your HomeGenie code", "referral.qr": "Scan to open your link",
+    "referral.activeCustomers": "Active Customers",
     "referral.copied": "Copied to clipboard",
     "referral.eligibleNote": "Share products with customers. Commission applies to qualifying sales once the approved rules are live.",
     "referral.lockedNote": "Your selling role is pending approval — sharing tools unlock after approval.",
@@ -309,6 +310,7 @@ export const translations = {
 
     "referral.title": "शेयर करें और बेचें", "referral.link": "आपका शेयरिंग लिंक",
     "referral.code": "आपका होम जीनी कोड", "referral.qr": "लिंक खोलने हेतु स्कैन करें",
+    "referral.activeCustomers": "सक्रिय ग्राहक",
     "referral.copied": "क्लिपबोर्ड पर कॉपी किया गया",
     "referral.eligibleNote": "ग्राहकों के साथ उत्पाद शेयर करें। स्वीकृत नियम लागू होने पर योग्य बिक्री पर कमीशन मिलेगा।",
     "referral.lockedNote": "आपकी सेलिंग भूमिका स्वीकृति हेतु लंबित है — स्वीकृति के बाद शेयरिंग टूल्स सक्रिय होंगे।",

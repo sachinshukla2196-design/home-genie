@@ -63,14 +63,15 @@ export default function Landing() {
       {/* ---------- Header ---------- */}
       <header className="sticky top-0 z-40 glass-nav">
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-5 sm:px-8">
-          <Link to="/" data-testid="header-logo"><Logo size="sm" /></Link>
+          <Link to="/" data-testid="header-logo"><Logo size="sm" variant="icon" className="sm:hidden" /><span className="hidden sm:block"><Logo size="sm" /></span></Link>
           <div className="flex items-center gap-2 sm:gap-3">
             <LanguageSwitcher />
             <Link to="/login" className="hidden text-sm font-medium text-muted2 hover:text-brand sm:block" data-testid="header-login">
               {t("cta.login")}
             </Link>
-            <Button onClick={() => navigate("/register")} className="btn-grad rounded-full px-4 text-sm sm:px-5" data-testid="header-join">
-              {t("cta.joinGenie")}
+            <Button onClick={() => navigate("/register")} className="btn-grad rounded-full px-4 text-xs sm:px-5 sm:text-sm" data-testid="header-join">
+              <span className="hidden sm:inline">{t("cta.joinGenie")}</span>
+              <span className="sm:hidden">{t("cta.register")}</span>
             </Button>
           </div>
         </div>

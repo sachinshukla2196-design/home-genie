@@ -1,0 +1,52 @@
+{
+  "summary": "Frontend-only test of the HOME GENIES transformation (Playwright, desktop 1920x800 + mobile 390x844). Passed: homepage has every requested data-testid (pillar-1..4 only: Sarees, Fashion Products, Makeup Beauty & Skincare, Household Essentials), no Anjali/Distributor/Ayurveda/PhonePe/Activation/Herbal text anywhere in the homepage DOM, no broken images. EN to Hindi and back works, with no Anjali/MLM Hindi terms. All 5 legal slugs render with HOME GENIES content. Login with a wrong password returns 401 and shows a clear toast. Admin login works, and the sidebar shows exactly Dashboard/Users/Products/Orders/Reports/Settings/Audit Logs. All 7 admin routes render with no JS errors. Settings shows the 'Pending configuration' badge, the obsolete inputs are gone, and there is no Master/Tree card. The /app/dashboard testids are all present, with no rank/BV/team/activation UI. The wallet shows 'HomeGenie Points' and withdraw is a non-link pending badge. Removed routes redirect to / without crashing. FAILED: (1) CRITICAL - registration without a referral ID is blocked by the frontend. (2) HIGH - the homepage header overflows horizontally on mobile 390px. Plus several MLM leftovers (see below).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "Register.js submit()", "issue": "Line 81 `if (!form.sponsor_id.trim()) return toast.error('Please enter a valid Referral / Sponsor ID.')` blocks submission when Referral ID is blank, even though the label says '(optional)' and the backend accepts blank. Reproduced: all required fields filled, referral empty, then the toast 'Please enter a valid Referral / Sponsor ID.' appears and no /api/auth/register-request call is sent. The approval-pending screen is never reached.", "selector": "[data-testid='reg-submit']", "priority": "CRITICAL"},
+      {"component": "Landing header (mobile 390px)", "issue": "Horizontal overflow: documentElement.scrollWidth=431 vs 390. The header-join button ('Join as a HomeGenie') runs off-screen and is cropped next to the logo + EN/हिन्दी switcher. Hide or shorten the header CTA (or the wordmark) below the sm breakpoint.", "selector": "[data-testid='header-join']", "priority": "HIGH"},
+      {"component": "Profile.js", "issue": "Still calls the removed GET /api/rank (404 console errors on every /app/profile visit). Rank/BV UI code still exists (profile-rank, profile-rank-progress, profile-rank-bv). It is hidden only because the API 404s. Remove it.", "selector": "[data-testid='profile-rank-progress']", "priority": "MEDIUM"},
+      {"component": "Referral.js (Share & Sell)", "issue": "Two stat cards have the identical label 'CUSTOMERS REFERRED' (total-referrals and active-referrals both use t('dash.referralCount')).", "selector": "[data-testid='active-referrals']", "priority": "MEDIUM"},
+      {"component": "Logo.js", "issue": "The root uses `self-start`, which overrides the parent's items-center. In the AppLayout and AdminLayout sidebar headers (h-16) the logo sits flush against the top edge and looks cropped instead of vertically centred.", "selector": "[data-testid='brand-logo']", "priority": "LOW"},
+      {"component": "AdminUsers table", "issue": "Column headers still include 'Sponsor' and 'KYC' (MLM/KYC leftovers).", "selector": "admin users table thead", "priority": "MEDIUM"},
+      {"component": "Dashboard.js / Wallet.js", "issue": "Points are formatted with the currency symbol (Available Points '₹0', Pending Points '₹0', Total Released '₹0'). Points should be shown as points, not rupees, to avoid implying cash balances.", "selector": "[data-testid='stat-points-available'], [data-testid='wallet-card']", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [
+      {"flow": "Catalogue (/app/products and /admin/products) - DB-pending, expected", "issue": "Shows the old DB product 'Distributor Starter Kit' (SKU ANJ-STARTER, 'Official activation kit...') and categories Starter Kit/Immunity/Wellness/Personal Care from /api/categories. This comes from the old preview DB and is expected until the authorised restart, but the new homegenies DB must be seeded with the 4 pillar categories only.", "affected_selectors": ["/app/products category chips"]},
+      {"flow": "Admin Settings company info - known pending", "issue": "Company Name/Email/Address show 'Anjali Herbal Life Ayurveda India LLP' / support@anjaliherbal.life (old DB). Expected per caveat.", "affected_selectors": ["[data-testid='set-company-name']", "[data-testid='set-company-email']"]}
+    ],
+    "design_issues": [
+      {"screen": "/register right panel", "issues": ["The hero image (pexels 4174743) shows herbal capsules/pills, an Anjali-era supplement image unrelated to sarees/fashion/beauty/household. Replace it."]},
+      {"screen": "/admin-secure-login", "issues": ["The username placeholder is 'admin.rahulnirwana', a legacy name that hints at a username format. Use a neutral placeholder."]},
+      {"screen": "/login desktop 1920x800", "issues": ["The form is vertically pushed low (large empty area above, Login button near the fold, Google button below the fold). A second 'HOME GENIES' wordmark also appears at the top of the right panel, duplicating the left-panel logo."]},
+      {"screen": "/admin/settings", "issues": ["The 'Require identity verification before point withdrawal' switch is a KYC remnant while withdrawals and KYC are removed."]},
+      {"screen": "Landing pillars", "issues": ["Pillar-3 card's image sits flush to the top while cards 1, 2 and 4 have an offset, because the taller title causes inconsistent vertical alignment."]}
+    ]
+  },
+  "test_report_links": [],
+  "action_items": [
+    "CRITICAL: Remove the sponsor-required check at Register.js line 81 so a blank Referral ID is allowed. Also update the Google-verified note text 'Just add your sponsor and details below'.",
+    "HIGH: Fix the landing header overflow at 390px (hide or shorten header-join on mobile, or reduce gaps).",
+    "Remove the /api/rank call and the rank/BV UI from Profile.js.",
+    "Give the active-referrals card in Referral.js a distinct label (e.g. 'Active customers').",
+    "Remove the Sponsor/KYC columns from the AdminUsers table, and the KYC withdrawal switch from AdminSettings.",
+    "Show points without the ₹ symbol on Dashboard and Wallet.",
+    "Drop `self-start` from the Logo root (or override it in the sidebar headers).",
+    "Replace the herbal-capsule image on /register and the 'admin.rahulnirwana' placeholder.",
+    "Seed the 4 pillar categories and remove the ANJ-STARTER product in the new homegenies DB after the authorised restart."
+  ],
+  "critical_code_review_comments": [
+    "AdminSettings.save() still PUTs activation_amount, activation_product_sku and referral_commission, round-tripping obsolete MLM fields. Remove them from the payload.",
+    "AdminProducts EMPTY still carries is_activation_product, and AdminDashboard uses s.today_activations (labelled 'Today's Approvals'). These are MLM naming leftovers.",
+    "AdminLayout imports unused ShieldCheck, Banknote and Share2 icons.",
+    "Dashboard.js: if /api/dashboard fails, `.catch(() => {})` leaves the skeleton up forever with no error state. Same pattern in Referral, AdminSettings and Profile.",
+    "user.distributor_id is still the field name used for the HomeGenie ID (e.g. data-testid profile-distributor-id). This is acceptable internally but worth renaming eventually."
+  ],
+  "updated_files": ["/app/test_reports/iteration_16.json"],
+  "success_rate": {"backend": "not tested (frontend only)", "frontend": "~80% (8 of 10 requested areas pass; registration-without-referral and mobile homepage responsiveness fail)"},
+  "test_credentials": "Admin creds read from backend/.env (not printed). rahul@t.com is stale as noted. No new account was created because the registration was blocked client-side.",
+  "seed_data_creation": "None. The registration attempt (TEST_HG Reg) was blocked by the frontend before any API call.",
+  "retest_needed": true,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Iterations 1-15 are Anjali-era; ignore them. The browser_automation harness fails on Python string methods with '/' args and on str(i) concatenation. Use f-strings and chr(10). Read admin creds from /app/backend/.env inside the script. Once Register.js is fixed, retest: register without a referral, then approve at /admin/users, then log in as the new member and check /app/dashboard with the pending-banner. Recheck the landing at 390px for overflow (header-join)."
+}
