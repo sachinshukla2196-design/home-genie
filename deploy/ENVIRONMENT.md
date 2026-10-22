@@ -19,6 +19,10 @@ Environment Variables). **Never commit real values** to Git, docs, commit messag
 
 ## Backend / API (`backend/`, FastAPI)
 
+Vercel project: Root Directory **`backend`**, Framework Preset **FastAPI** (entry point `server.py` → `app`, auto-detected).
+Dependencies come from `backend/pyproject.toml` (Vercel prefers it over `requirements.txt`, which is the Emergent list).
+`backend/vercel.json` sets a 60 s limit and the daily cron.
+
 ### Required
 | Variable | Notes |
 |---|---|
@@ -44,7 +48,8 @@ the audit log, and **all admin sessions issued before the change are signed out*
 | `OTP_TTL_SECONDS`, `OTP_MAX_ATTEMPTS`, `OTP_RESEND_COOLDOWN` | OTP tuning. |
 | `EMERGENT_LLM_KEY`, `INTEGRATION_PROXY_URL` | Emergent object storage (image uploads). Uploads fail without it. |
 | `EMERGENT_EMAIL_KEY`, `EMAIL_FROM_NAME` | Outbound email. |
-| `STRIPE_API_KEY` | Only with the Emergent Stripe package; card checkout is disabled elsewhere. |
+| `STRIPE_API_KEY` | Card checkout ("Place order & pay"). Real `sk_live_…`/`sk_test_…` key. On Emergent the private package handles it; elsewhere (Vercel) `backend/stripe_checkout.py` uses the official `stripe` SDK. Unset → checkout returns a clear "not configured" message (COD/Razorpay/UPI unaffected). |
+| `STRIPE_WEBHOOK_SECRET` | `whsec_…` signing secret for `/api/webhook/stripe` (Vercel/official-SDK path). Unset → webhooks are rejected; payments are still confirmed when the customer returns via `/api/payments/status`. |
 | `ADMIN_PASSCODE` | **Unused** — the admin passcode was removed. Delete it from any environment. |
 
 ## Rotating the admin password safely

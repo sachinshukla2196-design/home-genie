@@ -1,0 +1,4 @@
+{
+  "functions": { "server.py": { "maxDuration": 60 } },
+  "crons": [{ "path": "/api/cron/release-points", "schedule": "0 20 * * *" }]
+}
