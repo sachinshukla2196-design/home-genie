@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
-import { CreditCard } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { CreditCard, Banknote, Check, MapPin, ShieldCheck, Wallet, QrCode } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { PageHeader } from "@/components/PageHeader";
+import { Stagger, StaggerItem, pressable } from "@/components/motion";
 import { useI18n } from "@/context/I18nContext";
 import { useCart } from "@/context/CartContext";
 import { useAuth } from "@/context/AuthContext";
@@ -114,27 +117,39 @@ export default function Checkout() {
 
   if (showQr) return (
     <div className="mx-auto max-w-md text-center" data-testid="upi-qr-panel">
-      <div className="rounded-2xl border border-brand-50 bg-white p-6 shadow-card">
-        <h1 className="font-display text-xl font-semibold text-ink">Pay via UPI</h1>
-        <p className="mt-1 text-sm text-muted2">Pay <b className="text-forest">{money(showQr.total)}</b> for order <b>{showQr.order_number}</b></p>
-        <div className="mx-auto mt-4 w-64 rounded-xl border border-brand-50 bg-brand-50/40 px-4 py-6 text-sm text-muted2" data-testid="upi-not-configured">
-          UPI payment is not configured yet. Your order is saved — our team will contact you to arrange payment.
+      <motion.div initial={{ opacity: 0, y: 14, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+        className="hg-glass relative overflow-hidden rounded-3xl p-6 sm:p-7">
+        <span className="hg-orb -right-10 -top-12 h-32 w-32 bg-hg-violet/30" />
+        <div className="relative">
+          <span className="hg-icon-chip mx-auto !h-14 !w-14 !rounded-2xl"><QrCode size={26} /></span>
+          <h1 className="mt-4 font-display text-xl font-semibold text-ink">Pay via UPI</h1>
+          <p className="mt-1 break-words text-sm text-muted2">Pay <b className="text-hg-violet dark:text-hg-lavender">{money(showQr.total)}</b> for order <b className="text-ink">{showQr.order_number}</b></p>
+          <div className="hg-tile mx-auto mt-5 w-full max-w-[16rem] px-4 py-6 text-sm text-muted2" data-testid="upi-not-configured">
+            UPI payment is not configured yet. Your order is saved — our team will contact you to arrange payment.
+          </div>
+          <p className="mt-3 rounded-xl bg-hg-violet/10 px-4 py-2.5 text-xs text-ink ring-1 ring-hg-lavender/20">After paying, our admin will verify the payment and activate your account. You'll be notified — no need to pay again.</p>
+          <Button onClick={() => navigate("/app/orders")} className="hg-btn mt-5 h-11 w-full rounded-full" data-testid="upi-done-btn">I've paid — View my orders</Button>
         </div>
-        <p className="mt-3 rounded-lg bg-brand-50 px-4 py-2.5 text-xs text-forest">After paying, our admin will verify the payment and activate your account. You'll be notified — no need to pay again.</p>
-        <Button onClick={() => navigate("/app/orders")} className="mt-5 w-full rounded-full btn-grad" data-testid="upi-done-btn">I've paid — View my orders</Button>
-      </div>
+      </motion.div>
     </div>
   );
 
   if (items.length === 0) return null;
 
+  const methods = [
+    { k: "online", label: t("checkout.payOnline"), icon: CreditCard },
+    { k: "cod", label: t("checkout.payCod"), icon: Banknote },
+  ];
+
   return (
-    <div>
-      <h1 className="mb-6 font-display text-2xl font-semibold text-ink">{t("checkout.title")}</h1>
-      <form onSubmit={placeOrder} className="grid gap-6 lg:grid-cols-3">
-        <div className="space-y-4 lg:col-span-2">
-          <div className="rounded-2xl border border-brand-50 bg-white p-6">
-            <h3 className="mb-4 font-display text-lg font-medium text-ink">{t("checkout.shipping")}</h3>
+    <div className="space-y-5">
+      <PageHeader title={t("checkout.title")} icon={ShieldCheck} />
+      <form onSubmit={placeOrder} className="grid gap-5 lg:grid-cols-3">
+        <Stagger className="min-w-0 space-y-5 lg:col-span-2">
+          <StaggerItem className="hg-card p-5 sm:p-6">
+            <h3 className="mb-4 flex items-center gap-2.5 font-display text-lg font-semibold text-ink">
+              <span className="hg-icon-chip !h-9 !w-9 !rounded-xl"><MapPin size={18} /></span> {t("checkout.shipping")}
+            </h3>
             <div className="grid gap-4 sm:grid-cols-2">
               <F label={t("auth.fullName")} value={addr.full_name} onChange={set("full_name")} req testid="co-name" />
               <F label={t("auth.mobile")} value={addr.mobile} onChange={set("mobile")} req testid="co-mobile" />
@@ -143,51 +158,72 @@ export default function Checkout() {
               <F label={t("auth.state")} value={addr.state} onChange={set("state")} req testid="co-state" />
               <F label={t("auth.pincode")} value={addr.pincode} onChange={set("pincode")} req testid="co-pincode" />
             </div>
-          </div>
-        </div>
-        <div className="h-fit rounded-2xl border border-brand-50 bg-white p-6">
-          <h3 className="font-display text-lg font-medium text-ink">{t("cart.summary")}</h3>
-          <div className="mt-4 space-y-2" data-testid="payment-method">
-            <div className="text-xs font-semibold uppercase tracking-wide text-muted2">{t("checkout.payBy")}</div>
-            {[["online", t("checkout.payOnline")], ["cod", t("checkout.payCod")]].map(([k, label]) => (
-              <button key={k} type="button" onClick={() => setMethod(k)} data-testid={`pay-method-${k}`}
-                className={`flex w-full items-center justify-between rounded-xl border px-4 py-3 text-left text-sm transition-colors ${method === k ? "border-brand bg-brand-50/60 font-semibold text-forest" : "border-brand-50 text-muted2 hover:bg-brand-50/40"}`}>
-                <span>{label}</span>
-                {k === "cod" && codFee > 0 && <span className="text-xs text-gold">+{money(codFee)}</span>}
-              </button>
-            ))}
-            {method === "cod" && <p className="rounded-lg bg-gold-light/50 px-3 py-2 text-xs text-ink" data-testid="cod-note">{t("checkout.codNote")}</p>}
-          </div>
+          </StaggerItem>
 
+          <StaggerItem className="hg-card p-5 sm:p-6">
+            <h3 className="mb-4 flex items-center gap-2.5 font-display text-lg font-semibold text-ink">
+              <span className="hg-icon-chip !h-9 !w-9 !rounded-xl"><Wallet size={18} /></span> {t("checkout.payBy")}
+            </h3>
+            <div className="grid gap-3 sm:grid-cols-2" data-testid="payment-method" role="radiogroup" aria-label={t("checkout.payBy")}>
+              {methods.map(({ k, label, icon: Icon }) => {
+                const on = method === k;
+                return (
+                  <motion.button key={k} type="button" onClick={() => setMethod(k)} data-testid={`pay-method-${k}`}
+                    role="radio" aria-checked={on} whileTap={{ scale: 0.98 }}
+                    className={`relative flex w-full min-w-0 items-center gap-3 rounded-2xl p-4 text-left text-sm transition-all ${on ? "bg-hg-violet/15 ring-2 ring-hg-violet" : "hg-tile ring-1 ring-transparent hover:ring-hg-lavender/30"}`}>
+                    <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${on ? "bg-hg-violet text-white" : "bg-brand-50 text-hg-violet dark:text-hg-lavender"}`}><Icon size={18} /></span>
+                    <span className="min-w-0 flex-1">
+                      <span className={`block font-semibold ${on ? "text-ink" : "text-muted2"}`}>{label}</span>
+                      {k === "cod" && codFee > 0 && <span className="block text-xs text-hg-gold">+{money(codFee)} {t("checkout.codFee")}</span>}
+                    </span>
+                    <span className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full transition-colors ${on ? "bg-hg-violet text-white" : "ring-1 ring-brand-50"}`}>
+                      <AnimatePresence>{on && <motion.span initial={{ scale: 0 }} animate={{ scale: 1 }} exit={{ scale: 0 }}><Check size={14} strokeWidth={3} /></motion.span>}</AnimatePresence>
+                    </span>
+                  </motion.button>
+                );
+              })}
+            </div>
+            {method === "cod" && (
+              <motion.p initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}
+                className="mt-3 rounded-xl bg-hg-gold/10 px-3 py-2.5 text-xs text-ink ring-1 ring-hg-gold/25" data-testid="cod-note">{t("checkout.codNote")}</motion.p>
+            )}
+          </StaggerItem>
+        </Stagger>
+
+        <motion.div initial={{ opacity: 0, y: 14 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, delay: 0.12, ease: [0.16, 1, 0.3, 1] }}
+          className="hg-card h-fit min-w-0 p-5 sm:p-6 lg:sticky lg:top-24">
+          <h3 className="font-display text-lg font-semibold text-ink">{t("cart.summary")}</h3>
           <div className="mt-4 space-y-2 text-sm">
             {items.map((i) => (
-              <div key={i.product_id} className="flex justify-between text-muted2"><span className="line-clamp-1">{(lang === "hi" && i.name_hi ? i.name_hi : i.name)} ×{i.quantity}</span><span>{money(i.price * i.quantity)}</span></div>
+              <div key={i.product_id} className="flex justify-between gap-3 text-muted2"><span className="line-clamp-1 min-w-0">{(lang === "hi" && i.name_hi ? i.name_hi : i.name)} ×{i.quantity}</span><span className="shrink-0 tabular-nums">{money(i.price * i.quantity)}</span></div>
             ))}
             <div className="my-2 border-t border-brand-50" />
-            <div className="flex justify-between text-muted2"><span>{t("order.subtotal")}</span><span>{money(subtotal)}</span></div>
-            <div className="flex justify-between text-muted2"><span>{t("order.gst")} ({gstPct}%)</span><span>{money(gst)}</span></div>
-            {method === "cod" && codFee > 0 && <div className="flex justify-between text-muted2" data-testid="cod-fee-row"><span>{t("checkout.codFee")}</span><span>{money(codFee)}</span></div>}
+            <div className="flex justify-between text-muted2"><span>{t("order.subtotal")}</span><span className="tabular-nums">{money(subtotal)}</span></div>
+            <div className="flex justify-between text-muted2"><span>{t("order.gst")} ({gstPct}%)</span><span className="tabular-nums">{money(gst)}</span></div>
+            {method === "cod" && codFee > 0 && <div className="flex justify-between text-muted2" data-testid="cod-fee-row"><span>{t("checkout.codFee")}</span><span className="tabular-nums">{money(codFee)}</span></div>}
             <div className="my-2 border-t border-brand-50" />
-            <div className="flex justify-between font-display text-lg font-semibold text-forest"><span>{t("order.total")}</span><span>{money(total + (method === "cod" ? codFee : 0))}</span></div>
+            <div className="flex justify-between font-display text-lg font-semibold text-ink"><span>{t("order.total")}</span><span className="tabular-nums text-hg-violet dark:text-hg-lavender">{money(total + (method === "cod" ? codFee : 0))}</span></div>
           </div>
-          <Button type="submit" disabled={loading} className="mt-6 w-full rounded-full bg-forest hover:bg-brand" data-testid="place-order-btn">
-            <CreditCard size={16} className="mr-1.5" /> {loading ? t("common.loading") : t("checkout.placeOrder")}
-          </Button>
+          <motion.div {...pressable} className="mt-6">
+            <Button type="submit" disabled={loading} className="hg-btn h-11 w-full rounded-full px-6" data-testid="place-order-btn">
+              <CreditCard size={16} className="mr-1.5" /> {loading ? t("common.loading") : t("checkout.placeOrder")}
+            </Button>
+          </motion.div>
           {method === "online" && <div className="mt-4 border-t border-brand-50 pt-4">
             <div className="mb-2 text-center text-xs font-medium uppercase tracking-wide text-muted2">{t("checkout.orPayDirectly")}</div>
-            <Button type="button" onClick={razorpayPay} disabled={loading} className="mb-2 w-full rounded-full bg-forest hover:bg-brand" data-testid="razorpay-pay-btn">
+            <Button type="button" onClick={razorpayPay} disabled={loading} className="hg-btn mb-2 h-auto min-h-11 w-full whitespace-normal rounded-full px-5 py-2.5" data-testid="razorpay-pay-btn">
               Pay Online (Card / UPI / Netbanking)
             </Button>
-            <Button type="button" onClick={upiPay} disabled={loading} variant="outline" className="w-full rounded-full border-forest/30 text-forest hover:bg-brand-50" data-testid="upi-pay-btn">
+            <Button type="button" onClick={upiPay} disabled={loading} variant="outline" className="h-11 w-full rounded-full border-brand-50 bg-transparent text-ink" data-testid="upi-pay-btn">
               Pay via UPI
             </Button>
           </div>}
-        </div>
+        </motion.div>
       </form>
     </div>
   );
 }
 
 function F({ label, value, onChange, req, testid }) {
-  return <div><Label className="text-sm text-ink">{label}</Label><Input value={value} onChange={onChange} required={req} className="mt-1.5 h-11 rounded-lg focus-visible:ring-brand" data-testid={testid} /></div>;
+  return <div><Label className="text-sm text-ink">{label}</Label><Input value={value} onChange={onChange} required={req} className="mt-1.5" data-testid={testid} /></div>;
 }

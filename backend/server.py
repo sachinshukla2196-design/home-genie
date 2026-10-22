@@ -11,6 +11,7 @@ import auth_routes
 import shop_routes
 import wallet_routes
 import admin_routes
+import vendor_routes
 import storage
 
 logging.basicConfig(level=logging.INFO,
@@ -58,6 +59,7 @@ app.include_router(auth_routes.router)
 app.include_router(shop_routes.router)
 app.include_router(wallet_routes.router)
 app.include_router(admin_routes.router)
+app.include_router(vendor_routes.router)
 app.include_router(storage.router)
 import cron_routes
 app.include_router(cron_routes.router)

@@ -7,8 +7,7 @@ import re
 import secrets
 from core import hash_password, next_distributor_id, get_or_create_wallet
 from fastapi import APIRouter, HTTPException, Request, Depends
-from fastapi.responses import StreamingResponse, FileResponse
-import os as _os
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
@@ -18,14 +17,6 @@ from core import (db, now_iso, new_id, require_admin, get_settings,
                   clean_user, mask_aadhaar)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
-
-
-@router.get("/final-report.pdf")
-async def final_report_pdf(admin: dict = Depends(require_admin)):
-    path = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "FINAL_APPLICATION_REPORT.pdf")
-    if not _os.path.exists(path):
-        raise HTTPException(status_code=404, detail="Report not found.")
-    return FileResponse(path, media_type="application/pdf", filename="HOME_GENIES_Report.pdf")
 
 
 def _mask_pan(p: str) -> str:
@@ -55,9 +46,9 @@ async def admin_dashboard(admin: dict = Depends(require_admin)):
     settings = await get_settings()
     today = datetime.now(timezone.utc).date().isoformat()
 
-    total_users = await db.users.count_documents({"role": {"$in": ["distributor", "customer"]}})
-    red_users = await db.users.count_documents({"status": "red", "role": {"$in": ["distributor", "customer"]}})
-    green_users = await db.users.count_documents({"status": "green", "role": {"$in": ["distributor", "customer"]}})
+    total_users = await db.users.count_documents({"role": {"$in": ["distributor", "customer", "vendor"]}})
+    red_users = await db.users.count_documents({"status": "red", "role": {"$in": ["distributor", "customer", "vendor"]}})
+    green_users = await db.users.count_documents({"status": "green", "role": {"$in": ["distributor", "customer", "vendor"]}})
     pending_kyc = await db.kyc_records.count_documents({"status": "pending"})
     pending_wd = await db.withdrawal_requests.count_documents({"status": {"$in": ["pending", "under_review"]}})
 
@@ -90,7 +81,7 @@ async def admin_dashboard(admin: dict = Depends(require_admin)):
 # ---------------- Users ----------------
 @router.get("/users")
 async def admin_users(status: Optional[str] = None, admin: dict = Depends(require_admin)):
-    q = {"role": {"$in": ["distributor", "customer"]}}
+    q = {"role": {"$in": ["distributor", "customer", "vendor"]}}
     if status:
         q["status"] = status
     users = await db.users.find(q, {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(1000)
@@ -739,7 +730,7 @@ async def clear_audit_logs(request: Request, admin: dict = Depends(require_admin
 
 # ---------------- Reports ----------------
 REPORTS = {
-    "registrations": ("users", {"role": {"$in": ["distributor", "customer"]}},
+    "registrations": ("users", {"role": {"$in": ["distributor", "customer", "vendor"]}},
                       ["distributor_id", "full_name", "email", "mobile", "status", "state", "city", "created_at"]),
     "sales": ("orders", {"payment_status": "paid"},
               ["order_number", "distributor_id", "subtotal", "gst_amount", "total", "status", "created_at"]),

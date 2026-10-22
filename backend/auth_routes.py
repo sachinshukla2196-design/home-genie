@@ -1,7 +1,6 @@
 """Authentication & registration routes."""
 import os
 import re
-import hmac
 import random
 import httpx
 from datetime import datetime, timezone, timedelta
@@ -16,7 +15,6 @@ from providers import otp_create, otp_verify, send_account_id_sms
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-ADMIN_PASSCODE = os.environ.get("ADMIN_PASSCODE")
 ADMIN_ROLES = {"super_admin", "admin", "accounts_admin", "support_admin"}
 
 
@@ -268,6 +266,13 @@ async def login(body: LoginBody, request: Request):
     if not user or not verify_password(body.password, user.get("password_hash", "")):
         await db.login_attempts.update_one({"identifier": ident},
                                            {"$inc": {"count": 1}, "$set": {"last": now_iso()}}, upsert=True)
+        # A registration request becomes an account only on admin approval. Explain that instead of
+        # "invalid credentials" — but only when the password matches, so emails can't be probed.
+        if not user:
+            pending = await db.registration_requests.find_one(
+                {"status": "pending", "$or": [{"email": ident}, {"mobile": body.email.strip()}]})
+            if pending and verify_password(body.password, pending.get("password_hash", "")):
+                raise HTTPException(status_code=403, detail="Your registration is waiting for admin approval. You can log in once it is approved.")
         raise HTTPException(status_code=401, detail="Invalid credentials. Use your HomeGenie ID / email / mobile and password.")
     if user.get("blocked"):
         raise HTTPException(status_code=403, detail="Your account has been blocked. Please contact the admin.")
@@ -325,12 +330,12 @@ async def google_session(body: GoogleSessionBody, request: Request):
 class AdminLoginBody(BaseModel):
     username: str
     password: str
-    passcode: str
+    passcode: str = ""  # no longer required; accepted and ignored for older clients
 
 
 @router.post("/admin-login")
 async def admin_login(body: AdminLoginBody, request: Request):
-    """Secured admin entry: username + password + separate admin passcode. Admin roles only."""
+    """Admin entry: username/email + password. Admin roles only (lockout after 5 failed attempts)."""
     uname = (body.username or "").strip()
     ukey = uname.lower()
     ident = f"admin:{ukey}"
@@ -344,18 +349,16 @@ async def admin_login(body: AdminLoginBody, request: Request):
             raise HTTPException(status_code=429, detail="Too many failed attempts. Please try again in about 15 minutes.")
         await db.login_attempts.delete_one({"identifier": ident})
 
-    passcode_ok = bool(ADMIN_PASSCODE) and hmac.compare_digest((body.passcode or "").strip(), ADMIN_PASSCODE)
     user = await db.users.find_one({"$or": [{"username": uname}, {"email": ukey}]})
     valid = bool(
         user
         and verify_password(body.password, user.get("password_hash", ""))
         and user.get("role") in ADMIN_ROLES
-        and passcode_ok
     )
     if not valid:
         await db.login_attempts.update_one({"identifier": ident},
                                            {"$inc": {"count": 1}, "$set": {"last": now_iso()}}, upsert=True)
-        raise HTTPException(status_code=401, detail="Invalid admin credentials or passcode.")
+        raise HTTPException(status_code=401, detail="Invalid admin credentials.")
 
     await db.login_attempts.delete_one({"identifier": ident})
     await log_audit(clean_user(user), "admin_login", "user", user["id"], request=request)

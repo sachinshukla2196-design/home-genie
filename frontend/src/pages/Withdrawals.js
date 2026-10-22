@@ -1,15 +1,23 @@
 import React, { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
-import { Banknote, Clock, CheckCircle2, XCircle, ShieldCheck } from "lucide-react";
+import { Banknote, Clock, CheckCircle2, XCircle, ShieldCheck, Lock, History } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { EmptyState } from "@/components/EmptyState";
+import { PageHeader, SectionCard } from "@/components/PageHeader";
+import { Stagger, StaggerItem, pressable } from "@/components/motion";
 import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
 import { API, apiError } from "@/lib/api";
 
 const ICON = { pending: Clock, approved: CheckCircle2, paid: CheckCircle2, rejected: XCircle };
+const PILL = {
+  pending: "bg-hg-gold/15 text-hg-gold ring-hg-gold/30",
+  approved: "bg-hg-violet/15 text-hg-violet ring-hg-lavender/30 dark:text-hg-lavender",
+  paid: "bg-hg-success/15 text-hg-success ring-hg-success/30",
+  rejected: "bg-danger/10 text-danger ring-danger/25",
+};
 
 export default function Withdrawals() {
   const { t } = useI18n();
@@ -43,64 +51,76 @@ export default function Withdrawals() {
   const available = Number(w?.available_balance || 0);
 
   return (
-    <div className="space-y-6" data-testid="withdrawals-page">
-      <h1 className="font-display text-2xl font-semibold text-ink">{t("withdraw.title")}</h1>
+    <div className="mx-auto max-w-3xl space-y-5" data-testid="withdrawals-page">
+      <PageHeader title={t("withdraw.title")} icon={Banknote} />
 
-      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }}
-        className="rounded-2xl hg-royal p-6 text-white">
-        <div className="text-sm text-white/70">{t("wallet.available")}</div>
-        <div className="mt-1 font-display text-4xl font-semibold text-gold" data-testid="wd-available">
-          {available.toLocaleString("en-IN")} pts
+      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }}
+        className="hg-hero hg-sheen relative overflow-hidden rounded-3xl p-6 text-white sm:p-7">
+        <span className="hg-orb -right-10 -top-12 h-40 w-40 bg-hg-pink/30" />
+        <div className="relative">
+          <div className="text-sm font-medium uppercase tracking-wider text-white/80">{t("wallet.available")}</div>
+          <div className="mt-1 font-display text-4xl font-bold tabular-nums sm:text-5xl" data-testid="wd-available">
+            {available.toLocaleString("en-IN")} pts
+          </div>
+          <p className="mt-2 text-xs text-white/75">{t("wallet.rate")}</p>
         </div>
-        <p className="mt-2 text-xs text-white/70">{t("wallet.rate")}</p>
       </motion.div>
 
       {user?.status !== "green" ? (
-        <div className="rounded-2xl border border-brand-50 bg-gold-light/40 p-5 text-sm text-ink" data-testid="wd-locked">
-          {t("referral.lockedNote")}
-        </div>
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.08 }}
+          className="hg-card flex items-start gap-3 p-5 text-sm text-ink" data-testid="wd-locked">
+          <span className="hg-icon-chip !h-9 !w-9 shrink-0 !rounded-xl !bg-hg-gold/15 !text-hg-gold"><Lock size={17} /></span>
+          <span className="pt-1.5">{t("referral.lockedNote")}</span>
+        </motion.div>
       ) : (
-        <form onSubmit={submit} className="rounded-2xl border border-brand-50 bg-white p-6 shadow-card" data-testid="wd-form">
-          <h2 className="font-display text-lg font-medium text-ink">{t("withdraw.request")}</h2>
-          <p className="mt-1 text-sm text-muted2">{t("withdraw.note")}</p>
-          <div className="mt-4 flex flex-wrap gap-3">
+        <motion.form initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.08, duration: 0.4 }}
+          onSubmit={submit} className="hg-card p-5 sm:p-6" data-testid="wd-form">
+          <h2 className="flex items-center gap-2.5 font-display text-lg font-semibold text-ink">
+            <span className="hg-icon-chip !h-9 !w-9 !rounded-xl"><Banknote size={18} /></span> {t("withdraw.request")}
+          </h2>
+          <p className="mt-2 text-sm text-muted2">{t("withdraw.note")}</p>
+          <div className="mt-4 flex flex-col gap-3 sm:flex-row">
             <Input type="number" min="1" value={amount} onChange={(e) => setAmount(e.target.value)}
-              placeholder={t("withdraw.amount")} className="h-11 max-w-[220px] rounded-lg" data-testid="wd-amount" />
-            <Button type="submit" disabled={busy} className="btn-grad h-11 rounded-full px-6" data-testid="wd-submit">
-              <Banknote size={16} className="mr-1.5" /> {t("withdraw.request")}
-            </Button>
+              placeholder={t("withdraw.amount")} aria-label={t("withdraw.amount")} className="w-full sm:max-w-[240px]" data-testid="wd-amount" />
+            <motion.div {...pressable}>
+              <Button type="submit" disabled={busy} className="hg-btn h-11 w-full rounded-full px-6 sm:w-auto" data-testid="wd-submit">
+                <Banknote size={16} className="mr-1.5" /> {t("withdraw.request")}
+              </Button>
+            </motion.div>
           </div>
-          <div className="mt-4 flex items-start gap-2 rounded-lg bg-brand-50/50 p-3 text-xs text-muted2">
-            <ShieldCheck size={15} className="mt-0.5 shrink-0 text-brand" />
+          <div className="hg-tile mt-4 flex items-start gap-2 p-3 text-xs text-muted2">
+            <ShieldCheck size={15} className="mt-0.5 shrink-0 text-hg-violet dark:text-hg-lavender" />
             <span>{t("withdraw.kycNote")}</span>
           </div>
-        </form>
+        </motion.form>
       )}
 
-      <div className="rounded-2xl border border-brand-50 bg-white p-6 shadow-card">
-        <h2 className="font-display text-lg font-medium text-ink">{t("withdraw.history")}</h2>
+      <SectionCard title={t("withdraw.history")} icon={History}>
         {list.length === 0 ? (
           <EmptyState icon={Banknote} title={t("withdraw.empty")} testid="wd-empty" />
         ) : (
-          <div className="mt-4 space-y-3">
+          <Stagger className="space-y-2.5">
             {list.map((r) => {
               const Icon = ICON[r.status] || Clock;
               return (
-                <div key={r.id} className="flex items-center justify-between rounded-lg border border-brand-50 p-3" data-testid={`wd-row-${r.request_number}`}>
-                  <div>
-                    <div className="font-medium text-ink">{r.request_number}</div>
-                    <div className="text-xs capitalize text-muted2">{(r.created_at || "").slice(0, 10)} · {r.status}</div>
+                <StaggerItem key={r.id} className="hg-tile flex items-center justify-between gap-3 p-3.5" data-testid={`wd-row-${r.request_number}`}>
+                  <div className="flex min-w-0 items-center gap-3">
+                    <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ring-1 ${PILL[r.status] || PILL.pending}`}><Icon size={16} /></span>
+                    <div className="min-w-0">
+                      <div className="truncate font-medium text-ink">{r.request_number}</div>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted2">
+                        <span>{(r.created_at || "").slice(0, 10)}</span>
+                        <span className={`rounded-full px-2.5 py-0.5 font-semibold capitalize ring-1 ${PILL[r.status] || PILL.pending}`}>{r.status}</span>
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Icon size={16} className={r.status === "rejected" ? "text-danger" : "text-brand"} />
-                    <span className="font-display font-semibold text-forest">{Number(r.amount).toLocaleString("en-IN")} pts</span>
-                  </div>
-                </div>
+                  <span className="shrink-0 font-display font-semibold tabular-nums text-ink">{Number(r.amount).toLocaleString("en-IN")} pts</span>
+                </StaggerItem>
               );
             })}
-          </div>
+          </Stagger>
         )}
-      </div>
+      </SectionCard>
     </div>
   );
 }

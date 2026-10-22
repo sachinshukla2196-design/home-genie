@@ -28,7 +28,7 @@ STRIPE_API_KEY = os.environ.get("STRIPE_API_KEY", "sk_test_emergent")
 # ---------------- Products ----------------
 @router.get("/products")
 async def list_products(category: Optional[str] = None, active: bool = True):
-    q = {}
+    q = {"approval_status": {"$in": [None, "approved"]}}
     if active:
         q["is_active"] = True
     if category:
@@ -39,7 +39,7 @@ async def list_products(category: Optional[str] = None, active: bool = True):
 
 @router.get("/products/{product_id}")
 async def get_product(product_id: str):
-    p = await db.products.find_one({"id": product_id}, {"_id": 0})
+    p = await db.products.find_one({"id": product_id, "approval_status": {"$in": [None, "approved"]}}, {"_id": 0})
     if not p:
         raise HTTPException(status_code=404, detail="Product not found.")
     return p
@@ -87,7 +87,7 @@ async def create_order(body: CreateOrder, request: Request, user: dict = Depends
         {"id": {"$in": product_ids}}, {"_id": 0}).to_list(len(product_ids) or 1)}
     for it in body.items:
         p = products.get(it.product_id)
-        if not p or not p.get("is_active"):
+        if not p or not p.get("is_active") or p.get("approval_status", "approved") != "approved":
             raise HTTPException(status_code=400, detail="A product in your cart is unavailable.")
         price = float(p["selling_price"])
         total = price * it.quantity
@@ -97,6 +97,8 @@ async def create_order(body: CreateOrder, request: Request, user: dict = Depends
             "image": (p.get("images") or [None])[0], "price": price, "quantity": it.quantity,
             "variant": (it.variant or "").strip(),
             "total": round(total, 2),
+            # order-time snapshot of who fulfils this line (None = platform-fulfilled)
+            "vendor_id": p.get("vendor_id"), "vendor_name": p.get("vendor_name"),
         })
 
     cod = (body.payment_method or "online").lower() == "cod"
@@ -138,6 +140,32 @@ async def create_order(body: CreateOrder, request: Request, user: dict = Depends
         "invoice_number": None,
         "created_at": now_iso(), "updated_at": now_iso(),
     }
+    # One fulfilment group per vendor in the cart; platform-owned lines stay with admin.
+    vendor_ids = []
+    for li in line_items:
+        if li.get("vendor_id") and li["vendor_id"] not in vendor_ids:
+            vendor_ids.append(li["vendor_id"])
+    order["fulfilments"] = [{
+        "vendor_id": v, "vendor_name": next(li.get("vendor_name") for li in line_items if li.get("vendor_id") == v),
+        "status": "new", "carrier": "", "tracking_number": "", "tracking_url": "", "note": "",
+        "events": [{"status": "new", "at": now_iso(), "by": "system", "note": ""}],
+    } for v in vendor_ids]
+
+    # Reserve stock atomically per line; roll back earlier reservations if any line is short.
+    reserved = []
+    for li in line_items:
+        res = await db.products.update_one({"id": li["product_id"], "stock": {"$gte": li["quantity"]}},
+                                           {"$inc": {"stock": -li["quantity"]}})
+        if res.modified_count != 1:
+            for pid, q in reserved:
+                await db.products.update_one({"id": pid}, {"$inc": {"stock": q}})
+            raise HTTPException(status_code=409, detail=f"Not enough stock for {li['name']}. Please reduce the quantity.")
+        reserved.append((li["product_id"], li["quantity"]))
+    order["stock_reserved"] = True
+    for pid, q in reserved:
+        await db.stock_movements.insert_one({"id": new_id(), "product_id": pid, "delta": -q, "reason": "order_placed",
+                                             "order_id": oid, "actor_id": user["id"], "created_at": now_iso()})
+
     await db.orders.insert_one(dict(order))
     await log_audit(user, "order_created", "order", oid, new_value={"total": grand_total}, request=request)
     order.pop("_id", None)

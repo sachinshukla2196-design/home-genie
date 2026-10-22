@@ -188,6 +188,39 @@ async def my_badge(user: dict = Depends(get_current_user)):
     return await monthly_badge(user["id"])
 
 
+def _public_name(full_name: str) -> str:
+    """First name + last initial, so the leaderboard never exposes a full identity."""
+    parts = (full_name or "").split()
+    if not parts:
+        return "HomeGenie"
+    return parts[0] if len(parts) == 1 else f"{parts[0]} {parts[-1][0]}."
+
+
+@router.get("/leaderboard")
+async def leaderboard(user: dict = Depends(get_current_user)):
+    """Top HomeGenies by this month's paid sales through their share link (pre-GST),
+    the same metric the monthly badges use. Real orders only, no seeded rows."""
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    rows = await db.orders.aggregate([
+        {"$match": {"seller_user_id": {"$nin": [None, ""]}, "payment_status": "paid",
+                    "created_at": {"$regex": f"^{month}"}}},
+        {"$group": {"_id": "$seller_user_id", "sales": {"$sum": "$subtotal"}, "orders": {"$sum": 1}}},
+        {"$sort": {"sales": -1}},
+        {"$limit": 500},
+    ]).to_list(500)
+
+    ids = [r["_id"] for r in rows]
+    people = {u["id"]: u for u in await db.users.find(
+        {"id": {"$in": ids}}, {"_id": 0, "id": 1, "full_name": 1, "city": 1}).to_list(len(ids) or 1)}
+
+    ranked = [{"rank": i + 1, "name": _public_name(people.get(r["_id"], {}).get("full_name")),
+               "city": people.get(r["_id"], {}).get("city") or "",
+               "sales": round(float(r["sales"] or 0), 2), "orders": r["orders"],
+               "is_me": r["_id"] == user["id"]} for i, r in enumerate(rows)]
+    me = next((r for r in ranked if r["is_me"]), None)
+    return {"month": month, "top": ranked[:10], "me": me, "total_sellers": len(ranked)}
+
+
 @router.get("/dashboard")
 async def dashboard(user: dict = Depends(get_current_user)):
     settings = await get_settings()

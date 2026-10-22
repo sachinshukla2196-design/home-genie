@@ -4,10 +4,11 @@ import { Toaster } from "sonner";
 import { I18nProvider } from "@/context/I18nContext";
 import { AuthProvider } from "@/context/AuthContext";
 import { CartProvider } from "@/context/CartContext";
-import { ThemeProvider } from "@/context/ThemeContext";
+import { ThemeProvider, useTheme } from "@/context/ThemeContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
 import { AppLayout } from "@/components/AppLayout";
 import { AdminLayout } from "@/components/AdminLayout";
+import { VendorLayout, useVendor } from "@/components/VendorLayout";
 
 import Landing from "@/pages/Landing";
 import Login from "@/pages/Login";
@@ -28,6 +29,7 @@ import Wallet from "@/pages/Wallet";
 import Referral from "@/pages/Referral";
 import Notifications from "@/pages/Notifications";
 import Profile from "@/pages/Profile";
+import Rewards from "@/pages/Rewards";
 
 import AdminDashboard from "@/pages/admin/AdminDashboard";
 import AdminUsers from "@/pages/admin/AdminUsers";
@@ -39,6 +41,12 @@ import AdminAuditLogs from "@/pages/admin/AdminAuditLogs";
 import Legal from "@/pages/Legal";
 import Withdrawals from "@/pages/Withdrawals";
 import AdminWithdrawals from "@/pages/admin/AdminWithdrawals";
+import AdminVendors from "@/pages/admin/AdminVendors";
+import VendorDashboard from "@/pages/vendor/VendorDashboard";
+import VendorProducts from "@/pages/vendor/VendorProducts";
+import VendorOrders from "@/pages/vendor/VendorOrders";
+import VendorProfile from "@/pages/vendor/VendorProfile";
+import { VendorRegister, VendorLogin } from "@/pages/vendor/VendorAuth";
 
 function App() {
   return (
@@ -46,7 +54,7 @@ function App() {
       <ThemeProvider>
         <AuthProvider>
           <CartProvider>
-            <Toaster position="top-center" richColors />
+            <ThemedToaster />
             <BrowserRouter>
               <AppRoutes />
             </BrowserRouter>
@@ -54,6 +62,25 @@ function App() {
         </AuthProvider>
       </ThemeProvider>
     </I18nProvider>
+  );
+}
+
+// Toasts follow the light/dark theme and use the glass styling.
+// Vendor routes other than the profile need an approved vendor account; until then, onboarding.
+function VendorGate({ children }) {
+  const { vendor } = useVendor();
+  if (vendor === null) return null;
+  return vendor && vendor.status === "approved" ? children : <Navigate to="/vendor/profile" replace />;
+}
+function VendorHome() {
+  return <VendorGate><VendorDashboard /></VendorGate>;
+}
+
+function ThemedToaster() {
+  const { theme } = useTheme();
+  return (
+    <Toaster position="top-center" richColors theme={theme} closeButton
+      toastOptions={{ className: "!rounded-2xl !border !border-white/15 !backdrop-blur-xl !shadow-2xl" }} />
   );
 }
 
@@ -83,6 +110,7 @@ function AppRoutes() {
                   <Route path="checkout" element={<Checkout />} />
                   <Route path="orders" element={<Orders />} />
                   <Route path="orders/:id" element={<OrderDetail />} />
+                  <Route path="rewards" element={<Rewards />} />
                   <Route path="wallet" element={<Wallet />} />
                   <Route path="withdrawals" element={<Withdrawals />} />
                   <Route path="referral" element={<Referral />} />
@@ -96,9 +124,19 @@ function AppRoutes() {
                   <Route path="products" element={<AdminProducts />} />
                   <Route path="orders" element={<AdminOrders />} />
                   <Route path="withdrawals" element={<AdminWithdrawals />} />
+                  <Route path="vendors" element={<AdminVendors />} />
                   <Route path="reports" element={<AdminReports />} />
                   <Route path="settings" element={<AdminSettings />} />
                   <Route path="audit" element={<AdminAuditLogs />} />
+                </Route>
+
+                <Route path="/vendor/login" element={<VendorLogin />} />
+                <Route path="/vendor/register" element={<VendorRegister />} />
+                <Route path="/vendor" element={<ProtectedRoute vendor><VendorLayout /></ProtectedRoute>}>
+                  <Route index element={<VendorHome />} />
+                  <Route path="orders" element={<VendorGate><VendorOrders /></VendorGate>} />
+                  <Route path="products" element={<VendorGate><VendorProducts /></VendorGate>} />
+                  <Route path="profile" element={<VendorProfile />} />
                 </Route>
 
                 <Route path="*" element={<Navigate to="/" replace />} />

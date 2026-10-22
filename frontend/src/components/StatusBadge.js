@@ -8,11 +8,11 @@ export function StatusBadge({ status, size = "md" }) {
   return (
     <span
       data-testid="status-badge"
-      className={`inline-flex items-center gap-1.5 rounded-full font-semibold ${pad} ${
-        green ? "bg-brand-50 text-brand-700" : "bg-danger/10 text-danger"
+      className={`inline-flex items-center gap-1.5 rounded-full font-semibold ring-1 ${pad} ${
+        green ? "bg-hg-success/15 text-hg-success ring-hg-success/30" : "bg-hg-gold/15 text-hg-gold ring-hg-gold/30"
       }`}
     >
-      <span className={`h-1.5 w-1.5 rounded-full ${green ? "bg-brand" : "bg-danger"}`} />
+      <span className={`h-1.5 w-1.5 rounded-full ${green ? "bg-hg-success" : "bg-hg-gold"}`} />
       {green ? t("status.green") : t("status.red")}
     </span>
   );

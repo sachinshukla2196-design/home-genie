@@ -18,6 +18,19 @@ module.exports = {
         sm: 'calc(var(--radius) - 4px)'
       },
       colors: {
+        // HOME GENIES glass palette
+        hg: {
+          bg: '#10091D',
+          bg2: '#190E2B',
+          deep: '#29104D',
+          violet: '#8B3DFF',
+          lavender: '#C69BFF',
+          pink: '#ED9BEA',
+          text2: '#C9BED9',
+          muted: '#9185A4',
+          success: '#55D6A5',
+          gold: '#F2CB4B',
+        },
         forest: '#2E1065',
         brand: {
           DEFAULT: '#6D28D9',
