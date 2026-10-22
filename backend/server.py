@@ -82,8 +82,31 @@ PRODUCT_SEED = []
 CATEGORY_SEED = ["Sarees", "Fashion Products", "Makeup, Beauty & Skincare", "Household Essentials"]
 
 
+# Serverless hosts (Vercel) may not run startup hooks or keep background tasks alive, so there
+# DB initialisation (indexes, categories, admin seed) runs once, inline, on the first request.
+ON_VERCEL = bool(os.environ.get("VERCEL"))
+_init_lock = asyncio.Lock()
+_init_ok = False
+
+
+@app.middleware("http")
+async def _ensure_initialised(request, call_next):
+    global _init_ok
+    if ON_VERCEL and not _init_ok:
+        async with _init_lock:
+            if not _init_ok:
+                try:
+                    await _init_db()
+                    _init_ok = True
+                except Exception as e:  # pragma: no cover - retried on the next request
+                    logger.error(f"DB init failed ({e}); will retry on next request")
+    return await call_next(request)
+
+
 @app.on_event("startup")
 async def startup():
+    if ON_VERCEL:
+        return
     # Run DB initialisation in the background so a transient Atlas hiccup
     # (e.g. "no primary available for writes" during a primary election)
     # can never crash the process before /health can respond. The pod

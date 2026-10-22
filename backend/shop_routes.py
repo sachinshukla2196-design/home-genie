@@ -5,7 +5,10 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel, Field
 from typing import List, Optional
 
-from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionRequest
+try:  # private Emergent package; absent on other hosts (e.g. Vercel) — Stripe checkout is then disabled
+    from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionRequest
+except ImportError:  # pragma: no cover
+    StripeCheckout = CheckoutSessionRequest = None
 
 from core import (db, now_iso, new_id, get_current_user, get_settings, next_sequence,
                   add_wallet_transaction, create_notification, log_audit, require_admin)
@@ -238,7 +241,9 @@ class CheckoutBody(BaseModel):
     origin_url: str
 
 
-def _stripe(request: Request) -> StripeCheckout:
+def _stripe(request: Request):
+    if StripeCheckout is None:
+        raise HTTPException(status_code=503, detail="Card checkout is not available on this server.")
     host = str(request.base_url)
     webhook_url = f"{host}api/webhook/stripe"
     return StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)

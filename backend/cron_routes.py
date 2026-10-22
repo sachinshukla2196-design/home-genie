@@ -10,7 +10,8 @@ from core import db, now_iso, new_id
 log = logging.getLogger("homegenies")
 router = APIRouter(prefix="/api/cron", tags=["cron"])
 
-CRON_SECRET = os.environ.get("WEBHOOK_CRON_SECRET", "")
+# WEBHOOK_CRON_SECRET (Emergent) or CRON_SECRET (Vercel Cron sends it as a Bearer token).
+CRON_SECRET = os.environ.get("WEBHOOK_CRON_SECRET") or os.environ.get("CRON_SECRET", "")
 
 
 def _authorise(request: Request):
@@ -50,3 +51,18 @@ async def release_points(request: Request, background: BackgroundTasks):
                                    "status": "queued", "created_at": now_iso()})
     background.add_task(_run_release, run_id)
     return {"ok": True, "run_id": run_id}
+
+
+@router.get("/release-points")
+async def release_points_vercel(request: Request):
+    """Vercel Cron calls GET once a day. Serverless functions can't run work after responding,
+    so this runs the (idempotent) release inline; one run per UTC day."""
+    _authorise(request)
+    from datetime import datetime, timezone
+    run_id = "vercel-" + datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if await db.cron_runs.find_one({"run_id": run_id, "status": "done"}, {"_id": 0}):
+        return {"ok": True, "duplicate": True, "run_id": run_id}
+    await db.cron_runs.update_one({"run_id": run_id}, {"$setOnInsert": {"id": new_id(), "run_id": run_id, "job": "release-points",
+                                                                       "created_at": now_iso()}, "$set": {"status": "running"}}, upsert=True)
+    await _run_release(run_id)
+    return {"ok": True, "run_id": run_id, "result": (await db.cron_runs.find_one({"run_id": run_id}, {"_id": 0})).get("result")}
