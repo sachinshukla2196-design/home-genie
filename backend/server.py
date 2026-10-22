@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from starlette.middleware.cors import CORSMiddleware
 
 from core import (db, client, now_iso, new_id, hash_password, verify_password,
-                  get_settings, DEFAULT_SETTINGS)
+                  get_settings, DEFAULT_SETTINGS, password_update, log_audit)
 import auth_routes
 import shop_routes
 import wallet_routes
@@ -75,6 +75,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _strong_enough(pw: str) -> bool:
+    return (len(pw) >= 14 and any(c.islower() for c in pw) and any(c.isupper() for c in pw)
+            and any(c.isdigit() for c in pw) and any(not c.isalnum() for c in pw))
 
 
 PRODUCT_SEED = []
@@ -176,13 +181,30 @@ async def _init_db():
                 await db.products.insert_one(doc)
         await db.business_settings.insert_one({"id": "catalogue_bootstrap", "done_at": now_iso()})
 
-    # admin seed — password comes strictly from the environment (no hardcoded fallback)
+    # admin seed — credential comes strictly from the environment (no hardcoded fallback).
+    # Preferred: ADMIN_PASSWORD_HASH (a bcrypt hash from backend/scripts/hash_admin_password.py), so the
+    # plaintext never sits in any env store. ADMIN_PASSWORD (plaintext) is still accepted.
     admin_email = os.environ.get("ADMIN_EMAIL", "").lower()
     admin_password = os.environ.get("ADMIN_PASSWORD")
+    admin_hash = (os.environ.get("ADMIN_PASSWORD_HASH") or "").strip()
     admin_username = os.environ.get("ADMIN_USERNAME") or "admin"
-    if not admin_email or not admin_password:
-        logger.error("ADMIN_EMAIL / ADMIN_PASSWORD not configured; skipping admin seed.")
+    if admin_hash and not admin_hash.startswith(("$2a$", "$2b$", "$2y$")):
+        logger.error("ADMIN_PASSWORD_HASH is not a bcrypt hash; ignoring it.")
+        admin_hash = ""
+    if not admin_email or not (admin_hash or admin_password):
+        logger.error("ADMIN_EMAIL and ADMIN_PASSWORD_HASH (or ADMIN_PASSWORD) not configured; skipping admin seed.")
         return
+    if admin_password and not admin_hash and not _strong_enough(admin_password):
+        logger.warning("ADMIN_PASSWORD is weak (use 14+ chars with upper, lower, digit and symbol). Value not logged.")
+
+    def _env_credential_set():
+        if admin_hash:
+            return {"password_hash": admin_hash, "password_changed_at": now_iso()}
+        return password_update(admin_password)
+
+    def _matches_env(stored_hash: str) -> bool:
+        return stored_hash == admin_hash if admin_hash else verify_password(admin_password, stored_hash)
+
     existing = await db.users.find_one({"$or": [{"email": admin_email},
                                                 {"role": "super_admin", "mobile": "9999999999"}]})
     if existing and existing.get("email") != admin_email:
@@ -194,16 +216,18 @@ async def _init_db():
         await db.users.insert_one({
             "id": new_id(), "distributor_id": "HGADMIN001", "full_name": "Platform Administrator",
             "email": admin_email, "username": admin_username, "mobile": "9999999999",
-            "password_hash": hash_password(admin_password),
+            **_env_credential_set(),
             "role": "super_admin", "status": "green", "mobile_verified": True, "email_verified": True,
             "sponsor_id": None, "sponsor_user_id": None, "kyc_status": "verified",
             "created_at": now_iso(), "updated_at": now_iso(),
         })
         logger.info(f"Seeded admin {admin_email}")
-    elif not verify_password(admin_password, existing.get("password_hash", "")):
+    elif not _matches_env(existing.get("password_hash", "")):
+        # Credential rotated via env: store it and revoke sessions issued with the old password.
         await db.users.update_one({"email": admin_email},
-                                  {"$set": {"password_hash": hash_password(admin_password),
-                                            "role": "super_admin"}})
+                                  {"$set": {**_env_credential_set(), "role": "super_admin", "updated_at": now_iso()}})
+        await log_audit(None, "admin_credential_rotated", "user", existing.get("id", ""))
+        logger.info(f"Admin credential for {admin_email} rotated from environment; older sessions revoked.")
     # always keep the admin username in sync with env
     await db.users.update_one({"email": admin_email}, {"$set": {"username": admin_username}})
 

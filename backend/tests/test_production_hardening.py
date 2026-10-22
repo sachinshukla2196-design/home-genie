@@ -24,9 +24,10 @@ load_dotenv(Path(__file__).resolve().parents[2] / "frontend" / ".env")
 BASE_URL = os.environ["REACT_APP_BACKEND_URL"].rstrip("/")
 API = f"{BASE_URL}/api"
 
-ADMIN_USER = "admin"
-ADMIN_PASS = "fFiiKDF2TBZtiVrwcu"
-ADMIN_PASSCODE = "79258486"
+# Credentials come from the environment; never commit real values here.
+ADMIN_USER = os.environ.get("TEST_ADMIN_USER", "admin")
+ADMIN_PASS = os.environ["TEST_ADMIN_PASSWORD"]
+ADMIN_PASSCODE = os.environ.get("TEST_ADMIN_PASSCODE", "")  # admin passcode is no longer required
 MASTER_ID = "MST000001"
 
 

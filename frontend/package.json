@@ -65,6 +65,7 @@
   "scripts": {
     "dev": "craco start",
     "start": "craco start",
+    "prebuild": "node scripts/check-env.js",
     "build": "craco build",
     "test": "craco test"
   },

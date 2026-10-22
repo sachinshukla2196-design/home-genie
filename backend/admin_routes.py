@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 from core import (db, now_iso, new_id, require_admin, get_settings,
                   add_wallet_transaction, create_notification, log_audit,
-                  clean_user, mask_aadhaar)
+                  clean_user, mask_aadhaar, password_update)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -682,10 +682,13 @@ async def admin_reset_password(user_id: str, body: AdminPwBody, request: Request
     u = await db.users.find_one({"id": user_id})
     if not u:
         raise HTTPException(status_code=404, detail="User not found.")
-    new_pw = (body.password or "").strip() or ("Anj" + "".join(secrets.choice("23456789") for _ in range(5)))
-    if len(new_pw) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters.")
-    await db.users.update_one({"id": user_id}, {"$set": {"password_hash": hash_password(new_pw), "updated_at": now_iso()}})
+    # Generated default: 12 random chars (letters + digits), not a guessable prefix + 5 digits.
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
+    new_pw = (body.password or "").strip() or ("".join(secrets.choice(alphabet) for _ in range(12)))
+    if len(new_pw) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+    # Changing the password also signs the user out everywhere (older sessions are revoked).
+    await db.users.update_one({"id": user_id}, {"$set": {**password_update(new_pw), "updated_at": now_iso()}})
     await db.password_reset_requests.update_many({"user_id": user_id, "status": "pending"},
         {"$set": {"status": "resolved", "resolved_by": admin["id"], "resolved_at": now_iso()}})
     await log_audit(admin, "admin_reset_password", "user", user_id, request=request)

@@ -1,6 +1,8 @@
-# Deploys the website to Vercel on every push to main.
-# Runs with a token from the Vercel account that owns the project, so commits from any author
-# deploy (Vercel's own Git integration blocks non-owner authors on the Hobby plan).
+# MANUAL ONLY. Deploys the website to Vercel with the Vercel CLI.
+# NOTE: this does NOT get around Vercel's Hobby-plan rule for private repos. The CLI sends the
+# commit author with the deployment, and Vercel blocks it unless that author may deploy to the
+# project (verified: an owner-initiated CLI deploy of a non-owner commit was blocked). It only
+# helps once the HEAD commit's author is allowed (owner-authored commit, or a Pro team member).
 #
 # Required GitHub repository secrets (Settings → Secrets and variables → Actions):
 #   VERCEL_TOKEN       – vercel.com/account/tokens (created by the project owner)
@@ -9,11 +11,6 @@
 name: Deploy frontend to Vercel
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "frontend/**"
-      - ".github/workflows/deploy-frontend.yml"
   workflow_dispatch:
 
 concurrency:

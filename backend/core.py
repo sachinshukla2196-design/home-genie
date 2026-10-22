@@ -63,10 +63,12 @@ def verify_password(plain: str, hashed: str) -> bool:
 
 # ---------- jwt ----------
 def create_token(user_id: str) -> str:
+    now = datetime.now(timezone.utc)
     payload = {
         "sub": user_id,
         "type": "access",
-        "exp": datetime.now(timezone.utc) + timedelta(days=7),
+        "iat": now,  # lets a password change revoke sessions issued before it
+        "exp": now + timedelta(days=7),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
 
@@ -101,8 +103,27 @@ async def get_current_user(request: Request) -> dict:
     user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    if _issued_before_password_change(payload, user):
+        raise HTTPException(status_code=401, detail="Your password was changed. Please log in again.")
     user.pop("password_hash", None)
     return user
+
+
+def _issued_before_password_change(payload: dict, user: dict) -> bool:
+    """True for tokens issued before the user's last password change (or legacy tokens without iat)."""
+    changed = user.get("password_changed_at")
+    if not changed:
+        return False
+    try:
+        changed_ts = int(datetime.fromisoformat(changed).timestamp())
+    except ValueError:
+        return False
+    return int(payload.get("iat") or 0) < changed_ts
+
+
+def password_update(new_password: str) -> dict:
+    """$set fields for a password change: bcrypt hash + timestamp that revokes older sessions."""
+    return {"password_hash": hash_password(new_password), "password_changed_at": now_iso()}
 
 
 def require_roles(*roles):

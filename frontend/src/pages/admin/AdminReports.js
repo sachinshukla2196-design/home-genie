@@ -9,7 +9,6 @@ import { useI18n } from "@/context/I18nContext";
 import { API } from "@/lib/api";
 
 const REPORTS = ["registrations", "sales", "orders", "payments", "referrals", "wallet"];
-const BACKEND = process.env.REACT_APP_BACKEND_URL;
 
 export default function AdminReports() {
   const { t } = useI18n();
@@ -22,9 +21,8 @@ export default function AdminReports() {
   }, [report]);
 
   const exportCsv = async () => {
-    const token = localStorage.getItem("anj_token");
-    const res = await fetch(`${BACKEND}/api/admin/reports/${report}/export`, { headers: { Authorization: `Bearer ${token}` } });
-    const blob = await res.blob();
+    // Same API client as the rest of the app (base URL + auth header), so there is one source of truth.
+    const { data: blob } = await API.get(`/admin/reports/${report}/export`, { responseType: "blob" });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement("a"); a.href = url; a.download = `${report}_report.csv`; a.click();
   };
