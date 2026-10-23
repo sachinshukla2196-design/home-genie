@@ -585,10 +585,18 @@ export function SiteFooter({ t, Link, Logo }) {
       <div className="relative border-t border-white/10">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-5 text-xs text-muted2 sm:px-8">
           <span>© {new Date().getFullYear()} HOME GENIES — {t("brand.tagline")}</span>
-          <motion.button {...pressable} onClick={toTop} aria-label="Back to top" data-testid="back-to-top"
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-white/[0.06] text-ink ring-1 ring-white/15 hover:bg-hg-violet/40">
-            <ArrowUp size={16} />
-          </motion.button>
+          <div className="flex items-center gap-4">
+            <span data-testid="powered-by">
+              Powered by{" "}
+              <a href="https://verticalways.in" target="_blank" rel="noopener noreferrer" className="font-semibold text-hg-lavender hover:text-ink hover:underline">
+                Vertical Ways
+              </a>
+            </span>
+            <motion.button {...pressable} onClick={toTop} aria-label="Back to top" data-testid="back-to-top"
+              className="flex h-10 w-10 items-center justify-center rounded-full bg-white/[0.06] text-ink ring-1 ring-white/15 hover:bg-hg-violet/40">
+              <ArrowUp size={16} />
+            </motion.button>
+          </div>
         </div>
       </div>
     </footer>

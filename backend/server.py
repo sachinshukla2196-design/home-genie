@@ -3,6 +3,7 @@ import os
 import asyncio
 import logging
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 
 from core import (db, client, now_iso, new_id, hash_password, verify_password,
@@ -68,13 +69,6 @@ _cors_raw = os.environ.get("CORS_ALLOWED_ORIGINS") or os.environ.get("CORS_ORIGI
 _cors = [o.strip() for o in _cors_raw.split(",") if o.strip() and o.strip() != "*"]
 if not _cors:
     raise RuntimeError("CORS_ORIGINS is not configured with explicit production origin(s).")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_cors,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 def _strong_enough(pw: str) -> bool:
@@ -94,18 +88,39 @@ _init_lock = asyncio.Lock()
 _init_ok = False
 
 
+DB_PING_TIMEOUT = 5  # seconds; keeps an unreachable database from hanging requests past the 60 s limit
+
+
 @app.middleware("http")
 async def _ensure_initialised(request, call_next):
     global _init_ok
-    if ON_VERCEL and not _init_ok:
+    if ON_VERCEL and not _init_ok and request.method != "OPTIONS":
         async with _init_lock:
             if not _init_ok:
+                try:
+                    # One quick reachability check first: when MongoDB is unreachable every init step
+                    # would wait for its own server-selection timeout, adding up to a gateway timeout.
+                    await asyncio.wait_for(client.admin.command("ping"), DB_PING_TIMEOUT)
+                except Exception as e:
+                    logger.error(f"MongoDB unreachable ({type(e).__name__}); returning 503, will retry on next request")
+                    return JSONResponse({"detail": "Service temporarily unavailable. Please try again shortly."}, status_code=503)
                 try:
                     await _init_db()
                     _init_ok = True
                 except Exception as e:  # pragma: no cover - retried on the next request
                     logger.error(f"DB init failed ({e}); will retry on next request")
     return await call_next(request)
+
+
+# Registered after the middleware above so CORS is the OUTERMOST layer: preflights are answered
+# immediately, and every response (including the 503 above) carries the CORS headers.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.on_event("startup")
