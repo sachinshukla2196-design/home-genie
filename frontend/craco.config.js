@@ -70,6 +70,8 @@ if (config.enableHealthCheck) {
 }
 
 let webpackConfig = {
+  // Let Jest resolve the same "@/..." alias the app uses (so component tests can import app code).
+  jest: { configure: { moduleNameMapper: { "^@/(.*)$": "<rootDir>/src/$1" } } },
   eslint: {
     configure: {
       extends: ["plugin:react-hooks/recommended"],

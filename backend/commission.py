@@ -17,8 +17,9 @@ Eligibility (all must hold, else nothing is credited):
   6. Recruitment alone never earns anything - only qualifying product sales do.
 """
 import logging
-from core import (db, now_iso, new_id, money2, get_settings, add_wallet_transaction,
+from core import (db, now_iso, new_id, get_settings, add_wallet_transaction, wallet_apply,
                  create_notification, log_audit)
+from money import to_paise, paise_to_float, mul_pct, paise_of
 
 logger = logging.getLogger("homegenies")
 
@@ -60,7 +61,8 @@ async def distribute_sale_commissions(order: dict, buyer: dict, request=None) ->
         return {"credited": 0, "reason": "seller_not_approved"}
 
     settings = await get_settings()
-    base = float(order.get("subtotal") or 0)
+    base_p = paise_of(order, "subtotal_paise", "subtotal")
+    base = paise_to_float(base_p)
     sym = settings.get("currency_symbol", "Rs ")
     window = int(settings.get(RETURN_WINDOW_KEY, 7))
 
@@ -77,8 +79,9 @@ async def distribute_sale_commissions(order: dict, buyer: dict, request=None) ->
     for person, pct, txn_type, label in plan:
         if not person or pct <= 0:
             continue
-        amount = money2(base * pct / 100.0)
-        if amount <= 0:
+        amount_p = mul_pct(base_p, pct)          # exact, rounded half-up to the paisa
+        amount = paise_to_float(amount_p)
+        if amount_p <= 0:
             continue
         await add_wallet_transaction(
             person["id"], txn_type, amount, "PENDING",
@@ -88,7 +91,8 @@ async def distribute_sale_commissions(order: dict, buyer: dict, request=None) ->
             "id": new_id(), "order_id": order["id"], "order_number": order["order_number"],
             "user_id": person["id"], "distributor_id": person.get("distributor_id"),
             "seller_user_id": seller["id"], "seller_distributor_id": seller.get("distributor_id"),
-            "type": txn_type, "percent": pct, "base_amount": base, "amount": amount,
+            "type": txn_type, "percent": pct, "base_amount": base, "base_paise": base_p,
+            "amount": amount, "amount_paise": amount_p,
             "status": "PENDING", "release_after_days": window,
             "created_at": now_iso(), "released_at": None,
         })
@@ -131,11 +135,10 @@ async def release_due_points(now_days_fn=None) -> dict:
             {"$set": {"status": "RELEASED", "released_at": now_iso()}})
         if claim.modified_count != 1:
             continue
-        amount = float(c["amount"])
-        await db.wallets.update_one(
-            {"user_id": c["user_id"]},
-            {"$inc": {"pending_balance": -amount, "available_balance": amount, "total_earned": amount},
-             "$set": {"updated_at": now_iso()}})
+        amount_p = paise_of(c, "amount_paise", "amount")
+        amount = paise_to_float(amount_p)
+        # amount actually still owed after any clawback is handled by the REVERSED status; this moves the credited amount
+        await wallet_apply(c["user_id"], {"pending_balance": -amount_p, "available_balance": amount_p, "total_earned": amount_p})
         await add_wallet_transaction(
             c["user_id"], "POINTS_RELEASED", amount, "INFO", reference=c["order_id"],
             description=f"Points released for order {c.get('order_number')}")

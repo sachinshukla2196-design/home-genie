@@ -45,7 +45,11 @@ export default function AdminOrders() {
   const [manualBusy, setManualBusy] = useState(false);
   const money = (v) => `₹${Number(v).toLocaleString("en-IN")}`;
 
-  const load = useCallback(() => API.get("/admin/orders").then(({ data }) => setOrders(data)).catch(() => setOrders([])), []);
+  const [queue, setQueue] = useState({ items: [], open_count: 0 });
+  const load = useCallback(() => {
+    API.get("/admin/refund-queue", { params: { page_size: 100 } }).then(({ data }) => setQueue(data)).catch(() => {});
+    return API.get("/admin/orders").then(({ data }) => setOrders(data)).catch(() => setOrders([]));
+  }, []);
   useEffect(() => { load(); }, [load]);
 
   const change = async (id, status) => { try { await API.put(`/admin/orders/${id}/status`, { status }); toast.success(t("cta.save")); load(); } catch (e) { toast.error(apiError(e)); } };
@@ -117,9 +121,9 @@ export default function AdminOrders() {
   );
 
   const claimedCount = orders.filter((o) => o.payment_status === "claimed").length;
-  const paidOrders = orders.filter((o) => o.payment_status === "paid");
+  const paidOrders = orders.filter((o) => o.payment_status === "paid" && !o.needs_refund);   // refund-pending money is not "collected"
   const upiCollected = paidOrders.reduce((s, o) => s + Number(o.total || 0), 0);
-  const shown = tab === "paid" ? paidOrders : orders;
+  const shown = tab === "refund" ? queue.items : tab === "paid" ? paidOrders : orders;
 
   return (
     <div className="space-y-5">
@@ -161,9 +165,16 @@ export default function AdminOrders() {
       <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0">
         <OrderTab on={tab === "all"} onClick={() => setTab("all")} testid="tab-all">All Orders ({orders.length})</OrderTab>
         <OrderTab on={tab === "paid"} onClick={() => setTab("paid")} testid="tab-paid">Paid ({paidOrders.length})</OrderTab>
+        <OrderTab on={tab === "refund"} onClick={() => setTab("refund")} testid="tab-refund">Needs refund ({queue.open_count})</OrderTab>
       </div>
 
-      <div className="hg-card overflow-hidden" data-testid={tab === "paid" ? "paid-list" : "orders-list"}>
+      {tab === "refund" && (
+        <p className="rounded-2xl bg-hg-gold/10 p-3 text-sm text-ink ring-1 ring-hg-gold/30" data-testid="refund-queue-note">
+          These customers paid for an order that had <b>already expired or been cancelled</b> (and could not be restored), so it cannot be
+          fulfilled. No invoice or commission was created. Refund each one (oldest first). The vendor cannot see these orders.
+        </p>
+      )}
+      <div className="hg-card overflow-hidden" data-testid={tab === "refund" ? "refund-list" : tab === "paid" ? "paid-list" : "orders-list"}>
         <div className="overflow-x-auto">
         <table className="w-full min-w-[1100px] text-sm">
           <thead><tr className="text-left text-xs uppercase tracking-wide text-muted2"><th className={TH}>{t("order.number")}</th><th className={TH}>HomeGenie</th><th className={TH}>Date</th><th className={`${TH} text-right`}>{t("order.total")}</th><th className={TH}>Payment</th><th className={TH}>Method</th><th className={TH}>Reference ID</th><th className={TH}>{t("order.status")}</th><th className={TH}>Invoice</th><th className={TH}>Action</th></tr></thead>
@@ -171,7 +182,8 @@ export default function AdminOrders() {
             {shown.map((o) => (
               <tr key={o.id} className="border-t border-brand-50 align-middle transition-colors hover:bg-brand-50/60" data-testid={`admin-order-${o.order_number}`}>
                 <td className="whitespace-nowrap px-4 py-3 font-medium text-ink">{o.order_number}</td>
-                <td className="px-4 py-3 font-mono text-hg-lavender" data-testid={`order-dist-${o.order_number}`}>{o.distributor_id}<div className="max-w-[160px] truncate font-sans text-xs text-muted2">{o.user_name}</div></td>
+                <td className="px-4 py-3 font-mono text-hg-lavender" data-testid={`order-dist-${o.order_number}`}>{o.distributor_id}<div className="max-w-[160px] truncate font-sans text-xs text-muted2">{o.user_name}</div>
+                  {tab === "refund" && <div className="font-sans text-xs text-hg-gold" data-testid={`waiting-${o.order_number}`}>{o.user_mobile} · waiting {o.waiting_hours ?? "?"}h</div>}</td>
                 <td className="whitespace-nowrap px-4 py-3 tabular-nums text-muted2">{(o.created_at || "").slice(0, 10)}</td>
                 <td className="whitespace-nowrap px-4 py-3 text-right font-semibold tabular-nums text-ink">{money(o.total)}</td>
                 <td className="px-4 py-3">
@@ -204,7 +216,7 @@ export default function AdminOrders() {
                 </td>
               </tr>
             ))}
-            {shown.length === 0 && <tr><td colSpan={10} className="px-4 py-12 text-center text-muted2">No orders here yet.</td></tr>}
+            {shown.length === 0 && <tr><td colSpan={10} className="px-4 py-12 text-center text-muted2">{tab === "refund" ? "No refunds waiting. 🎉" : "No orders here yet."}</td></tr>}
           </tbody>
         </table>
         </div>

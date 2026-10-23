@@ -4,7 +4,8 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime, timezone, timedelta
 
-from core import (db, now_iso, new_id, get_current_user, get_settings, get_or_create_wallet,
+from money import to_paise, paise_to_float
+from core import (db, now_iso, new_id, get_current_user, get_settings, get_or_create_wallet, wallet_apply,
                   add_wallet_transaction, create_notification, log_audit)
 
 router = APIRouter(prefix="/api", tags=["homegenie"])
@@ -133,12 +134,12 @@ async def request_withdrawal(body: WithdrawBody, request: Request, user: dict = 
         if not kyc or kyc.get("status") != "verified":
             raise HTTPException(status_code=400, detail="Verify your identity and bank details before withdrawing points.")
     await get_or_create_wallet(user["id"])
-    # Atomic conditional debit: only succeeds if available_balance >= amount.
-    moved = await db.wallets.update_one(
-        {"user_id": user["id"], "available_balance": {"$gte": body.amount}},
-        {"$inc": {"available_balance": -body.amount, "pending_balance": body.amount},
-         "$set": {"updated_at": now_iso()}})
-    if moved.modified_count != 1:
+    # Atomic conditional debit in exact paise: only succeeds if available balance >= amount.
+    amount_p = to_paise(body.amount)
+    if amount_p <= 0:
+        raise HTTPException(status_code=400, detail="Enter a valid amount.")
+    moved = await wallet_apply(user["id"], {"available_balance": -amount_p, "pending_balance": amount_p}, require_available=amount_p)
+    if not moved:
         raise HTTPException(status_code=400, detail="Insufficient available balance.")
     # informational ledger entry (aggregates already moved atomically above)
     await add_wallet_transaction(user["id"], "WITHDRAWAL", body.amount, "HELD",
@@ -146,7 +147,7 @@ async def request_withdrawal(body: WithdrawBody, request: Request, user: dict = 
     req_no = new_id()[:8].upper()
     wr = {
         "id": new_id(), "request_number": f"WD{req_no}", "user_id": user["id"],
-        "distributor_id": user.get("distributor_id"), "amount": body.amount,
+        "distributor_id": user.get("distributor_id"), "amount": paise_to_float(amount_p), "amount_paise": amount_p,
         "status": "pending", "admin_note": None,
         "created_at": now_iso(), "updated_at": now_iso(),
     }

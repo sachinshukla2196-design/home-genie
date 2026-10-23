@@ -50,6 +50,7 @@ the audit log, and **all admin sessions issued before the change are signed out*
 | `EMERGENT_EMAIL_KEY`, `EMAIL_FROM_NAME` | Outbound email. |
 | `STRIPE_API_KEY` | Card checkout ("Place order & pay"). Real `sk_live_…`/`sk_test_…` key. On Emergent the private package handles it; elsewhere (Vercel) `backend/stripe_checkout.py` uses the official `stripe` SDK. Unset → checkout returns a clear "not configured" message (COD/Razorpay/UPI unaffected). |
 | `STRIPE_WEBHOOK_SECRET` | `whsec_…` signing secret for `/api/webhook/stripe` (Vercel/official-SDK path). Unset → webhooks are rejected; payments are still confirmed when the customer returns via `/api/payments/status`. |
+| `PENDING_PAYMENT_TTL_MINUTES` | Minutes an unpaid ONLINE order keeps its reserved stock before it is cancelled and the stock returned (default `15`). COD orders are never expired. |
 | `ADMIN_PASSCODE` | **Unused** — the admin passcode was removed. Delete it from any environment. |
 
 ## Rotating the admin password safely

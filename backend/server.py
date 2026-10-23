@@ -64,6 +64,14 @@ app.include_router(vendor_routes.router)
 app.include_router(storage.router)
 import cron_routes
 app.include_router(cron_routes.router)
+import finance_routes
+app.include_router(finance_routes.router)
+import returns_routes
+app.include_router(returns_routes.router)
+import vendor_dashboard
+app.include_router(vendor_dashboard.router)
+import governance_routes
+app.include_router(governance_routes.router)
 
 _cors_raw = os.environ.get("CORS_ALLOWED_ORIGINS") or os.environ.get("CORS_ORIGINS", "")
 _cors = [o.strip() for o in _cors_raw.split(",") if o.strip() and o.strip() != "*"]
@@ -174,6 +182,26 @@ async def _init_db():
     await _safe(db.products.create_index("sku", unique=True))
     await _safe(db.commissions.create_index("referred_user_id"))
     await _safe(db.orders.create_index("order_number", unique=True))
+    await _safe(db.orders.create_index([("payment_method", 1), ("payment_status", 1), ("status", 1), ("created_at", 1)]))
+    await _safe(db.orders.create_index([("fulfilments.vendor_id", 1), ("created_at", -1)]))
+    await _safe(db.stock_txns.create_index("key", unique=True))
+    await _safe(db.rate_limits.create_index([("key", 1), ("w", 1)], unique=True))
+    await _safe(db.rate_limits.create_index("expires_at", expireAfterSeconds=0))
+    await _safe(db.support_tickets.create_index([("vendor_id", 1), ("updated_at", -1)]))
+    await _safe(db.support_tickets.create_index([("status", 1), ("urgent", -1), ("updated_at", -1)]))
+    await _safe(db.vendor_documents.create_index([("vendor_id", 1), ("created_at", -1)]))
+    await _safe(db.vendor_status_history.create_index([("vendor_id", 1), ("at", -1)]))
+    await _safe(db.products.create_index("variants.sku", unique=True, partialFilterExpression={"variants.sku": {"$type": "string"}}))
+    await _safe(db.vendor_ledger.create_index("source_key", unique=True))
+    await _safe(db.refund_cases.create_index("source_key", unique=True))
+    await _safe(db.refund_cases.create_index([("status", 1), ("created_at", 1)]))
+    await _safe(db.return_cases.create_index([("vendor_id", 1), ("created_at", -1)]))
+    await _safe(db.return_cases.create_index([("user_id", 1), ("created_at", -1)]))
+    await _safe(db.vendor_ledger.create_index([("vendor_id", 1), ("posted_at", -1)]))
+    await _safe(db.settlements.create_index([("vendor_id", 1), ("created_at", -1)]))
+    await _safe(db.settlements.create_index("vendor_id", unique=True, partialFilterExpression={"status": {"$in": ["requested", "approved"]}}))
+    await _safe(db.stock_txns.create_index([("status", 1), ("updated_at", 1)]))
+    await _safe(db.products.create_index([("vendor_id", 1), ("created_at", -1)]))
     await _safe(db.wallet_transactions.create_index("user_id"))
     await _safe(db.notifications.create_index("user_id"))
     await _safe(db.otp_sessions.create_index([("identifier", 1), ("purpose", 1)]))

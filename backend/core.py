@@ -11,6 +11,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from fastapi import Depends, Request, HTTPException
 from motor.motor_asyncio import AsyncIOMotorClient
+from money import to_paise, paise_to_float
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -32,6 +33,8 @@ if not JWT_SECRET or JWT_SECRET == "change-me":
 JWT_ALGO = "HS256"
 
 ADMIN_ROLES = {"super_admin", "admin", "accounts_admin", "support_admin"}
+# Projection for product documents returned to clients: hides the internal stock idempotency markers (stock.py).
+P_PUBLIC = {"_id": 0, "stock_ops": 0}
 
 
 def now_iso() -> str:
@@ -200,35 +203,71 @@ async def get_settings() -> dict:
     return s
 
 
-# ---------- wallet ledger ----------
+# ---------- wallet ledger (exact money) ----------
+# Balances are kept in INTEGER PAISE (`<field>_paise`); the legacy rupee float fields are still maintained for old readers
+# but every value returned by get_or_create_wallet is derived from paise, never from the float counters.
+WALLET_FIELDS = ("available_balance", "pending_balance", "total_earned", "total_withdrawn")
+
+
+def _wallet_view(w: dict) -> dict:
+    w = dict(w)
+    for f in WALLET_FIELDS:
+        if isinstance(w.get(f + "_paise"), int):
+            w[f] = paise_to_float(w[f + "_paise"])
+    return w
+
+
 async def get_or_create_wallet(user_id: str) -> dict:
     w = await db.wallets.find_one({"user_id": user_id}, {"_id": 0})
     if not w:
-        w = {
-            "id": new_id(),
-            "user_id": user_id,
-            "available_balance": 0.0,
-            "pending_balance": 0.0,
-            "total_earned": 0.0,
-            "total_withdrawn": 0.0,
-            "active": True,
-            "created_at": now_iso(),
-            "updated_at": now_iso(),
-        }
-        await db.wallets.insert_one(dict(w))
-    return w
+        w = {"id": new_id(), "user_id": user_id, "active": True, "created_at": now_iso(), "updated_at": now_iso()}
+        for f in WALLET_FIELDS:
+            w[f] = 0.0
+            w[f + "_paise"] = 0
+        try:
+            await db.wallets.insert_one(dict(w))
+        except Exception:   # concurrent creation
+            w = await db.wallets.find_one({"user_id": user_id}, {"_id": 0})
+    elif any(not isinstance(w.get(f + "_paise"), int) for f in WALLET_FIELDS):
+        # Lazy, non-destructive upgrade of a pre-paise wallet: ADD the exact fields from the stored rupee values once.
+        # The original float fields are left exactly as they were (history is never rewritten).
+        for f in WALLET_FIELDS:
+            if not isinstance(w.get(f + "_paise"), int):
+                await db.wallets.update_one({"user_id": user_id, f + "_paise": {"$exists": False}},
+                                            {"$set": {f + "_paise": to_paise(w.get(f) or 0)}})
+        w = await db.wallets.find_one({"user_id": user_id}, {"_id": 0})
+    return _wallet_view(w)
+
+
+async def wallet_apply(user_id: str, deltas: dict, require_available: int = None) -> bool:
+    """THE only place wallet balances change. `deltas` maps a balance field to a signed amount in PAISE. One atomic update
+    moves the exact paise counter and the legacy float counter together. With `require_available` the update only
+    happens if available_balance >= that many paise (atomic conditional debit). Returns whether it was applied."""
+    await get_or_create_wallet(user_id)
+    inc = {}
+    for f, d in deltas.items():
+        assert f in WALLET_FIELDS, f
+        inc[f + "_paise"] = int(d)
+        inc[f] = paise_to_float(int(d))
+    flt = {"user_id": user_id}
+    if require_available is not None:
+        flt["available_balance_paise"] = {"$gte": int(require_available)}
+    res = await db.wallets.update_one(flt, {"$inc": inc, "$set": {"updated_at": now_iso()}})
+    return res.modified_count == 1
 
 
 async def add_wallet_transaction(user_id: str, txn_type: str, amount: float, status: str,
                                  reference: str = "", description: str = "", direction: str = "credit"):
-    """Immutable ledger entry + safe aggregate update."""
+    """Immutable ledger entry + exact aggregate update (amount is rupees; stored and applied as integer paise)."""
     await get_or_create_wallet(user_id)
+    paise = to_paise(amount)
     txn = {
         "id": new_id(),
         "user_id": user_id,
         "type": txn_type,
         "direction": direction,  # credit / debit
-        "amount": float(amount),
+        "amount": paise_to_float(paise),
+        "amount_paise": paise,
         "status": status,  # CREDITED / DEBITED / PENDING / REVERSED
         "reference": reference,
         "description": description,
@@ -236,26 +275,25 @@ async def add_wallet_transaction(user_id: str, txn_type: str, amount: float, sta
     }
     await db.wallet_transactions.insert_one(dict(txn))
 
-    inc = {}
+    deltas = {}
     if status == "CREDITED" and direction == "credit":
-        inc = {"available_balance": amount, "total_earned": amount}
+        deltas = {"available_balance": paise, "total_earned": paise}
     elif status == "PENDING":
-        inc = {"pending_balance": amount}
+        deltas = {"pending_balance": paise}
     elif status == "DEBITED" and direction == "debit":
-        inc = {"available_balance": -amount, "total_withdrawn": amount}
+        deltas = {"available_balance": -paise, "total_withdrawn": paise}
     elif status == "CLAWBACK" and direction == "debit":
         # refund/reversal of a previously credited commission
-        inc = {"available_balance": -amount, "total_earned": -amount}
-    if inc:
-        await db.wallets.update_one({"user_id": user_id},
-                                    {"$inc": inc, "$set": {"updated_at": now_iso()}})
+        deltas = {"available_balance": -paise, "total_earned": -paise}
+    if deltas:
+        await wallet_apply(user_id, deltas)
     txn.pop("_id", None)
     return txn
 
 
 def money2(v) -> float:
-    """Round to 2 decimals for money/points."""
-    return round(float(v) + 1e-9, 2)
+    """Round to 2 decimals for money/points (exact half-up via Decimal; legacy helper, prefer money.to_paise)."""
+    return paise_to_float(to_paise(v))
 
 
 # ---------- notifications ----------
@@ -340,3 +378,52 @@ def email_shell(title: str, body_html: str) -> str:
     </table>
   </td></tr>
 </table>"""
+
+
+# ---------- rate limiting (shared by every sensitive endpoint) ----------
+import os as _os
+import time as _time
+from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+RATE_LIMIT_SCALE = float(_os.environ.get("RATE_LIMIT_SCALE", "1"))
+RATE_LIMITS = {   # name -> (max requests, window seconds); keys are per client IP (or per vendor for authenticated actions)
+    "vendor_register": (10, 3600), "customer_register": (20, 3600), "forgot_password": (10, 3600),
+    "login_ip": (60, 600), "admin_login_ip": (20, 600), "support_ticket": (20, 86400), "upload_sign": (60, 3600),
+    "change_password": (10, 3600), "csv_import": (30, 3600),
+}
+
+
+def client_ip(request: Request) -> str:
+    fwd = request.headers.get("x-forwarded-for", "")
+    return (fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "")) or "unknown"
+
+
+async def rate_limit(name: str, key: str):
+    """Fixed-window limiter backed by MongoDB (works across serverless instances). Raises 429 with Retry-After."""
+    limit, window = RATE_LIMITS[name]
+    limit = max(int(limit * RATE_LIMIT_SCALE), 1)
+    start = int(_time.time() // window) * window
+    flt = {"key": f"{name}:{key}", "w": start}
+    upd = {"$inc": {"n": 1}, "$setOnInsert": {"expires_at": _dt.fromtimestamp(start + window + 60, _tz.utc)}}
+    for attempt in (1, 2):
+        try:
+            doc = await db.rate_limits.find_one_and_update(flt, upd, upsert=True, return_document=True)
+            break
+        except Exception:                      # concurrent first insert on the unique index: retry once
+            if attempt == 2:
+                raise
+    if doc["n"] > limit:
+        raise HTTPException(status_code=429, detail="Too many attempts. Please try again later.",
+                            headers={"Retry-After": str(max(start + window - int(_time.time()), 1))})
+
+
+async def notify_order_vendors(order: dict, title: str, message: str):
+    """Tell every vendor on an order (once per order+title) that something needs their attention."""
+    for f in order.get("fulfilments", []):
+        v = await db.vendors.find_one({"id": f["vendor_id"]}, {"_id": 0, "user_id": 1})
+        if not v:
+            continue
+        key = f"{order['id']}:{title}"
+        if await db.notifications.find_one({"user_id": v["user_id"], "meta.dedupe": key}, {"_id": 1}):
+            continue
+        await create_notification(v["user_id"], "order", title, message, meta={"order_id": order["id"], "dedupe": key})

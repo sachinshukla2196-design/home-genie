@@ -108,8 +108,10 @@ class RegRequestBody(BaseModel):
 
 
 @router.post("/register-request")
-async def register_request(body: RegRequestBody):
+async def register_request(body: RegRequestBody, request: Request):
     """BETA: simple registration request (no OTP). Creates a PENDING request for admin approval."""
+    from core import rate_limit, client_ip
+    await rate_limit("customer_register", client_ip(request))
     mobile = body.mobile.strip()
     email = (body.email or "").strip().lower()
     if not _valid_mobile(mobile):
@@ -250,6 +252,8 @@ async def register(body: RegisterBody, request: Request):
 
 @router.post("/login")
 async def login(body: LoginBody, request: Request):
+    from core import rate_limit, client_ip
+    await rate_limit("login_ip", client_ip(request))          # per-IP cap on top of the per-account lockout (stops password spraying)
     email = body.email.lower().strip()
     ident = email
     la = await db.login_attempts.find_one({"identifier": ident})
@@ -336,6 +340,8 @@ class AdminLoginBody(BaseModel):
 @router.post("/admin-login")
 async def admin_login(body: AdminLoginBody, request: Request):
     """Admin entry: username/email + password. Admin roles only (lockout after 5 failed attempts)."""
+    from core import rate_limit, client_ip
+    await rate_limit("admin_login_ip", client_ip(request))
     uname = (body.username or "").strip()
     ukey = uname.lower()
     ident = f"admin:{ukey}"
@@ -457,9 +463,11 @@ class ForgotRequestBody(BaseModel):
 
 
 @router.post("/forgot/send")
-async def forgot_request(body: ForgotRequestBody):
+async def forgot_request(body: ForgotRequestBody, request: Request):
     """Admin-only password recovery: the user submits a request and an admin resets the
     password manually. NO OTP, NO SMS, NO email reset, NO external service."""
+    from core import rate_limit, client_ip
+    await rate_limit("forgot_password", client_ip(request))
     ident = (body.identifier or "").strip()
     if not ident:
         raise HTTPException(status_code=400, detail="Enter your HomeGenie ID or registered mobile number.")

@@ -4,6 +4,9 @@ Runs the app in-process (no live server) in Vercel mode with MONGO_URL pointing 
 address, which reproduces the production failure (Atlas not reachable from the function):
 - CORS preflights are answered immediately with the right headers (no DB wait);
 - API requests fail fast with a 503 that still carries CORS headers, instead of hanging.
+
+Run this file in its own pytest process (e.g. `pytest tests/<file> -n 0`): it sets environment variables and imports
+`server` at module level, so combining it with another in-process test file in one run shares that state.
 """
 import os
 import time

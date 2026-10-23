@@ -46,6 +46,15 @@ import VendorDashboard from "@/pages/vendor/VendorDashboard";
 import VendorProducts from "@/pages/vendor/VendorProducts";
 import VendorOrders from "@/pages/vendor/VendorOrders";
 import VendorProfile from "@/pages/vendor/VendorProfile";
+import VendorInventory from "@/pages/vendor/VendorInventory";
+import VendorDispatch from "@/pages/vendor/VendorDispatch";
+import VendorReturns from "@/pages/vendor/VendorReturns";
+import VendorAnalytics from "@/pages/vendor/VendorAnalytics";
+import VendorFinance from "@/pages/vendor/VendorFinance";
+import VendorCod from "@/pages/vendor/VendorCod";
+import VendorNotifications from "@/pages/vendor/VendorNotifications";
+import VendorSupport from "@/pages/vendor/VendorSupport";
+import VendorSecurity from "@/pages/vendor/VendorSecurity";
 import { VendorRegister, VendorLogin } from "@/pages/vendor/VendorAuth";
 
 function App() {
@@ -136,6 +145,15 @@ function AppRoutes() {
                   <Route index element={<VendorHome />} />
                   <Route path="orders" element={<VendorGate><VendorOrders /></VendorGate>} />
                   <Route path="products" element={<VendorGate><VendorProducts /></VendorGate>} />
+                  <Route path="inventory" element={<VendorGate><VendorInventory /></VendorGate>} />
+                  <Route path="dispatch" element={<VendorGate><VendorDispatch /></VendorGate>} />
+                  <Route path="returns" element={<VendorGate><VendorReturns /></VendorGate>} />
+                  <Route path="analytics" element={<VendorGate><VendorAnalytics /></VendorGate>} />
+                  <Route path="finance" element={<VendorGate><VendorFinance /></VendorGate>} />
+                  <Route path="cod" element={<VendorGate><VendorCod /></VendorGate>} />
+                  <Route path="notifications" element={<VendorGate><VendorNotifications /></VendorGate>} />
+                  <Route path="support" element={<VendorGate><VendorSupport /></VendorGate>} />
+                  <Route path="security" element={<VendorSecurity />} />
                   <Route path="profile" element={<VendorProfile />} />
                 </Route>
 

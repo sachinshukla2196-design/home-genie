@@ -66,3 +66,18 @@ async def release_points_vercel(request: Request):
                                                                        "created_at": now_iso()}, "$set": {"status": "running"}}, upsert=True)
     await _run_release(run_id)
     return {"ok": True, "run_id": run_id, "result": (await db.cron_runs.find_one({"run_id": run_id}, {"_id": 0})).get("result")}
+
+
+@router.get("/expire-pending-orders")
+async def expire_pending_orders(request: Request):
+    """Cancels unpaid online orders older than the payment window and returns their reserved stock.
+    Idempotent. (Vercel Hobby cron runs at most daily; checkout and order views also run this sweep.)"""
+    _authorise(request)
+    from stock import expire_pending_online_orders, prune_stock_markers
+    expired = await expire_pending_online_orders(limit=500)          # also runs crash recovery
+    from ledger import reconcile_ledger
+    from finance_routes import reconcile_settlements
+    from returns_routes import reconcile_returns
+    from vendor_routes import sweep_dispatch_deadlines
+    return {"ok": True, "expired": expired, "markers_pruned": await prune_stock_markers(), "returns_repaired": await reconcile_returns(), "deadline_alerts": await sweep_dispatch_deadlines(),
+            "ledger": await reconcile_ledger(), "settlements_repaired": await reconcile_settlements()}

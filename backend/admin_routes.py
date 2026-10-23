@@ -11,9 +11,12 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime, timezone
+from pagination import clamp_page, page_meta
+from money import to_paise, paise_to_float, paise_of
+from stock import run_intents, intent
 
-from core import (db, now_iso, new_id, require_admin, get_settings,
-                  add_wallet_transaction, create_notification, log_audit,
+from core import (db, now_iso, new_id, require_admin, get_settings, P_PUBLIC,
+                  add_wallet_transaction, wallet_apply, create_notification, log_audit,
                   clean_user, mask_aadhaar, password_update)
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -100,7 +103,8 @@ async def admin_user_detail(user_id: str, admin: dict = Depends(require_admin)):
     if u.get("aadhaar_number"):
         u["aadhaar_masked"] = mask_aadhaar(u["aadhaar_number"])
         u.pop("aadhaar_number", None)
-    wallet = await db.wallets.find_one({"user_id": user_id}, {"_id": 0})
+    from core import get_or_create_wallet
+    wallet = await get_or_create_wallet(user_id)    # exact (paise-derived) balances
     orders = await db.orders.find({"user_id": user_id}, {"_id": 0}).sort("created_at", -1).to_list(50)
     return {"user": u, "wallet": wallet, "orders": orders}
 
@@ -138,7 +142,7 @@ async def create_product(body: ProductBody, request: Request, admin: dict = Depe
 
 @router.put("/products/{product_id}")
 async def update_product(product_id: str, body: ProductBody, request: Request, admin: dict = Depends(require_admin)):
-    existing = await db.products.find_one({"id": product_id}, {"_id": 0})
+    existing = await db.products.find_one({"id": product_id}, P_PUBLIC)
     if not existing:
         raise HTTPException(status_code=404, detail="Product not found.")
     upd = body.model_dump()
@@ -157,7 +161,7 @@ async def deactivate_product(product_id: str, request: Request, admin: dict = De
 
 @router.delete("/products/{product_id}/permanent")
 async def delete_product_permanent(product_id: str, request: Request, admin: dict = Depends(require_admin)):
-    p = await db.products.find_one({"id": product_id}, {"_id": 0})
+    p = await db.products.find_one({"id": product_id}, P_PUBLIC)
     if not p:
         raise HTTPException(status_code=404, detail="Product not found.")
     await db.products.delete_one({"id": product_id})
@@ -195,15 +199,26 @@ async def update_order_status(order_id: str, body: OrderStatusBody, request: Req
         raise HTTPException(status_code=404, detail="Order not found.")
     if body.status == "refunded" and o.get("payment_status") in ("paid", "partially_refunded"):
         raise HTTPException(status_code=400, detail="Use the Refund action (with amount & payment reference) to refund a paid order.")
-    await db.orders.update_one({"id": order_id}, {"$set": {"status": body.status, "updated_at": now_iso()}})
+    if o.get("needs_refund") and o.get("payment_status") in ("paid", "partially_refunded") and body.status != "cancelled":
+        raise HTTPException(status_code=400, detail="This order was paid after it expired and cannot be fulfilled. "
+                                                    "Refund it from the Needs refund queue.")
+    upd = {"$set": {"status": body.status, "updated_at": now_iso()}}
+    cancelling = body.status == "cancelled" and o.get("status") != "cancelled"
+    if cancelling:   # the restock decision is stored atomically with the status change; recovery replays it if interrupted
+        upd["$push"] = {"restock_intents": intent("admin_cancel", admin["id"], prev_status=o.get("status", ""))}
+    await db.orders.update_one({"id": order_id}, upd)
+    restock = None
+    if cancelling:
+        # Confirmed cancellation: return stock for goods that have not left, stop pre-dispatch fulfilment.
+        restock = {"restocked_lines": await run_intents(order_id)}
     # NOTE: 'cancelled' on a PAID order does NOT reverse commissions by itself — only a confirmed
     # payment return (Refund action) does. Unpaid cancelled orders never generated commissions.
     await create_notification(o["user_id"], "order", "Order update",
                               f"Your order {o['order_number']} is now {body.status}.",
                               "ऑर्डर अपडेट", f"आपका ऑर्डर {o['order_number']} अब {body.status} है।")
     await log_audit(admin, "order_status_changed", "order", order_id,
-                    old_value={"status": o["status"]}, new_value={"status": body.status}, request=request)
-    return {"ok": True}
+                    old_value={"status": o["status"]}, new_value={"status": body.status, "restock": restock}, request=request)
+    return {"ok": True, "restock": restock}
 
 
 class RefundBody(BaseModel):
@@ -224,19 +239,51 @@ async def refund_order(order_id: str, body: RefundBody, request: Request, admin:
         raise HTTPException(status_code=404, detail="Order not found.")
     if o.get("payment_status") not in ("paid", "partially_refunded"):
         raise HTTPException(status_code=400, detail="Only paid orders can be refunded.")
-    remaining = round(float(o.get("total") or 0) - float(o.get("refunded_amount") or 0), 2)
-    if body.amount is not None and (body.amount <= 0 or round(body.amount, 2) > remaining):
+    remaining_p = paise_of(o, "total_paise", "total") - paise_of(o, "refunded_paise", "refunded_amount")
+    remaining = paise_to_float(remaining_p)
+    if body.amount is not None and (to_paise(body.amount) <= 0 or to_paise(body.amount) > remaining_p):
         raise HTTPException(status_code=400, detail=f"Refund amount must be between 0 and ₹{remaining}.")
     import shop_routes
     res = await shop_routes.reverse_order_financials(order_id, admin, request, refund_amount=body.amount, reference=ref, reason=body.reason)
     if res.get("duplicate"):
         raise HTTPException(status_code=409, detail="A refund with this reference was already recorded for this order.")
-    new_status = "cancelled" if body.cancel_order else ("refunded" if res["refund_amount"] >= remaining - 0.005 else o.get("status"))
-    await db.orders.update_one({"id": order_id}, {"$set": {"status": new_status, "updated_at": now_iso()}})
+    new_status = "cancelled" if body.cancel_order else ("refunded" if to_paise(res["refund_amount"]) >= remaining_p else o.get("status"))
+    upd = {"$set": {"status": new_status, "updated_at": now_iso()}}
+    cancelling = new_status == "cancelled" and o.get("status") != "cancelled"
+    if cancelling:
+        upd["$push"] = {"restock_intents": intent("admin_cancel", admin["id"], prev_status=o.get("status", ""))}
+    await db.orders.update_one({"id": order_id}, upd)
+    if cancelling:
+        await run_intents(order_id)
     await create_notification(o["user_id"], "order", "Refund processed",
                               f"₹{res['refund_amount']:g} refunded on order {o['order_number']} (ref {ref}).",
                               "रिफंड हो गया", f"ऑर्डर {o['order_number']} पर ₹{res['refund_amount']:g} रिफंड हुआ।")
     return {"ok": True, **res, "status": new_status}
+
+
+@router.get("/refund-queue")
+async def refund_queue(state: str = "open", page: int = 1, page_size: int = 25, admin: dict = Depends(require_admin)):
+    """Orders paid after they had expired (15-minute rule, stock gone) or been cancelled; they cannot be fulfilled.
+    'open' = still awaiting a refund (oldest first); 'resolved' = fully refunded."""
+    if state not in ("open", "resolved"):
+        raise HTTPException(status_code=400, detail="state must be 'open' or 'resolved'.")
+    page, page_size = clamp_page(page, page_size)
+    open_q = {"needs_refund": True, "payment_status": {"$in": ["paid", "partially_refunded"]}}
+    q = open_q if state == "open" else {"needs_refund": True, "payment_status": "refunded"}
+    total = await db.orders.count_documents(q)
+    rows = await db.orders.find(q, {"_id": 0}).sort("needs_refund_at", 1 if state == "open" else -1) \
+        .skip((page - 1) * page_size).limit(page_size).to_list(page_size)
+    users = {u["id"]: u for u in await db.users.find({"id": {"$in": [r["user_id"] for r in rows]}},
+                                                     {"_id": 0, "id": 1, "full_name": 1, "mobile": 1}).to_list(page_size)}
+    now = datetime.now(timezone.utc)
+    for r in rows:
+        u = users.get(r["user_id"], {})
+        r["user_name"], r["user_mobile"] = u.get("full_name", ""), u.get("mobile", "")
+        try:
+            r["waiting_hours"] = round((now - datetime.fromisoformat(r.get("needs_refund_at") or r["paid_at"])).total_seconds() / 3600, 1)
+        except Exception:
+            r["waiting_hours"] = None
+    return {"items": rows, **page_meta(total, page, page_size), "open_count": await db.orders.count_documents(open_q)}
 
 
 @router.delete("/orders/{order_id}")
@@ -416,16 +463,14 @@ async def review_withdrawal(wd_id: str, body: WithdrawalReview, request: Request
     new_status = target
     if body.action == "mark_paid":
         # settle: clear the held pending amount and record it as withdrawn
-        await db.wallets.update_one({"user_id": wr["user_id"]},
-                                    {"$inc": {"pending_balance": -wr["amount"], "total_withdrawn": wr["amount"]},
-                                     "$set": {"updated_at": now_iso()}})
+        wd_p = paise_of(wr, "amount_paise", "amount")
+        await wallet_apply(wr["user_id"], {"pending_balance": -wd_p, "total_withdrawn": wd_p})
         await add_wallet_transaction(wr["user_id"], "WITHDRAWAL", wr["amount"], "PAID",
                                      description="Withdrawal paid", direction="debit")
     elif body.action == "reject":
         # return the held amount to available balance
-        await db.wallets.update_one({"user_id": wr["user_id"]},
-                                    {"$inc": {"available_balance": wr["amount"], "pending_balance": -wr["amount"]},
-                                     "$set": {"updated_at": now_iso()}})
+        wd_p = paise_of(wr, "amount_paise", "amount")
+        await wallet_apply(wr["user_id"], {"available_balance": wd_p, "pending_balance": -wd_p})
         await add_wallet_transaction(wr["user_id"], "WITHDRAWAL", wr["amount"], "REJECTED",
                                      description="Withdrawal rejected - amount returned", direction="credit")
 
@@ -668,7 +713,8 @@ async def admin_wallet_credit(body: WalletCreditBody, request: Request, admin: d
                               f"₹{int(amt)} क्रेडिट हुआ", f"{reason} — ₹{amt} आपके वॉलेट में जोड़े गए।")
     await log_audit(admin, "admin_wallet_credit", "user", u["id"],
                     new_value={"distributor_id": did, "amount": amt, "reason": reason}, request=request)
-    w = await db.wallets.find_one({"user_id": u["id"]}, {"_id": 0, "available_balance": 1})
+    from core import get_or_create_wallet
+    w = await get_or_create_wallet(u["id"])
     return {"message": f"₹{amt} credited to {did}.", "distributor_id": did, "amount": amt,
             "available_balance": round(float((w or {}).get("available_balance", 0)), 2)}
 

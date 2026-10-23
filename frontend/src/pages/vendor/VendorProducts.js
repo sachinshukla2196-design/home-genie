@@ -1,187 +1,137 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
-import { Package, Plus, Pencil, Boxes, Pause, Play, Info, History } from "lucide-react";
+import { Package, Plus, Pencil, Pause, Play, Archive, ArchiveRestore, Download, Upload, Boxes, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
-import { Skeleton } from "@/components/ui/skeleton";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { PageHeader } from "@/components/PageHeader";
-import { EmptyState } from "@/components/EmptyState";
-import { Stagger, StaggerItem } from "@/components/motion";
+import { Pager, SearchBox, useDebounced } from "@/components/Pager";
 import { useI18n } from "@/context/I18nContext";
 import { API, apiError } from "@/lib/api";
-import { inr } from "@/pages/vendor/VendorDashboard";
+import { ConfirmDialog, Money, Pill, StateBlock, downloadCsv, fmtDate, useAction, usePaged } from "@/components/vendor/kit";
+import { EMPTY_PRODUCT, ProductForm, fromProduct, toPayload, useCatalogueSpec } from "@/components/vendor/ProductForm";
+import { ImportDialog } from "@/components/vendor/ImportDialog";
 
-const PILLARS = ["Sarees", "Fashion Products", "Makeup, Beauty & Skincare", "Household Essentials"];
-const PILLAR_KEY = { "Sarees": "pillar.sarees.t", "Fashion Products": "pillar.fashion.t", "Makeup, Beauty & Skincare": "pillar.beauty.t", "Household Essentials": "pillar.household.t" };
-const APPROVAL_TONE = { pending: "bg-hg-gold/15 text-hg-gold ring-hg-gold/30", approved: "bg-hg-success/15 text-hg-success ring-hg-success/30", rejected: "bg-danger/10 text-danger ring-danger/30" };
-const EMPTY = { sku: "", name: "", name_hi: "", description: "", description_hi: "", image: "", mrp: "", selling_price: "", gst_percent: 5, stock: 0, category: PILLARS[0], return_policy: "" };
+const FILTERS = [["all", "vp.o.all"], ["pending", "vp.a.pending"], ["approved", "vp.a.approved"], ["rejected", "vp.a.rejected"], ["low", "vp.p.f.low"], ["out", "vp.p.f.out"]];
+const SORTS = [["created:desc", "vx.sort.newest"], ["updated:desc", "vx.sort.updated"], ["name:asc", "vx.sort.name"], ["price:asc", "vx.sort.priceLow"], ["price:desc", "vx.sort.priceHigh"], ["stock:asc", "vx.sort.stockLow"]];
+const APPROVAL_TONE = { pending: "warn", approved: "ok", rejected: "bad" };
+const SELECT = "h-11 rounded-full bg-white/5 px-4 text-sm text-ink ring-1 ring-white/15 focus-visible:outline focus-visible:outline-2 focus-visible:outline-hg-violet";
 
 export default function VendorProducts() {
   const { t, lang } = useI18n();
-  const [items, setItems] = useState(null);
-  const [edit, setEdit] = useState(null);      // product being created/edited (form state)
-  const [stockFor, setStockFor] = useState(null);
-  const [busy, setBusy] = useState(false);
+  const [sp, setSp] = useSearchParams();
+  const filter = sp.get("approval") || sp.get("stock") || "all";
+  const category = sp.get("category") || "";
+  const sort = sp.get("sort") || "created:desc";
+  const showArchived = sp.get("archived") === "true";
+  const [q, setQ] = useState("");
+  const dq = useDebounced(q.trim());
+  const [sortKey, sortOrder] = sort.split(":");
+  const params = { q: dq || undefined, category: category || undefined, sort: sortKey, order: sortOrder, archived: showArchived || undefined,
+    approval: ["pending", "approved", "rejected"].includes(filter) ? filter : undefined, stock: ["low", "out"].includes(filter) ? filter : undefined };
+  const { data, items, loading, error, page, setPage, reload } = usePaged("/vendor/products", params, 12);
+  const spec = useCatalogueSpec();
+  const [edit, setEdit] = useState(null);       // product form state
+  const [confirm, setConfirm] = useState(null); // { kind, p }
+  const [importing, setImporting] = useState(false);
+  const [run, busy] = useAction();
 
-  const load = useCallback(() => API.get("/vendor/products").then(({ data }) => setItems(data)).catch(() => setItems([])), []);
-  useEffect(() => { load(); }, [load]);
+  const update = (patch) => { const n = new URLSearchParams(sp); Object.entries(patch).forEach(([k, v]) => (v ? n.set(k, v) : n.delete(k))); setSp(n, { replace: true }); };
+  const setFilter = (k) => update({ approval: undefined, stock: undefined, ...(["low", "out"].includes(k) ? { stock: k } : k !== "all" ? { approval: k } : {}) });
 
-  const openNew = () => setEdit({ ...EMPTY });
-  const openEdit = (p) => setEdit({ ...EMPTY, ...p, image: (p.images || [])[0] || "" });
+  const save = () => run(async () => {
+    const body = toPayload(edit);
+    if (edit.id) await API.put(`/vendor/products/${edit.id}`, body); else await API.post("/vendor/products", body);
+    setEdit(null); reload();
+  }, { success: t("vp.p.save") + " ✓" });
+  const toggleListing = (p) => run(async () => { await API.post(`/vendor/products/${p.id}/listing`, { active: !p.is_active }); reload(); });
+  const archive = (p, archived) => run(async () => { await API.post(`/vendor/products/${p.id}/archive`, { archived }); setConfirm(null); reload(); }, { success: t(archived ? "vx.prod.archived" : "vx.prod.restored") });
+  const exportCsv = () => downloadCsv("/vendor/products/export.csv", "my-products.csv").catch((e) => toast.error(apiError(e)));
 
-  const save = async () => {
-    setBusy(true);
-    try {
-      const body = { ...edit, mrp: Number(edit.mrp), selling_price: Number(edit.selling_price), gst_percent: Number(edit.gst_percent),
-        stock: Number(edit.stock) || 0, images: edit.image ? [edit.image.trim()] : [] };
-      if (edit.id) await API.put(`/vendor/products/${edit.id}`, body);
-      else await API.post("/vendor/products", body);
-      toast.success(t("vp.p.save") + " ✓");
-      setEdit(null); load();
-    } catch (err) { toast.error(apiError(err)); }
-    finally { setBusy(false); }
-  };
-
-  const toggleListing = async (p) => {
-    try { await API.post(`/vendor/products/${p.id}/listing`, { active: !p.is_active }); load(); }
-    catch (err) { toast.error(apiError(err)); }
-  };
-
+  const counts = data?.counts;
   return (
     <div className="space-y-5">
       <PageHeader title={t("vp.products")} icon={Package}
-        actions={<Button onClick={openNew} className="hg-btn h-11 rounded-full px-5" data-testid="vp-add-product"><Plus size={16} /> {t("vp.addProduct")}</Button>} />
+        actions={<>
+          <Button variant="outline" onClick={exportCsv} className="h-11 rounded-full" data-testid="vp-export"><Download size={15} /> {t("vx.export")}</Button>
+          <Button variant="outline" onClick={() => setImporting(true)} className="h-11 rounded-full" data-testid="vp-import"><Upload size={15} /> {t("vx.import")}</Button>
+          <Button onClick={() => setEdit({ ...EMPTY_PRODUCT })} className="hg-btn h-11 rounded-full px-5" data-testid="vp-add-product"><Plus size={16} /> {t("vp.addProduct")}</Button>
+        </>} />
 
-      {!items ? <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{[0, 1, 2].map((i) => <Skeleton key={i} className="h-48 rounded-3xl" />)}</div>
-        : items.length === 0 ? <EmptyState icon={Package} title={t("vp.noProducts")} ctaLabel={t("vp.addProduct")} onCta={openNew} testid="vp-empty" />
-        : (
-          <Stagger className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {items.map((p) => (
-              <StaggerItem key={p.id} className="hg-card hg-lift flex min-w-0 flex-col p-5" data-testid={`vp-product-${p.sku}`}>
-                <div className="flex items-start gap-3.5">
-                  {p.images?.[0] ? <img src={p.images[0]} alt="" className="h-16 w-16 shrink-0 rounded-xl object-cover ring-1 ring-brand-50" />
-                    : <span className="hg-icon-chip !h-16 !w-16"><Package size={22} /></span>}
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap gap-1.5">
-                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ring-1 ${APPROVAL_TONE[p.approval_status] || APPROVAL_TONE.approved}`}>{t(`vp.a.${p.approval_status || "approved"}`)}</span>
-                      {p.approval_status === "approved" && (
-                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ring-1 ${p.is_active ? "bg-hg-violet/15 text-hg-lavender ring-hg-lavender/30" : "bg-white/10 text-muted2 ring-white/15"}`}>{p.is_active ? t("vp.live") : t("vp.paused")}</span>
-                      )}
-                    </div>
-                    <h3 className="mt-1.5 line-clamp-2 font-medium leading-snug text-ink">{lang === "hi" && p.name_hi ? p.name_hi : p.name}</h3>
-                    <div className="mt-0.5 truncate font-mono text-xs text-muted2">{p.sku} · {t(PILLAR_KEY[p.category] || "") || p.category}</div>
-                  </div>
-                </div>
-                {p.approval_status === "rejected" && p.rejection_reason && (
-                  <p className="mt-3 rounded-xl bg-danger/10 px-3 py-2 text-xs text-ink ring-1 ring-danger/25" data-testid={`vp-reject-${p.sku}`}>{p.rejection_reason}</p>
-                )}
-                <div className="mt-4 flex items-baseline gap-2">
-                  <span className="font-display text-lg font-semibold text-ink">{inr(p.selling_price)}</span>
-                  {p.mrp > p.selling_price && <span className="text-sm text-muted2 line-through">{inr(p.mrp)}</span>}
-                  <span className={`ml-auto text-sm font-semibold ${p.stock <= 5 ? "text-danger" : "text-muted2"}`} data-testid={`vp-stock-${p.sku}`}>{t("vp.stock")}: {p.stock}</span>
-                </div>
-                <div className="mt-auto flex flex-wrap gap-2 pt-4">
-                  <Button onClick={() => openEdit(p)} variant="outline" size="sm" className="h-9 flex-1 rounded-full border-brand-50 bg-transparent" data-testid={`vp-edit-${p.sku}`}><Pencil size={14} /> {t("vp.editProduct")}</Button>
-                  <Button onClick={() => setStockFor(p)} variant="outline" size="sm" className="h-9 rounded-full border-brand-50 bg-transparent" aria-label={t("vp.adjust")} data-testid={`vp-stockbtn-${p.sku}`}><Boxes size={14} /></Button>
-                  {p.approval_status === "approved" && (
-                    <Button onClick={() => toggleListing(p)} variant="outline" size="sm" className="h-9 rounded-full border-brand-50 bg-transparent" aria-label={p.is_active ? t("vp.pause") : t("vp.resume")} title={p.is_active ? t("vp.pause") : t("vp.resume")} data-testid={`vp-listing-${p.sku}`}>
-                      {p.is_active ? <Pause size={14} /> : <Play size={14} />}
-                    </Button>
-                  )}
-                </div>
-              </StaggerItem>
+      {counts && (counts.all > 0 || counts.archived > 0) && (
+        <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <SearchBox value={q} onChange={setQ} placeholder={t("vp.searchProducts")} testid="vp-search" />
+            <label className="sr-only" htmlFor="vp-category">{t("vx.pf.category")}</label>
+            <select id="vp-category" className={SELECT} value={category} onChange={(e) => update({ category: e.target.value })} data-testid="vp-category-filter">
+              <option value="">{t("vx.allCategories")}</option>
+              {(spec?.pillars || []).map((pl) => <option key={pl} value={pl}>{t(`vx.pillar.${pl}`)}</option>)}
+            </select>
+            <label className="sr-only" htmlFor="vp-sort">{t("vx.sortBy")}</label>
+            <select id="vp-sort" className={SELECT} value={sort} onChange={(e) => update({ sort: e.target.value === "created:desc" ? "" : e.target.value })} data-testid="vp-sort">
+              {SORTS.map(([k, l]) => <option key={k} value={k}>{t(l)}</option>)}
+            </select>
+          </div>
+          <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 sm:mx-0 sm:flex-wrap sm:px-0" role="tablist">
+            {FILTERS.map(([k, label]) => (
+              <button key={k} role="tab" aria-selected={!showArchived && filter === k} onClick={() => { update({ archived: "" }); setFilter(k); }} data-testid={`vp-filter-${k}`}
+                className={`shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium ${!showArchived && filter === k ? "hg-chip-on text-white" : "hg-chip-off"}`}>{t(label)} · {counts[k === "all" ? "all" : k] ?? 0}</button>
             ))}
-          </Stagger>
-        )}
+            <button role="tab" aria-selected={showArchived} onClick={() => update({ archived: showArchived ? "" : "true", approval: "", stock: "" })} data-testid="vp-filter-archived"
+              className={`shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium ${showArchived ? "hg-chip-on text-white" : "hg-chip-off"}`}>{t("vx.prod.archivedTab")} · {counts.archived}</button>
+          </div>
+        </div>
+      )}
 
-      {/* Create / edit */}
-      <Dialog open={!!edit} onOpenChange={(o) => !o && setEdit(null)}>
-        <DialogContent className="max-h-[90vh] max-w-2xl overflow-y-auto rounded-3xl">
-          <DialogHeader><DialogTitle>{edit?.id ? t("vp.editProduct") : t("vp.addProduct")}</DialogTitle></DialogHeader>
-          {edit && (
-            <div className="space-y-4">
-              {edit.id && <p className="flex gap-2 rounded-xl bg-hg-gold/10 p-3 text-xs text-ink ring-1 ring-hg-gold/25"><Info size={14} className="mt-px shrink-0 text-hg-gold" />{t("vp.p.reviewNote")}</p>}
-              <div className="grid gap-4 sm:grid-cols-2">
-                <F label={t("vp.p.sku")} value={edit.sku} disabled={!!edit.id} onChange={(v) => setEdit({ ...edit, sku: v })} testid="vpf-sku" />
-                <div>
-                  <Label className="text-sm text-ink">{t("vp.p.category")}</Label>
-                  <select value={edit.category} onChange={(e) => setEdit({ ...edit, category: e.target.value })} data-testid="vpf-category"
-                    className="mt-1.5 h-11 w-full rounded-xl border border-input bg-transparent px-3 text-sm text-ink">
-                    {PILLARS.map((c) => <option key={c} value={c}>{t(PILLAR_KEY[c])}</option>)}
-                  </select>
+      <StateBlock loading={loading} error={error} onRetry={reload} rows={3} testid="vp"
+        empty={items && items.length === 0} emptyIcon={Package} emptyTitle={counts && (counts.all > 0 || counts.archived > 0) ? t("vp.noMatch") : t("vp.noProducts")}
+        ctaLabel={counts && counts.all === 0 && counts.archived === 0 ? t("vp.addProduct") : undefined} onCta={() => setEdit({ ...EMPTY_PRODUCT })}>
+        <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {(items || []).map((p) => (
+            <li key={p.id} className="hg-card hg-lift flex min-w-0 flex-col p-5" data-testid={`vp-product-${p.sku}`}>
+              <div className="flex items-start gap-3.5">
+                {p.images?.[0] ? <img src={p.images[0]} alt="" className="h-16 w-16 shrink-0 rounded-xl object-cover ring-1 ring-brand-50" loading="lazy" /> : <span className="hg-icon-chip !h-16 !w-16" aria-hidden><Package size={22} /></span>}
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap gap-1.5">
+                    <Pill tone={APPROVAL_TONE[p.approval_status] || "ok"}>{t(`vp.a.${p.approval_status || "approved"}`)}</Pill>
+                    {p.archived ? <Pill tone="muted">{t("vx.prod.archivedTab")}</Pill> : p.approval_status === "approved" && <Pill tone={p.is_active ? "violet" : "muted"}>{p.is_active ? t("vp.live") : t("vp.paused")}</Pill>}
+                  </div>
+                  <h3 className="mt-1.5 line-clamp-2 font-medium leading-snug text-ink">{lang === "hi" && p.name_hi ? p.name_hi : p.name}</h3>
+                  <div className="mt-0.5 truncate font-mono text-xs text-muted2">{p.sku} · {t(`vx.pillar.${p.category}`)}</div>
                 </div>
-                <F label={t("vp.p.name")} value={edit.name} onChange={(v) => setEdit({ ...edit, name: v })} testid="vpf-name" />
-                <F label={t("vp.p.nameHi")} value={edit.name_hi} onChange={(v) => setEdit({ ...edit, name_hi: v })} testid="vpf-name-hi" />
               </div>
-              <div>
-                <Label className="text-sm text-ink">{t("vp.p.desc")}</Label>
-                <Textarea value={edit.description} onChange={(e) => setEdit({ ...edit, description: e.target.value })} className="mt-1.5 rounded-xl" rows={3} data-testid="vpf-desc" />
+              {p.approval_status === "rejected" && p.rejection_reason && (
+                <p className="mt-3 flex gap-2 rounded-xl bg-danger/10 p-2.5 text-xs text-danger" role="note" data-testid={`vp-reject-${p.sku}`}><AlertCircle size={14} className="mt-0.5 shrink-0" aria-hidden /> <span><b>{t("vx.prod.rejectedWhy")}</b> {p.rejection_reason}</span></p>
+              )}
+              <div className="mt-4 flex items-baseline gap-2"><Money value={p.selling_price} className="text-lg font-semibold text-hg-lavender" />{p.mrp > p.selling_price && <Money value={p.mrp} className="text-xs text-muted2 line-through" />}</div>
+              <div className="mt-1 flex items-center gap-2 text-xs text-muted2"><Boxes size={13} aria-hidden /> {t("vp.stock")}: <b className={p.stock <= 0 ? "text-danger" : "text-ink"}>{p.stock}</b>{p.variants?.length > 0 && <span>· {t("vx.prod.nVariants", { n: p.variants.length })}</span>}<span className="ml-auto">{fmtDate(p.updated_at, lang)}</span></div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {!p.archived && <Button variant="outline" className="h-9 rounded-full" onClick={() => setEdit(fromProduct(p))} data-testid={`vp-edit-${p.sku}`}><Pencil size={14} /> {t("vp.editProduct")}</Button>}
+                {!p.archived && p.approval_status === "approved" && <Button variant="outline" className="h-9 rounded-full" disabled={busy} onClick={() => toggleListing(p)} data-testid={`vp-toggle-${p.sku}`}>{p.is_active ? <><Pause size={14} /> {t("vp.pause")}</> : <><Play size={14} /> {t("vp.resume")}</>}</Button>}
+                {!p.archived && <Link to={`/vendor/inventory?q=${encodeURIComponent(p.sku)}`} className="inline-flex h-9 items-center gap-1.5 rounded-full px-3 text-sm text-hg-lavender hover:bg-brand-50/60"><Boxes size={14} /> {t("vx.nav.inventory")}</Link>}
+                <Button variant="ghost" className="h-9 rounded-full" onClick={() => setConfirm({ kind: p.archived ? "restore" : "archive", p })} data-testid={`vp-archive-${p.sku}`}>{p.archived ? <><ArchiveRestore size={14} /> {t("vx.prod.restore")}</> : <><Archive size={14} /> {t("vx.prod.archive")}</>}</Button>
               </div>
-              <div className="grid gap-4 sm:grid-cols-3">
-                <F label={t("vp.p.mrp")} type="number" value={edit.mrp} onChange={(v) => setEdit({ ...edit, mrp: v })} testid="vpf-mrp" />
-                <F label={t("vp.p.price")} type="number" value={edit.selling_price} onChange={(v) => setEdit({ ...edit, selling_price: v })} testid="vpf-price" />
-                <F label={t("vp.p.gst")} type="number" value={edit.gst_percent} onChange={(v) => setEdit({ ...edit, gst_percent: v })} testid="vpf-gst" />
-              </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                {!edit.id && <F label={t("vp.p.stock")} type="number" value={edit.stock} onChange={(v) => setEdit({ ...edit, stock: v })} testid="vpf-stock" />}
-                <F label={t("vp.p.image")} value={edit.image} onChange={(v) => setEdit({ ...edit, image: v })} testid="vpf-image" />
-              </div>
-              <F label={t("vp.p.returns")} value={edit.return_policy} onChange={(v) => setEdit({ ...edit, return_policy: v })} testid="vpf-returns" />
-              <div className="flex justify-end gap-2 pt-2">
-                <Button variant="outline" onClick={() => setEdit(null)} className="h-11 rounded-full border-brand-50 bg-transparent px-5">{t("cta.cancel")}</Button>
-                <Button onClick={save} disabled={busy} className="hg-btn h-11 rounded-full px-6" data-testid="vpf-save">{t("vp.p.save")}</Button>
-              </div>
-            </div>
-          )}
+            </li>
+          ))}
+        </ul>
+      </StateBlock>
+      {data && <Pager page={page} pages={data.pages} total={data.total} onPage={setPage} t={t} testid="vp-pager" />}
+
+      <Dialog open={!!edit} onOpenChange={(o) => !o && !busy && setEdit(null)}>
+        <DialogContent className="max-h-[92vh] max-w-3xl overflow-y-auto rounded-3xl" data-testid="vp-dialog">
+          <DialogHeader><DialogTitle>{edit?.id ? t("vp.editProduct") : t("vp.addProduct")}</DialogTitle><DialogDescription>{t("vx.pf.reviewNote")}</DialogDescription></DialogHeader>
+          {edit && <ProductForm value={edit} onChange={setEdit} isEdit={!!edit.id} spec={spec} />}
+          <div className="sticky bottom-0 -mx-6 flex justify-end gap-2 border-t border-white/10 bg-background/90 px-6 py-3 backdrop-blur">
+            <Button variant="outline" className="h-11 rounded-full" onClick={() => setEdit(null)} disabled={busy}>{t("vx.cancel")}</Button>
+            <Button className="hg-btn h-11 rounded-full px-6" onClick={save} disabled={busy || !edit?.sku || !edit?.name || !edit?.mrp || !edit?.selling_price} data-testid="vp-save">{busy ? t("vx.saving") : t("vp.p.save")}</Button>
+          </div>
         </DialogContent>
       </Dialog>
 
-      {stockFor && <StockDialog p={stockFor} t={t} onClose={() => setStockFor(null)} onDone={() => { setStockFor(null); load(); }} />}
+      <ConfirmDialog open={!!confirm} busy={busy} danger={confirm?.kind === "archive"} onClose={() => setConfirm(null)}
+        title={confirm?.kind === "archive" ? t("vx.prod.archiveTitle") : t("vx.prod.restoreTitle")} body={confirm?.kind === "archive" ? t("vx.prod.archiveBody") : t("vx.prod.restoreBody")}
+        confirmLabel={confirm?.kind === "archive" ? t("vx.prod.archive") : t("vx.prod.restore")} onConfirm={() => archive(confirm.p, confirm.kind === "archive")} />
+      <ImportDialog open={importing} onClose={() => setImporting(false)} onDone={() => { reload(); }} />
     </div>
-  );
-}
-
-function F({ label, value, onChange, type = "text", disabled, testid }) {
-  return <div><Label className="text-sm text-ink">{label}</Label><Input type={type} value={value} disabled={disabled} onChange={(e) => onChange(e.target.value)} className="mt-1.5" data-testid={testid} /></div>;
-}
-
-function StockDialog({ p, t, onClose, onDone }) {
-  const [delta, setDelta] = useState("");
-  const [reason, setReason] = useState("");
-  const [hist, setHist] = useState(null);
-  const [busy, setBusy] = useState(false);
-  useEffect(() => { API.get(`/vendor/products/${p.id}/stock-history`).then(({ data }) => setHist(data)).catch(() => setHist([])); }, [p.id]);
-  const submit = async () => {
-    setBusy(true);
-    try { await API.post(`/vendor/products/${p.id}/stock`, { delta: parseInt(delta, 10), reason }); toast.success(t("vp.adjust") + " ✓"); onDone(); }
-    catch (err) { toast.error(apiError(err)); }
-    finally { setBusy(false); }
-  };
-  return (
-    <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-md rounded-3xl">
-        <DialogHeader><DialogTitle>{t("vp.adjust")} · {p.name}</DialogTitle></DialogHeader>
-        <div className="text-sm text-muted2">{t("vp.stock")}: <b className="text-ink">{p.stock}</b></div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div><Label className="text-sm text-ink">{t("vp.adjustQty")}</Label><Input type="number" value={delta} onChange={(e) => setDelta(e.target.value)} className="mt-1.5" data-testid="vps-delta" /></div>
-          <div><Label className="text-sm text-ink">{t("vp.adjustReason")}</Label><Input value={reason} onChange={(e) => setReason(e.target.value)} className="mt-1.5" data-testid="vps-reason" /></div>
-        </div>
-        <Button onClick={submit} disabled={busy || !delta || reason.trim().length < 3} className="hg-btn h-11 rounded-full" data-testid="vps-save">{t("vp.confirm")}</Button>
-        <div>
-          <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-ink"><History size={15} /> {t("vp.history")}</div>
-          <div className="max-h-48 space-y-1.5 overflow-y-auto">
-            {(hist || []).map((h) => (
-              <div key={h.id} className="hg-tile flex items-center justify-between px-3 py-2 text-xs">
-                <span className="truncate text-muted2">{(h.created_at || "").slice(0, 16).replace("T", " ")} · {h.reason}</span>
-                <span className={`shrink-0 font-semibold ${h.delta > 0 ? "text-hg-success" : "text-danger"}`}>{h.delta > 0 ? "+" : ""}{h.delta}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </DialogContent>
-    </Dialog>
   );
 }

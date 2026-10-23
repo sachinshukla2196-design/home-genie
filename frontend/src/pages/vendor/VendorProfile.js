@@ -11,6 +11,7 @@ import { useVendor, VENDOR_STATUS_TONE } from "@/components/VendorLayout";
 import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
 import { API, apiError } from "@/lib/api";
+import { Governance } from "@/components/vendor/Governance";
 
 const PILLARS = ["Sarees", "Fashion Products", "Makeup, Beauty & Skincare", "Household Essentials"];
 const PILLAR_KEY = { "Sarees": "pillar.sarees.t", "Fashion Products": "pillar.fashion.t", "Makeup, Beauty & Skincare": "pillar.beauty.t", "Household Essentials": "pillar.household.t" };
@@ -44,7 +45,7 @@ export default function VendorProfile() {
 
   const status = vendor ? vendor.status : "draft";
   const locked = status === "approved" || status === "suspended";
-  const underReview = status === "submitted";
+  const underReview = status === "submitted" || status === "under_review";
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const toggleCat = (c) => setF({ ...f, categories: f.categories.includes(c) ? f.categories.filter((x) => x !== c) : [...f.categories, c] });
 
@@ -144,6 +145,8 @@ export default function VendorProfile() {
           )}
         </div>
       )}
+
+      <Governance approved={status === "approved"} />
     </div>
   );
 }
