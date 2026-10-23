@@ -76,7 +76,7 @@ export default function Landing() {
         style={{ top: "env(safe-area-inset-top, 0px)" }}>
         <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-2 px-4 sm:px-8">
           <Link to="/" data-testid="header-logo" aria-label="HOME GENIES home">
-            <Logo size="sm" variant="icon" className="sm:hidden" /><span className="hidden sm:block"><Logo size="sm" /></span>
+            <Logo size="md" variant="icon" className="sm:hidden" /><span className="hidden sm:block"><Logo size="md" /></span>
           </Link>
           <nav className="hidden items-center gap-6 whitespace-nowrap text-sm font-medium text-muted2 lg:flex" aria-label="Sections">
             <a href="#how-it-works" className="hover:text-ink">{t("how.eyebrow")}</a>

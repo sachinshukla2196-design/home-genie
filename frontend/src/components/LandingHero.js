@@ -1,7 +1,7 @@
 import React from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import {
-  ArrowRight, Sparkles, Smartphone, Clock, ShoppingBag, Eye, TrendingUp, BadgeIndianRupee,
+  ArrowRight, Sparkles, Smartphone, Clock, ShoppingBag, Eye,
   Search, Home, Gift, User, Heart, ShoppingCart, Users, ClipboardCheck, IndianRupee,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -96,7 +96,7 @@ function PhoneMock({ t, products, name }) {
               </div>
             ))}
           </div>
-          {products.length > 0 && (
+          {products.length > 0 ? (
             <>
               <div className="mt-3 text-[10px] font-bold">{t("landing.featured")}</div>
               <div className="mt-1.5 grid grid-cols-2 gap-1.5">
@@ -111,6 +111,18 @@ function PhoneMock({ t, products, name }) {
                 ))}
               </div>
             </>
+          ) : (
+            <>
+              <div className="mt-3 text-[10px] font-bold">{t("pillars.eyebrow")}</div>
+              <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                {PILLARS.slice(0, 2).map((p) => (
+                  <div key={p.key} className="overflow-hidden rounded-xl bg-white shadow-sm ring-1 ring-[#EDE4FF]">
+                    <div className="aspect-[4/3] bg-[#F1EAFB]"><img src={p.img} alt="" className="h-full w-full object-cover" /></div>
+                    <div className="truncate p-1.5 text-[8px] font-semibold">{t(`${p.key}.t`)}</div>
+                  </div>
+                ))}
+              </div>
+            </>
           )}
         </div>
         <div className="flex justify-around border-t border-[#EDE4FF] bg-white px-2 py-2 text-[#7A6E8C]">
@@ -121,24 +133,10 @@ function PhoneMock({ t, products, name }) {
   );
 }
 
-function GlassTag({ icon: Icon, tone, title, sub, testid }) {
-  return (
-    <div className="hg-glass flex items-center gap-2.5 !rounded-2xl px-3 py-2.5 dark:!bg-hg-bg2/80" data-testid={testid}>
-      <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${tone}`}><Icon size={17} /></span>
-      <span className="min-w-0">
-        <span className="block whitespace-nowrap text-sm font-semibold text-ink">{title}</span>
-        {sub && <span className="block whitespace-nowrap text-[11px] text-muted2">{sub}</span>}
-      </span>
-      <ArrowRight size={14} className="ml-1 shrink-0 text-hg-lavender" />
-    </div>
-  );
-}
-
 export function LandingHero({ t, lang, navigate, homeLink, products }) {
   const enter = useEnter();
   const reduce = useReducedMotion();
   const name = (p) => (lang === "hi" && p.name_hi ? p.name_hi : p.name);
-  const pop = (d) => enter(d, { opacity: 0, scale: 0.6, y: 10 }, 0.55);
 
   return (
     <section className="relative -mt-16 overflow-hidden pt-16" aria-label={t("hero.title")}>
@@ -151,9 +149,9 @@ export function LandingHero({ t, lang, navigate, homeLink, products }) {
       </motion.div>
       <span className="hg-orb left-[-10%] top-10 h-72 w-72 bg-hg-violet/35" />
 
-      <div className="relative mx-auto grid max-w-6xl items-center gap-10 px-4 pb-14 pt-8 sm:px-8 lg:min-h-[640px] lg:grid-cols-[1.1fr_1fr] lg:pb-20 lg:pt-12">
+      <div className="relative mx-auto grid max-w-6xl items-center gap-10 px-4 lg:gap-24 pb-14 pt-8 sm:px-8 lg:min-h-[640px] lg:grid-cols-[1.1fr_1fr] lg:pb-20 lg:pt-12">
         {/* ---- Text column ---- */}
-        <div className="relative z-10">
+        <div className="relative z-10 lg:-ml-[100px]">
           <motion.span {...enter(0.15, { opacity: 0, x: -16 })}
             className="inline-flex items-center gap-1.5 rounded-full bg-hg-violet/15 px-3.5 py-1.5 text-xs font-semibold uppercase tracking-wider text-hg-lavender ring-1 ring-hg-lavender/30">
             <Sparkles size={13} className="text-hg-gold" /> {t("brand.tagline")}
@@ -200,21 +198,6 @@ export function LandingHero({ t, lang, navigate, homeLink, products }) {
           <motion.div {...enter(0.7, { opacity: 0, y: 70, rotate: -2 }, 0.9)} className="absolute left-3 top-8 z-10 origin-bottom-left scale-[0.82] sm:left-6 sm:scale-90 lg:left-[-3%] lg:top-6 lg:scale-100">
             <div style={{ transform: "rotate(-5deg)" }}>
               <div className={reduce ? "" : "hg-float-slow"}><PhoneMock t={t} products={products} name={name} /></div>
-            </div>
-          </motion.div>
-
-          {/* 1.35s+ — glass cards pop out of the phone one at a time */}
-          <motion.div {...pop(1.35)} className="absolute right-2 top-4 z-20 sm:right-4 lg:right-[2%] lg:top-10">
-            <div className={reduce ? "" : "hg-float"}><GlassTag icon={TrendingUp} tone="bg-hg-violet/20 text-hg-lavender" title={t("preview.sales")} sub={t("landing.float.tracked")} testid="float-sales" /></div>
-          </motion.div>
-          <motion.div {...pop(1.5)} className="absolute right-2 top-[6.5rem] z-20 sm:right-4 lg:right-[-2%] lg:top-[8.5rem]">
-            <div className={reduce ? "" : "hg-float-slow"}><GlassTag icon={BadgeIndianRupee} tone="bg-hg-gold/15 text-hg-gold" title={t("preview.commission")} sub={t("landing.float.realSales")} testid="float-commission" /></div>
-          </motion.div>
-          <motion.div {...pop(1.65)} className="absolute bottom-6 left-0 z-20 hidden sm:block lg:bottom-6 lg:left-[-16%]">
-            <div className="hg-glass flex -rotate-3 items-center gap-2.5 !rounded-2xl px-3.5 py-3 dark:!bg-hg-bg2/85">
-              <img src="/brand/logo-icon.png" alt="" className="h-10 w-10 rounded-xl" />
-              <span className="max-w-[9rem] text-sm font-semibold leading-tight text-ink">{t("brand.tagline")}</span>
-              <Heart size={14} className="text-hg-pink" fill="currentColor" />
             </div>
           </motion.div>
 
