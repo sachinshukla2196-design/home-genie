@@ -114,13 +114,13 @@ function Statements() {
   );
 }
 
-export default function VendorFinance() {
+export default function VendorFinance({ title }) {
   const { t } = useI18n();
   const [sp, setSp] = useSearchParams();
   const tab = TABS.includes(sp.get("tab")) ? sp.get("tab") : "overview";
   return (
     <div className="space-y-5">
-      <PageHeader title={t("vx.nav.finance")} subtitle={t("vx.fin.sub")} icon={Landmark} />
+      <PageHeader title={title || t("vx.nav.finance")} subtitle={t("vx.fin.sub")} icon={Landmark} />
       <div className="flex flex-wrap gap-2" role="tablist">{TABS.map((k) => <button key={k} role="tab" aria-selected={tab === k} onClick={() => setSp(k === "overview" ? {} : { tab: k })} data-testid={`fin-tab-${k}`}
         className={`rounded-full px-4 py-2 text-sm font-medium ${tab === k ? "hg-chip-on text-white" : "hg-chip-off"}`}>{t(`vx.fin.tab.${k}`)}</button>)}</div>
       {tab === "overview" && <Overview />}{tab === "ledger" && <Ledger />}{tab === "settlements" && <Settlements />}{tab === "statements" && <Statements />}

@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import { Link, useLocation, Outlet } from "react-router-dom";
 import { MotionConfig, motion } from "framer-motion";
 import {
-  LayoutDashboard, Package, ClipboardList, Store, LogOut, Bell, Boxes, Truck, Undo2, BarChart3, Landmark, Banknote, LifeBuoy, ShieldCheck, Menu,
+  LayoutDashboard, Package, ClipboardList, Store, LogOut, Bell, Boxes, Truck, Undo2, BarChart3, Landmark, Banknote, LifeBuoy, ShieldCheck, Menu, FileBarChart, TrendingUp,
 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
@@ -12,35 +12,37 @@ import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
 import { API } from "@/lib/api";
 
-// Grouped navigation. `needsApproval` sections are hidden until the vendor is approved (the profile / onboarding stays reachable).
+// Grouped navigation. Every item is always shown: pages for vendors who are not approved yet explain what is pending
+// (see VendorGate in App.js) instead of hiding the menu. Data is still protected on the backend.
 export const NAV_GROUPS = [
   { key: "vx.nav.g.overview", items: [
-    { to: "/vendor", icon: LayoutDashboard, key: "vp.dashboard", id: "dashboard", needsApproval: true },
-    { to: "/vendor/notifications", icon: Bell, key: "vx.nav.notifications", id: "notifications", needsApproval: true },
+    { to: "/vendor/dashboard", icon: LayoutDashboard, key: "vp.dashboard", id: "dashboard" },
+    { to: "/vendor/notifications", icon: Bell, key: "vx.nav.notifications", id: "notifications" },
   ] },
   { key: "vx.nav.g.catalogue", items: [
-    { to: "/vendor/products", icon: Package, key: "vp.products", id: "products", needsApproval: true },
-    { to: "/vendor/inventory", icon: Boxes, key: "vx.nav.inventory", id: "inventory", needsApproval: true },
+    { to: "/vendor/products", icon: Package, key: "vp.products", id: "products" },
+    { to: "/vendor/inventory", icon: Boxes, key: "vx.nav.inventory", id: "inventory" },
   ] },
   { key: "vx.nav.g.orders", items: [
-    { to: "/vendor/orders", icon: ClipboardList, key: "vp.orders", id: "orders", needsApproval: true },
-    { to: "/vendor/dispatch", icon: Truck, key: "vx.nav.dispatch", id: "dispatch", needsApproval: true },
-    { to: "/vendor/returns", icon: Undo2, key: "vx.nav.returns", id: "returns", needsApproval: true },
+    { to: "/vendor/orders", icon: ClipboardList, key: "vp.orders", id: "orders" },
+    { to: "/vendor/shipping", icon: Truck, key: "vx.nav.shipping", id: "shipping" },
   ] },
   { key: "vx.nav.g.growth", items: [
-    { to: "/vendor/analytics", icon: BarChart3, key: "vx.nav.analytics", id: "analytics", needsApproval: true },
+    { to: "/vendor/reports", icon: FileBarChart, key: "vx.nav.report", id: "report" },
+    { to: "/vendor/advancement", icon: TrendingUp, key: "vx.nav.advancement", id: "advancement" },
+    { to: "/vendor/analytics", icon: BarChart3, key: "vx.nav.analytics", id: "analytics" },
   ] },
   { key: "vx.nav.g.finance", items: [
-    { to: "/vendor/finance", icon: Landmark, key: "vx.nav.finance", id: "finance", needsApproval: true },
-    { to: "/vendor/cod", icon: Banknote, key: "vx.nav.cod", id: "cod", needsApproval: true },
+    { to: "/vendor/earnings", icon: Landmark, key: "vx.nav.earnings", id: "earnings" },
+    { to: "/vendor/cod", icon: Banknote, key: "vx.nav.cod", id: "cod" },
   ] },
   { key: "vx.nav.g.account", items: [
     { to: "/vendor/profile", icon: Store, key: "vp.profile", id: "profile" },
-    { to: "/vendor/support", icon: LifeBuoy, key: "vx.nav.support", id: "support", needsApproval: true },
+    { to: "/vendor/support", icon: LifeBuoy, key: "vx.nav.support", id: "support" },
     { to: "/vendor/security", icon: ShieldCheck, key: "vx.nav.security", id: "security" },
   ] },
 ];
-const BOTTOM = ["dashboard", "orders", "products", "finance"];
+const BOTTOM = ["dashboard", "orders", "products", "earnings"];
 
 const VendorCtx = createContext(null);
 /** The signed-in vendor's application record (null until loaded, false if none yet). */
@@ -72,7 +74,7 @@ export function VendorLayout() {
   }, [loc.pathname]);
 
   const approved = vendor && vendor.status === "approved";
-  const groups = NAV_GROUPS.map((g) => ({ ...g, items: g.items.filter((n) => approved || !n.needsApproval) })).filter((g) => g.items.length);
+  const groups = NAV_GROUPS;
   const flat = groups.flatMap((g) => g.items);
   const active = (to) => (to === "/vendor" ? loc.pathname === "/vendor" : loc.pathname.startsWith(to));
 

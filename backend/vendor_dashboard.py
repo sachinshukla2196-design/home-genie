@@ -55,6 +55,25 @@ def _line_paise(prefix: str = "$$l"):
     return {"$ifNull": [f"{prefix}.total_paise", {"$toLong": {"$round": [{"$multiply": [f"{prefix}.total", 100]}, 0]}}]}
 
 
+async def _sales_periods(vid: str) -> dict:
+    """Order value for today, the last 7 days and this month (the same live-order rule as the range figures)."""
+    today = datetime.now(timezone.utc).date()
+    out = {}
+    for key, start in (("today", today), ("week", today - timedelta(days=6)), ("month", today.replace(day=1))):
+        window = {**_orders_base(vid), "created_at": {"$gte": start.isoformat(), "$lte": f"{today.isoformat()}T23:59:59.999999"}}
+        rows = await db.orders.aggregate([
+            {"$match": window},
+            {"$addFields": {"f": {"$first": {"$filter": {"input": "$fulfilments", "as": "x", "cond": {"$eq": ["$$x.vendor_id", vid]}}}},
+                            "vtotal": {"$sum": {"$map": {"input": {"$filter": {"input": "$items", "as": "l", "cond": {"$eq": ["$$l.vendor_id", vid]}}},
+                                                         "as": "l", "in": _line_paise("$$l")}}}}},
+            {"$match": {"f.status": {"$nin": EXCLUDED}, "payment_status": {"$ne": "refunded"}}},
+            {"$group": {"_id": None, "p": {"$sum": "$vtotal"}, "n": {"$sum": 1}}},
+        ]).to_list(1)
+        row = rows[0] if rows else {"p": 0, "n": 0}
+        out[key] = {"orders": row["n"], "value_paise": row["p"], "value": paise_to_float(row["p"])}
+    return out
+
+
 @router.get("/vendor/dashboard")
 async def vendor_dashboard(range: str = "month", date_from: Optional[str] = None, date_to: Optional[str] = None,
                            user: dict = Depends(require_approved_vendor)):
@@ -163,6 +182,7 @@ async def vendor_dashboard(range: str = "month", date_from: Optional[str] = None
         "vendor": _public_vendor(v),
         "range": {"key": range, "from": f.isoformat(), "to": t.isoformat()},
         "today": {"orders": today_orders},
+        "sales_periods": await _sales_periods(vid),
         "queue": {"new": by.get("new", 0), "to_pack": by.get("accepted", 0), "to_dispatch": by.get("packed", 0),
                   "in_transit": by.get("dispatched", 0), "exceptions": by.get("delivery_failed", 0),
                   "delivered": by.get("delivered", 0), "awaiting_return_inspection": awaiting_insp},

@@ -50,6 +50,11 @@ import VendorInventory from "@/pages/vendor/VendorInventory";
 import VendorDispatch from "@/pages/vendor/VendorDispatch";
 import VendorReturns from "@/pages/vendor/VendorReturns";
 import VendorAnalytics from "@/pages/vendor/VendorAnalytics";
+import VendorReports from "@/pages/vendor/VendorReports";
+import VendorEarnings from "@/pages/vendor/VendorEarnings";
+import VendorShipping from "@/pages/vendor/VendorShipping";
+import { PendingApproval } from "@/components/vendor/PendingApproval";
+import VendorAdvancement from "@/pages/vendor/VendorAdvancement";
 import VendorFinance from "@/pages/vendor/VendorFinance";
 import VendorCod from "@/pages/vendor/VendorCod";
 import VendorNotifications from "@/pages/vendor/VendorNotifications";
@@ -75,11 +80,11 @@ function App() {
 }
 
 // Toasts follow the light/dark theme and use the glass styling.
-// Vendor routes other than the profile need an approved vendor account; until then, onboarding.
+// Vendor data pages need an approved vendor account. Until then the page explains what is pending, inside the portal.
 function VendorGate({ children }) {
   const { vendor } = useVendor();
   if (vendor === null) return null;
-  return vendor && vendor.status === "approved" ? children : <Navigate to="/vendor/profile" replace />;
+  return vendor && vendor.status === "approved" ? children : <PendingApproval vendor={vendor} />;
 }
 function VendorHome() {
   return <VendorGate><VendorDashboard /></VendorGate>;
@@ -142,14 +147,19 @@ function AppRoutes() {
                 <Route path="/vendor/login" element={<VendorLogin />} />
                 <Route path="/vendor/register" element={<VendorRegister />} />
                 <Route path="/vendor" element={<ProtectedRoute vendor><VendorLayout /></ProtectedRoute>}>
-                  <Route index element={<VendorHome />} />
+                  <Route index element={<Navigate to="dashboard" replace />} />
+                  <Route path="dashboard" element={<VendorHome />} />
                   <Route path="orders" element={<VendorGate><VendorOrders /></VendorGate>} />
                   <Route path="products" element={<VendorGate><VendorProducts /></VendorGate>} />
                   <Route path="inventory" element={<VendorGate><VendorInventory /></VendorGate>} />
                   <Route path="dispatch" element={<VendorGate><VendorDispatch /></VendorGate>} />
                   <Route path="returns" element={<VendorGate><VendorReturns /></VendorGate>} />
                   <Route path="analytics" element={<VendorGate><VendorAnalytics /></VendorGate>} />
+                  <Route path="reports" element={<VendorGate><VendorReports /></VendorGate>} />
+                  <Route path="advancement" element={<VendorGate><VendorAdvancement /></VendorGate>} />
                   <Route path="finance" element={<VendorGate><VendorFinance /></VendorGate>} />
+                  <Route path="earnings" element={<VendorGate><VendorEarnings /></VendorGate>} />
+                  <Route path="shipping" element={<VendorGate><VendorShipping /></VendorGate>} />
                   <Route path="cod" element={<VendorGate><VendorCod /></VendorGate>} />
                   <Route path="notifications" element={<VendorGate><VendorNotifications /></VendorGate>} />
                   <Route path="support" element={<VendorGate><VendorSupport /></VendorGate>} />

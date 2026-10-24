@@ -108,6 +108,13 @@ export default function VendorDashboard() {
         )}
       </SectionCard>
 
+      {/* ---------------------------------------------------------------- sales by period (order value, live orders only) */}
+      <section aria-label={t("vx.dash.salesSection")} className="grid grid-cols-1 gap-3 sm:grid-cols-3" data-testid="sales-periods">
+        <Kpi to={go("analytics?range=today")} icon={IndianRupee} label={t("vx.dash.salesToday")} value={inrP(d.sales_periods.today.value_paise)} testid="kpi-sales-today" />
+        <Kpi to={go("analytics?range=7d")} icon={IndianRupee} label={t("vx.dash.salesWeek")} value={inrP(d.sales_periods.week.value_paise)} testid="kpi-sales-week" />
+        <Kpi to={go("analytics")} icon={IndianRupee} label={t("vx.dash.salesMonth")} value={inrP(d.sales_periods.month.value_paise)} testid="kpi-sales-month" />
+      </section>
+
       {/* ---------------------------------------------------------------- operational KPIs (each opens the matching list) */}
       <section aria-label={t("vx.dash.operations")} className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         <Kpi to={go("orders")} icon={Inbox} label={t("vx.dash.today")} value={d.today.orders} testid="kpi-today" />

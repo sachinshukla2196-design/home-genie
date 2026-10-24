@@ -10,7 +10,7 @@ import { FULFIL_PILL, OrderDetail } from "@/components/vendor/OrderDetail";
 const QUEUES = [["packed", "vx.dsp.ready"], ["accepted", "vx.dsp.toPack"], ["dispatched", "vx.dsp.inTransit"], ["delivery_failed", "vx.dsp.exceptions"]];
 
 /** The dispatch queue: what to pack, what is ready to hand over, what is on the road and what failed. Tracking is entered manually. */
-export default function VendorDispatch() {
+export default function VendorDispatch({ embedded = false }) {
   const { t, lang } = useI18n();
   const [queue, setQueue] = useState("packed");
   const [open, setOpen] = useState(null);
@@ -28,7 +28,7 @@ export default function VendorDispatch() {
   ];
   return (
     <div className="space-y-5">
-      <PageHeader title={t("vx.nav.dispatch")} subtitle={t("vx.dsp.sub")} icon={Truck} />
+      {!embedded && <PageHeader title={t("vx.nav.dispatch")} subtitle={t("vx.dsp.sub")} icon={Truck} />}
       <p className="rounded-xl bg-hg-gold/10 p-3 text-xs text-ink ring-1 ring-hg-gold/25" role="note" data-testid="dsp-manual-note">{t("vx.ord.manualTracking")}</p>
       <div className="flex flex-wrap gap-2" role="tablist">
         {QUEUES.map(([k, l]) => <button key={k} role="tab" aria-selected={queue === k} onClick={() => setQueue(k)} data-testid={`dsp-tab-${k}`} className={`rounded-full px-4 py-2 text-sm font-medium ${queue === k ? "hg-chip-on text-white" : "hg-chip-off"}`}>{t(l)} · {counts[k] ?? 0}</button>)}

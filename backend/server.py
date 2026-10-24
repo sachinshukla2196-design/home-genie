@@ -70,6 +70,8 @@ import returns_routes
 app.include_router(returns_routes.router)
 import vendor_dashboard
 app.include_router(vendor_dashboard.router)
+import vendor_reports
+app.include_router(vendor_reports.router)
 import governance_routes
 app.include_router(governance_routes.router)
 

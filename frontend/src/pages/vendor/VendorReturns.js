@@ -77,7 +77,7 @@ function ReturnDetail({ id, onChanged }) {
   );
 }
 
-export default function VendorReturns() {
+export default function VendorReturns({ embedded = false }) {
   const { t, lang } = useI18n();
   const [sp, setSp] = useSearchParams();
   const tab = sp.get("status") || "all";
@@ -96,7 +96,7 @@ export default function VendorReturns() {
   ];
   return (
     <div className="space-y-5">
-      <PageHeader title={t("vx.nav.returns")} subtitle={t("vx.ret.sub")} icon={Undo2} />
+      {!embedded && <PageHeader title={t("vx.nav.returns")} subtitle={t("vx.ret.sub")} icon={Undo2} />}
       <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:flex-wrap sm:px-0" role="tablist">
         {TABS.filter((s) => s === "all" || counts[s] || tab === s).map((s) => <button key={s} role="tab" aria-selected={tab === s} onClick={() => setParam("status", s === "all" ? "" : s)} data-testid={`ret-tab-${s}`}
           className={`shrink-0 whitespace-nowrap rounded-full px-4 py-2 text-sm font-medium ${tab === s ? "hg-chip-on text-white" : "hg-chip-off"}`}>{s === "all" ? t("vp.o.all") : t(`vx.ret.st.${s}`)} · {s === "all" ? total : counts[s] ?? 0}</button>)}

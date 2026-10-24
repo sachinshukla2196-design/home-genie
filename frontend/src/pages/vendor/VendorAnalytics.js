@@ -11,7 +11,7 @@ import { Money, RangeBar, StateBlock, fmtDate, inrP } from "@/components/vendor/
 const COLORS = ["#8B3DFF", "#E0A92E", "#D946EF", "#5B7CFF", "#2BB98A"];
 const axis = { fontSize: 11, fill: "#9A8FB0" };
 
-function Chart({ title, summary, rows, empty, children, testid }) {
+export function Chart({ title, summary, rows, empty, children, testid }) {
   return (
     <SectionCard title={title} testid={testid}>
       <div role="img" aria-label={summary} className="h-60 w-full">{empty ? <p className="flex h-full items-center justify-center text-sm text-muted2">{empty}</p> : children}</div>
