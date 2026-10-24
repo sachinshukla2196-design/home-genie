@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from starlette.middleware.cors import CORSMiddleware
 
-from core import (db, client, now_iso, new_id, hash_password, verify_password,
+from core import (CONFIG_PROBLEMS, db, client, now_iso, new_id, hash_password, verify_password,
                   get_settings, DEFAULT_SETTINGS, password_update, log_audit)
 import auth_routes
 import shop_routes
@@ -76,7 +76,7 @@ app.include_router(governance_routes.router)
 _cors_raw = os.environ.get("CORS_ALLOWED_ORIGINS") or os.environ.get("CORS_ORIGINS", "")
 _cors = [o.strip() for o in _cors_raw.split(",") if o.strip() and o.strip() != "*"]
 if not _cors:
-    raise RuntimeError("CORS_ORIGINS is not configured with explicit production origin(s).")
+    CONFIG_PROBLEMS.append("CORS_ORIGINS")  # '*' is never accepted; requests are refused until it is set
 
 
 def _strong_enough(pw: str) -> bool:
@@ -102,6 +102,8 @@ DB_PING_TIMEOUT = 5  # seconds; keeps an unreachable database from hanging reque
 @app.middleware("http")
 async def _ensure_initialised(request, call_next):
     global _init_ok
+    if CONFIG_PROBLEMS and request.method != "OPTIONS":
+        return JSONResponse({"detail": "Server configuration is incomplete.", "missing_env": sorted(set(CONFIG_PROBLEMS))}, status_code=503)
     if ON_VERCEL and not _init_ok and request.method != "OPTIONS":
         async with _init_lock:
             if not _init_ok:

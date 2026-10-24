@@ -18,18 +18,23 @@ load_dotenv(ROOT_DIR / ".env")
 
 logger = logging.getLogger("homegenies")
 
-mongo_url = os.environ["MONGO_URL"]
+# Missing configuration must not crash the import (Vercel would then only report an opaque
+# FUNCTION_INVOCATION_FAILED). It is recorded here and server.py answers every request with a 503 that names
+# the missing variables (names only, never values) until it is fixed.
+CONFIG_PROBLEMS = [n for n in ("MONGO_URL", "DB_NAME") if not os.environ.get(n)]
+mongo_url = os.environ.get("MONGO_URL") or "mongodb://localhost:27017"
 client = AsyncIOMotorClient(
     mongo_url,
     serverSelectionTimeoutMS=8000,
     connectTimeoutMS=8000,
     retryWrites=True,
 )
-db = client[os.environ["DB_NAME"]]
+db = client[os.environ.get("DB_NAME") or "homegenies_unconfigured"]
 
 JWT_SECRET = os.environ.get("JWT_SECRET")
 if not JWT_SECRET or JWT_SECRET == "change-me":
-    raise RuntimeError("JWT_SECRET is not configured. Set a strong JWT_SECRET in the environment.")
+    CONFIG_PROBLEMS.append("JWT_SECRET")
+    JWT_SECRET = uuid.uuid4().hex  # throwaway; every request is refused while JWT_SECRET is unset
 JWT_ALGO = "HS256"
 
 ADMIN_ROLES = {"super_admin", "admin", "accounts_admin", "support_admin"}

@@ -55,3 +55,17 @@ def test_db_unreachable_fails_fast_with_503_and_cors():
     assert r.headers["access-control-allow-origin"] == FRONTEND
     assert "temporarily unavailable" in r.json()["detail"]
     assert "mongodb" not in r.text.lower()  # no connection details leaked
+
+
+def test_missing_env_gives_503_naming_variables_not_import_crash():
+    """With no configuration the app must still import and answer 503 listing the missing variable NAMES."""
+    import subprocess, sys, os, json
+    code = ("import json;from fastapi.testclient import TestClient;import server;"
+            "r=TestClient(server.app).get('/api/');print(json.dumps([r.status_code,r.json()]))")
+    env = {k: v for k, v in os.environ.items() if k not in ("MONGO_URL", "DB_NAME", "JWT_SECRET", "CORS_ORIGINS", "CORS_ALLOWED_ORIGINS")}
+    env["VERCEL"] = "1"
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    out = subprocess.run([sys.executable, "-c", code], cwd=here, env=env, capture_output=True, text=True, timeout=60)
+    status, body = json.loads(out.stdout.strip().splitlines()[-1])
+    assert status == 503
+    assert body["missing_env"] == ["CORS_ORIGINS", "DB_NAME", "JWT_SECRET", "MONGO_URL"]
