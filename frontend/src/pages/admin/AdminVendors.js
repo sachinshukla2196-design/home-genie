@@ -32,7 +32,7 @@ export default function AdminVendors() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title={t("av.title")} icon={Store} />
+      <PageHeader title={t("av.title")} icon={Store} actions={<a href="/vendor/register" target="_blank" rel="noopener noreferrer" className="hg-btn inline-flex h-10 items-center gap-2 rounded-full px-5 text-sm font-semibold" data-testid="av-create-vendor"><UserPlus size={15} /> {t("av.createAccount")}</a>} />
 
       <SectionCard title={t("av.invite")} icon={UserPlus}>
         <form className="flex flex-col gap-3 sm:flex-row" onSubmit={(e) => { e.preventDefault(); act("/admin/vendors/invite", { identifier: invite }, t("av.inviteBtn") + " ✓").then(() => setInvite("")); }}>
@@ -51,6 +51,7 @@ export default function AdminVendors() {
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-semibold text-ink">{v.business_name}</span>
                       <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ring-1 ${VENDOR_STATUS_TONE[v.status]}`} data-testid={`av-status-${v.vendor_code}`}>{t(`vp.st.${v.status}`)}</span>
+                      {["submitted", "under_review", "rejected"].includes(v.status) && <Btn icon={Check} primary label={t("av.approve")} onClick={() => act(`/admin/vendors/${v.id}/decision`, { action: "approve" }, t("av.approve") + " ✓")} testid={`av-approve-${v.vendor_code}`} />}
                     </div>
                     <div className="mt-0.5 text-xs text-muted2">{v.vendor_code} · {v.contact_person} · {v.phone} · {v.account?.email || v.account?.mobile}</div>
                     <div className="mt-0.5 text-xs text-muted2">{(v.categories || []).join(", ")} · GSTIN {v.gstin || "—"} · {v.bank_account_name} {v.bank_account} / {v.ifsc} · {v.product_count} products</div>
@@ -60,7 +61,6 @@ export default function AdminVendors() {
                     {["submitted", "rejected", "approved"].includes(v.status) && (
                       <Input value={reason(v.id)} onChange={(e) => setReasons({ ...reasons, [v.id]: e.target.value })} placeholder={t("av.reasonPh")} className="h-9 w-56 text-xs" />
                     )}
-                    {["submitted", "rejected"].includes(v.status) && <Btn icon={Check} onClick={() => act(`/admin/vendors/${v.id}/decision`, { action: "approve" }, t("av.approve") + " ✓")} label={t("av.approve")} primary testid={`av-approve-${v.vendor_code}`} />}
                     {v.status === "submitted" && <Btn icon={X} onClick={() => act(`/admin/vendors/${v.id}/decision`, { action: "reject", reason: reason(v.id) }, t("av.reject") + " ✓")} label={t("av.reject")} testid={`av-reject-${v.vendor_code}`} />}
                     {v.status === "approved" && <Btn icon={Ban} onClick={() => act(`/admin/vendors/${v.id}/decision`, { action: "suspend", reason: reason(v.id) }, t("av.suspend") + " ✓")} label={t("av.suspend")} testid={`av-suspend-${v.vendor_code}`} />}
                     {v.status === "suspended" && <Btn icon={RotateCcw} onClick={() => act(`/admin/vendors/${v.id}/decision`, { action: "reinstate" }, t("av.reinstate") + " ✓")} label={t("av.reinstate")} primary testid={`av-reinstate-${v.vendor_code}`} />}

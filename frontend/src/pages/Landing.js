@@ -85,6 +85,8 @@ export default function Landing() {
           </nav>
           <div className="flex items-center gap-1.5 sm:gap-3">
             <LanguageSwitcher />
+            <Link to="/vendor/register" className="hidden whitespace-nowrap text-sm font-medium text-hg-lavender hover:text-ink sm:inline-flex sm:items-center" data-testid="header-vendor">{t("nav.becomeVendor")}</Link>
+            <Link to="/vendor/login" className="hidden whitespace-nowrap text-sm font-medium text-muted2 hover:text-ink md:inline-flex md:items-center" data-testid="header-vendor-login">{t("login.vendorLink")}</Link>
             <Link to="/login" className="hg-icon-btn !h-10 !w-10 sm:!w-auto sm:px-4 text-sm font-medium" aria-label={t("cta.login")} data-testid="header-login">
               <LogIn size={18} className="sm:hidden" /><span className="hidden sm:inline">{t("cta.login")}</span>
             </Link>
