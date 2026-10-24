@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { Link } from "react-router-dom";
 import { Store, UserPlus, PackageSearch, Check, X, Ban, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -32,7 +33,7 @@ export default function AdminVendors() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title={t("av.title")} icon={Store} actions={<a href="/vendor/register" target="_blank" rel="noopener noreferrer" className="hg-btn inline-flex h-10 items-center gap-2 rounded-full px-5 text-sm font-semibold" data-testid="av-create-vendor"><UserPlus size={15} /> {t("av.createAccount")}</a>} />
+      <PageHeader title={t("av.title")} icon={Store} actions={<Link to="/admin/vendors/new" className="hg-btn inline-flex h-10 items-center gap-2 rounded-full px-5 text-sm font-semibold" data-testid="av-create-vendor"><UserPlus size={15} /> {t("av.createAccount")}</Link>} />
 
       <SectionCard title={t("av.invite")} icon={UserPlus}>
         <form className="flex flex-col gap-3 sm:flex-row" onSubmit={(e) => { e.preventDefault(); act("/admin/vendors/invite", { identifier: invite }, t("av.inviteBtn") + " ✓").then(() => setInvite("")); }}>

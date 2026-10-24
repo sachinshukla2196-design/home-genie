@@ -122,9 +122,6 @@ export default function Login() {
         <Link to="/register" className="hg-card hg-lift group mt-4 flex items-center justify-center gap-2 px-4 py-4 font-semibold text-ink" data-testid="to-register">
           <UserPlus size={20} className="text-hg-lavender transition-transform duration-300 group-hover:scale-110" /> {t("auth.noAccount")} {t("cta.register")}
         </Link>
-        <p className="mt-4 text-center text-sm text-muted2">
-          {t("login.vendorPrompt")} <Link to="/vendor/login" className="font-semibold text-hg-lavender" data-testid="to-vendor-login">{t("login.vendorLink")}</Link>
-        </p>
       </div>
     </div>
   );

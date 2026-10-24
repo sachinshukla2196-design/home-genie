@@ -17,7 +17,7 @@ function FullLoader() {
 export function ProtectedRoute({ children, admin = false, vendor = false }) {
   const { user, ready } = useAuth();
   if (!ready) return <FullLoader />;
-  if (!user) return <Navigate to={vendor ? "/vendor/login" : "/login"} replace />;
+  if (!user) return <Navigate to="/login" replace />;
   const adminRoles = ["super_admin", "admin", "accounts_admin", "support_admin"];
   if (admin && !adminRoles.includes(user.role)) return <Navigate to="/app/dashboard" replace />;
   if (vendor && user.role !== "vendor") return <Navigate to={adminRoles.includes(user.role) ? "/admin" : "/app/dashboard"} replace />;

@@ -69,9 +69,13 @@ def _restore_limits():
 
 
 # ====================================================================== status history & onboarding
-def _register(c, mobile, ip="10.0.0.1"):
-    return c.post("/api/auth/vendor-register", headers={"X-Forwarded-For": ip},
-                  json={"business_name": "Hist Store", "full_name": "Hist Owner", "mobile": mobile, "email": "", "password": PW, "confirm_password": PW, "accept_terms": True})
+def _register(c, mobile):
+    """Vendor accounts are created by an admin only. The vendor then signs in through the normal login, like everyone else."""
+    made = c.post("/api/admin/vendors/create", headers=_hdr(S["adm"]["id"]),
+                  json={"business_name": "Hist Store", "full_name": "Hist Owner", "mobile": mobile, "email": "", "password": PW})
+    if made.status_code != 200:
+        return made
+    return c.post("/api/auth/login", json={"email": mobile, "password": PW})
 
 
 PROFILE = {"business_name": "Hist Store", "contact_person": "Hist Owner", "phone": "9876500001", "address": "12 Market Road, Jaipur", "city": "Jaipur",
@@ -133,7 +137,7 @@ def test_required_documents_are_unset_by_default_and_enforced_once_an_admin_sets
     h = _hdr(S["ub"]["id"])
     req = c.get("/api/vendor/me/requirements", headers=h).json()
     assert req["configured"] is False and "not decided" in req["note"] and req["missing"] == []
-    r = _register(c, "9876500002", ip="10.0.0.2")
+    r = _register(c, "9876500002")
     tok = {"Authorization": f"Bearer {r.json()['token']}"}
     assert c.put("/api/admin/vendor-policy", headers=_hdr(S["fin"]["id"]), json={"required_documents": ["pan"]}).status_code == 403
     assert c.put("/api/admin/vendor-policy", headers=_hdr(S["adm"]["id"]), json={"required_documents": ["pan", "nonsense"]}).status_code == 400
@@ -275,12 +279,7 @@ def test_change_password_revokes_old_sessions_and_enforces_strength(c):
 
 
 def test_rate_limits_cap_abuse_per_client_and_never_leak_to_other_clients(c):
-    core.RATE_LIMITS["vendor_register"] = (3, 3600)
-    codes = [_register(c, f"98765010{i:02d}", ip="203.0.113.9").status_code for i in range(5)]
-    assert codes == [200, 200, 200, 429, 429]
-    blocked = _register(c, "9876501099", ip="203.0.113.9")
-    assert blocked.status_code == 429 and int(blocked.headers["Retry-After"]) > 0
-    assert _register(c, "9876501098", ip="203.0.113.77").status_code == 200                                                         # another client: fine
+    assert c.post("/api/auth/vendor-register", json={}).status_code == 404                                                          # public vendor sign-up is gone
     core.RATE_LIMITS["login_ip"] = (4, 600)
     res = [c.post("/api/auth/login", headers={"X-Forwarded-For": "198.51.100.5"}, json={"email": f"nobody{i}", "password": "x"}).status_code for i in range(6)]
     assert res[:4] == [401] * 4 and res[4:] == [429, 429]
@@ -378,3 +377,17 @@ def test_cloudinary_images_must_be_in_the_vendors_own_folder_and_legacy_values_k
 def test_contact_verification_status_is_honest_about_missing_providers(c):
     v = c.get("/api/vendor/me/verification", headers=_hdr(S["ua"]["id"])).json()
     assert v["mobile"]["provider_available"] is False and v["note"] and v["mobile"]["verified"] is False
+
+
+def test_only_an_admin_can_create_a_vendor_account(c):
+    body = {"business_name": "Made By Admin", "full_name": "Owner Name", "mobile": "9876500555", "email": "owner555@example.test", "password": PW}
+    assert c.post("/api/admin/vendors/create", headers=_hdr(S["cust"]["id"]), json=body).status_code in (401, 403)
+    assert c.post("/api/admin/vendors/create", headers=_hdr(S["ua"]["id"]), json=body).status_code in (401, 403)
+    assert c.post("/api/admin/vendors/create", json=body).status_code in (401, 403)
+    made = c.post("/api/admin/vendors/create", headers=_hdr(S["adm"]["id"]), json=body)
+    assert made.status_code == 200 and made.json()["status"] == "draft"
+    assert c.post("/api/admin/vendors/create", headers=_hdr(S["adm"]["id"]), json=body).status_code == 400          # duplicate mobile
+    login = c.post("/api/auth/login", json={"email": "owner555@example.test", "password": PW})
+    assert login.status_code == 200 and login.json()["user"]["role"] == "vendor"
+    assert c.get("/api/vendor/me", headers={"Authorization": f"Bearer {login.json()['token']}"}).json()["vendor"]["status"] == "draft"
+    assert c.post("/api/admin/vendors/create", headers=_hdr(S["adm"]["id"]), json={**body, "mobile": "1234567890", "email": ""}).status_code == 400

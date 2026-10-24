@@ -543,7 +543,7 @@ export function SiteFooter({ t, Link, Logo }) {
     { title: t("footer.company"), links: [
       { label: t("footer.aboutUs"), href: "#about" }, { label: t("how.title"), href: "#how-it-works" },
       { label: t("faq.title"), href: "#faq" }, { label: t("nav.support"), to: "/legal/support" },
-      { label: t("nav.becomeVendor"), to: "/vendor/register", testid: "footer-become-vendor" }, { label: t("login.vendorLink"), to: "/vendor/login" }] },
+      ] },
     { title: t("footer.policies"), links: [
       { label: t("legal.terms"), to: "/legal/terms", testid: "footer-terms" }, { label: t("legal.privacy"), to: "/legal/privacy", testid: "footer-privacy" },
       { label: t("legal.returns"), to: "/legal/returns", testid: "footer-returns" }, { label: t("legal.refunds"), to: "/legal/refunds", testid: "footer-refunds" }] },

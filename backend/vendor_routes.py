@@ -80,62 +80,6 @@ async def require_approved_vendor(user: dict = Depends(require_vendor_user)) -> 
 
 
 # ------------------------------------------------------------------ public vendor sign-up
-class VendorRegisterIn(BaseModel):
-    business_name: str = Field(min_length=2, max_length=120)
-    full_name: str = Field(min_length=2, max_length=80)
-    mobile: str
-    email: str = ""
-    password: str = Field(min_length=8, max_length=128)
-    confirm_password: str
-    accept_terms: bool = False
-
-
-@router.post("/auth/vendor-register")
-async def vendor_register(body: VendorRegisterIn, request: Request):
-    """Creates a vendor login + a draft vendor application. Selling still needs admin approval of the application."""
-    from core import rate_limit, client_ip
-    await rate_limit("vendor_register", client_ip(request))
-    mobile = body.mobile.strip()
-    email = (body.email or "").strip().lower()
-    if not re.fullmatch(r"[6-9]\d{9}", mobile):
-        raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number.")
-    if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
-        raise HTTPException(status_code=400, detail="Enter a valid email address, or leave it blank.")
-    if body.password != body.confirm_password:
-        raise HTTPException(status_code=400, detail="Passwords do not match.")
-    if not (re.search(r"[A-Za-z]", body.password) and re.search(r"\d", body.password)):
-        raise HTTPException(status_code=400, detail="Use at least 8 characters with letters and numbers.")
-    if not body.accept_terms:
-        raise HTTPException(status_code=400, detail="Please accept the vendor terms.")
-    if await db.users.find_one({"mobile": mobile}) or (email and await db.users.find_one({"email": email})):
-        raise HTTPException(status_code=400, detail="An account with this mobile or email already exists. Please log in.")
-    if await db.registration_requests.find_one({"status": "pending", "$or": [{"mobile": mobile}] + ([{"email": email}] if email else [])}):
-        raise HTTPException(status_code=400, detail="This mobile or email already has a pending HomeGenie registration.")
-
-    vid = await next_sequence("vendor", "VD", 6)
-    while await db.users.find_one({"distributor_id": vid}):      # skip IDs issued before the counter existed
-        vid = await next_sequence("vendor", "VD", 6)
-    now = now_iso()
-    user = {"id": new_id(), "distributor_id": vid, "full_name": body.full_name.strip(), "mobile": mobile,
-            "email": email or None, "password_hash": hash_password(body.password), "role": "vendor", "status": "green",
-            "account_status": "active", "mobile_verified": False, "email_verified": False, "kyc_status": "not_started",
-            "sponsor_id": None, "sponsor_user_id": None, "created_at": now, "updated_at": now}
-    try:
-        await db.users.insert_one(dict(user))
-    except Exception:
-        raise HTTPException(status_code=400, detail="An account with this mobile or email already exists. Please log in.")
-    vrec = {"id": new_id(), "user_id": user["id"], "vendor_code": vid, "business_name": body.business_name.strip(),
-            "contact_person": body.full_name.strip(), "phone": mobile, "support_email": email,
-            "status": "draft", "categories": [], "created_at": now, "updated_at": now}
-    await db.vendors.insert_one(dict(vrec))
-    await record_vendor_status(vrec["id"], None, "draft", user["id"], "Vendor account created")
-    await log_audit(user, "vendor_registered", "user", user["id"], new_value={"vendor_code": vid}, request=request)
-    admins = await db.users.find({"role": "super_admin"}, {"_id": 0, "id": 1}).to_list(20)
-    for a in admins:
-        await create_notification(a["id"], "vendor", "New vendor sign-up", f"{body.business_name.strip()} ({vid}) created a vendor account.")
-    return {"token": create_token(user["id"]), "user": clean_user(user)}
-
-
 # ------------------------------------------------------------------ onboarding / profile
 class VendorProfileIn(BaseModel):
     business_name: str = Field(min_length=2, max_length=120)
@@ -837,6 +781,52 @@ def _money(values) -> float:
 
 
 # ------------------------------------------------------------------ admin: vendor + product approval
+class VendorAccountIn(BaseModel):
+    business_name: str = Field(min_length=2, max_length=120)
+    full_name: str = Field(min_length=2, max_length=80)
+    mobile: str
+    email: str = ""
+    password: str = Field(min_length=8, max_length=128)
+
+
+@router.post("/admin/vendors/create")
+async def admin_vendor_create(body: VendorAccountIn, request: Request, admin: dict = Depends(require_admin)):
+    """Only an admin creates vendor accounts. The vendor signs in at /login with the details the admin set, then completes
+    their business profile. Nothing on the public site can create a vendor account."""
+    mobile = body.mobile.strip()
+    email = (body.email or "").strip().lower()
+    if not re.fullmatch(r"[6-9]\d{9}", mobile):
+        raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number.")
+    if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise HTTPException(status_code=400, detail="Enter a valid email address, or leave it blank.")
+    if not (re.search(r"[A-Za-z]", body.password) and re.search(r"\d", body.password)):
+        raise HTTPException(status_code=400, detail="Use at least 8 characters with letters and numbers.")
+    if await db.users.find_one({"mobile": mobile}) or (email and await db.users.find_one({"email": email})):
+        raise HTTPException(status_code=400, detail="An account with this mobile or email already exists.")
+
+    vid = await next_sequence("vendor", "VD", 6)
+    while await db.users.find_one({"distributor_id": vid}):      # skip IDs issued before the counter existed
+        vid = await next_sequence("vendor", "VD", 6)
+    now = now_iso()
+    user = {"id": new_id(), "distributor_id": vid, "full_name": body.full_name.strip(), "mobile": mobile,
+            "email": email or None, "password_hash": hash_password(body.password), "role": "vendor", "status": "green",
+            "account_status": "active", "mobile_verified": False, "email_verified": False, "kyc_status": "not_started",
+            "sponsor_id": None, "sponsor_user_id": None, "created_at": now, "updated_at": now}
+    try:
+        await db.users.insert_one(dict(user))
+    except DuplicateKeyError:
+        raise HTTPException(status_code=400, detail="An account with this mobile or email already exists.")
+    vrec = {"id": new_id(), "user_id": user["id"], "vendor_code": vid, "business_name": body.business_name.strip(),
+            "contact_person": body.full_name.strip(), "phone": mobile, "support_email": email,
+            "status": "draft", "categories": [], "created_at": now, "updated_at": now}
+    await db.vendors.insert_one(dict(vrec))
+    await record_vendor_status(vrec["id"], None, "draft", admin["id"], "Vendor account created by admin")
+    await create_notification(user["id"], "vendor", "Vendor account created",
+                              "HomeGenie created your vendor account. Sign in and complete your business profile.")
+    await log_audit(admin, "vendor_account_created", "vendor", vrec["id"], new_value={"vendor_code": vid, "user_id": user["id"]}, request=request)
+    return {"ok": True, "vendor_id": vrec["id"], "vendor_code": vid, "status": "draft", "user_id": user["id"]}
+
+
 @router.get("/admin/vendors")
 async def admin_vendors(admin: dict = Depends(require_admin)):
     vs = await db.vendors.find({}, {"_id": 0}).sort("updated_at", -1).to_list(500)

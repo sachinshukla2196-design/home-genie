@@ -42,6 +42,7 @@ import Legal from "@/pages/Legal";
 import Withdrawals from "@/pages/Withdrawals";
 import AdminWithdrawals from "@/pages/admin/AdminWithdrawals";
 import AdminVendors from "@/pages/admin/AdminVendors";
+import AdminVendorCreate from "@/pages/admin/AdminVendorCreate";
 import VendorDashboard from "@/pages/vendor/VendorDashboard";
 import VendorProducts from "@/pages/vendor/VendorProducts";
 import VendorOrders from "@/pages/vendor/VendorOrders";
@@ -60,7 +61,6 @@ import VendorCod from "@/pages/vendor/VendorCod";
 import VendorNotifications from "@/pages/vendor/VendorNotifications";
 import VendorSupport from "@/pages/vendor/VendorSupport";
 import VendorSecurity from "@/pages/vendor/VendorSecurity";
-import { VendorRegister, VendorLogin } from "@/pages/vendor/VendorAuth";
 
 function App() {
   return (
@@ -139,13 +139,12 @@ function AppRoutes() {
                   <Route path="orders" element={<AdminOrders />} />
                   <Route path="withdrawals" element={<AdminWithdrawals />} />
                   <Route path="vendors" element={<AdminVendors />} />
+                  <Route path="vendors/new" element={<AdminVendorCreate />} />
                   <Route path="reports" element={<AdminReports />} />
                   <Route path="settings" element={<AdminSettings />} />
                   <Route path="audit" element={<AdminAuditLogs />} />
                 </Route>
 
-                <Route path="/vendor/login" element={<VendorLogin />} />
-                <Route path="/vendor/register" element={<VendorRegister />} />
                 <Route path="/vendor" element={<ProtectedRoute vendor><VendorLayout /></ProtectedRoute>}>
                   <Route index element={<Navigate to="dashboard" replace />} />
                   <Route path="dashboard" element={<VendorHome />} />
