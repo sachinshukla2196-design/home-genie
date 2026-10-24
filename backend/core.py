@@ -23,12 +23,16 @@ logger = logging.getLogger("homegenies")
 # the missing variables (names only, never values) until it is fixed.
 CONFIG_PROBLEMS = [n for n in ("MONGO_URL", "DB_NAME") if not os.environ.get(n)]
 mongo_url = os.environ.get("MONGO_URL") or "mongodb://localhost:27017"
-client = AsyncIOMotorClient(
-    mongo_url,
-    serverSelectionTimeoutMS=8000,
-    connectTimeoutMS=8000,
-    retryWrites=True,
-)
+def _make_client(url):
+    return AsyncIOMotorClient(url, serverSelectionTimeoutMS=8000, connectTimeoutMS=8000, retryWrites=True)
+
+
+try:
+    client = _make_client(mongo_url)
+except Exception as _e:  # mongodb+srv:// resolves DNS eagerly: a wrong cluster host raises here, at import
+    logger.error("MONGO_URL is not usable (%s); serving 503 until it is corrected", type(_e).__name__)
+    CONFIG_PROBLEMS.append("MONGO_URL_INVALID (e.g. the cluster host does not resolve; copy the exact connection string from Atlas > Connect > Drivers)")
+    client = _make_client("mongodb://localhost:27017")  # placeholder; never used while CONFIG_PROBLEMS is non-empty
 db = client[os.environ.get("DB_NAME") or "homegenies_unconfigured"]
 
 JWT_SECRET = os.environ.get("JWT_SECRET")

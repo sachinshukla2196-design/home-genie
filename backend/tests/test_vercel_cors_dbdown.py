@@ -69,3 +69,16 @@ def test_missing_env_gives_503_naming_variables_not_import_crash():
     status, body = json.loads(out.stdout.strip().splitlines()[-1])
     assert status == 503
     assert body["missing_env"] == ["CORS_ORIGINS", "DB_NAME", "JWT_SECRET", "MONGO_URL"]
+
+
+def test_unresolvable_srv_host_gives_503_not_import_crash():
+    import subprocess, sys, os, json
+    code = ("import json;from fastapi.testclient import TestClient;import server;"
+            "r=TestClient(server.app).get('/api/');print(json.dumps([r.status_code,r.json()]))")
+    env = dict(os.environ, VERCEL="1", MONGO_URL="mongodb+srv://u:p@nonexistent-cluster.invalid/", DB_NAME="t",
+               JWT_SECRET="abcdefghijklmnop", CORS_ORIGINS="https://example.test")
+    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    out = subprocess.run([sys.executable, "-c", code], cwd=here, env=env, capture_output=True, text=True, timeout=90)
+    status, body = json.loads(out.stdout.strip().splitlines()[-1])
+    assert status == 503 and body["missing_env"][0].startswith("MONGO_URL_INVALID")
+    assert "p@" not in out.stdout + out.stderr  # credentials never logged
