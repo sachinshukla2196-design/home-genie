@@ -277,6 +277,10 @@ async def login(body: LoginBody, request: Request):
                 {"status": "pending", "$or": [{"email": ident}, {"mobile": body.email.strip()}]})
             if pending and verify_password(body.password, pending.get("password_hash", "")):
                 raise HTTPException(status_code=403, detail="Your registration is waiting for admin approval. You can log in once it is approved.")
+            rejected = await db.registration_requests.find_one(
+                {"status": "rejected", "$or": [{"email": ident}, {"mobile": body.email.strip()}]}, sort=[("created_at", -1)])
+            if rejected and verify_password(body.password, rejected.get("password_hash", "")):
+                raise HTTPException(status_code=403, detail="Your registration request was not approved. Please contact the admin.")
         raise HTTPException(status_code=401, detail="Invalid credentials. Use your HomeGenie ID / email / mobile and password.")
     if user.get("blocked"):
         raise HTTPException(status_code=403, detail="Your account has been blocked. Please contact the admin.")
