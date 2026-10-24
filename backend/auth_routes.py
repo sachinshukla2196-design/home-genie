@@ -163,7 +163,14 @@ async def register_request(body: RegRequestBody, request: Request):
         "status": "pending", "created_at": now_iso(),
     }
     await db.registration_requests.insert_one(dict(doc))
-    return {"message": "Your registration request has been submitted. Please wait for Admin approval."}
+    # Normal users need no admin approval: create the account now. The request row is kept (marked approved) as a record.
+    from admin_routes import activate_registration
+    try:
+        await activate_registration(doc)
+    except HTTPException:
+        await db.registration_requests.delete_one({"id": doc["id"]})
+        raise
+    return {"message": "Registration successful. You can log in now with your mobile/email and password."}
 
 
 @router.get("/reference-codes")
@@ -267,20 +274,21 @@ async def login(body: LoginBody, request: Request):
         await db.login_attempts.delete_one({"identifier": ident})
 
     user = await db.users.find_one({"$or": [{"email": ident}, {"mobile": body.email.strip()}, {"distributor_id": body.email.strip().upper()}]})
-    if not user or not verify_password(body.password, user.get("password_hash", "")):
-        await db.login_attempts.update_one({"identifier": ident},
-                                           {"$inc": {"count": 1}, "$set": {"last": now_iso()}}, upsert=True)
-        # A registration request becomes an account only on admin approval. Explain that instead of
-        # "invalid credentials" — but only when the password matches, so emails can't be probed.
+    if not user:
+        # A registration made while admin approval was still required may be sitting in registration_requests.
+        # Normal users no longer need approval: activate it now (idempotent, no duplicate account), but only when
+        # the password matches so this cannot be used to probe or create accounts for other people.
         if not user:
             pending = await db.registration_requests.find_one(
                 {"status": "pending", "$or": [{"email": ident}, {"mobile": body.email.strip()}]})
             if pending and verify_password(body.password, pending.get("password_hash", "")):
-                raise HTTPException(status_code=403, detail="Your registration is waiting for admin approval. You can log in once it is approved.")
-            rejected = await db.registration_requests.find_one(
-                {"status": "rejected", "$or": [{"email": ident}, {"mobile": body.email.strip()}]}, sort=[("created_at", -1)])
-            if rejected and verify_password(body.password, rejected.get("password_hash", "")):
-                raise HTTPException(status_code=403, detail="Your registration request was not approved. Please contact the admin.")
+                from admin_routes import activate_registration
+                await activate_registration(pending)
+                await db.login_attempts.delete_one({"identifier": ident})
+                user = await db.users.find_one({"$or": [{"email": ident}, {"mobile": body.email.strip()}]})
+    if not user or not verify_password(body.password, user.get("password_hash", "")):
+        await db.login_attempts.update_one({"identifier": ident},
+                                           {"$inc": {"count": 1}, "$set": {"last": now_iso()}}, upsert=True)
         raise HTTPException(status_code=401, detail="Invalid credentials. Use your HomeGenie ID / email / mobile and password.")
     if user.get("blocked"):
         raise HTTPException(status_code=403, detail="Your account has been blocked. Please contact the admin.")

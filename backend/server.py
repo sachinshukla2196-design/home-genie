@@ -208,6 +208,8 @@ async def _init_db():
     await _safe(db.notifications.create_index("user_id"))
     await _safe(db.otp_sessions.create_index([("identifier", 1), ("purpose", 1)]))
     await _safe(db.users.create_index("mobile", unique=True, sparse=True))
+    from admin_routes import activate_pending_registrations  # normal users no longer wait for admin approval
+    await _safe(activate_pending_registrations())
 
     # settings
     await get_settings()

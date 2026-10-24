@@ -557,6 +557,71 @@ async def list_registration_requests(admin: dict = Depends(require_admin)):
     return await db.registration_requests.find({}, {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(500)
 
 
+async def activate_registration(r: dict, approver: Optional[dict] = None) -> str:
+    """Create the account for a registration request (idempotent) and mark the request approved.
+    Used on registration itself (no admin approval needed for normal users), by the lazy/sweep activation of
+    requests that were left pending, and by the admin Approve button. Never creates a second user for a mobile/email."""
+    existing = await db.users.find_one({"$or": [{"mobile": r["mobile"]}] + ([{"email": r["email"]}] if r.get("email") else [])})
+    if existing:
+        did = existing.get("distributor_id")
+    else:
+        did = await next_distributor_id()
+        user = {
+            "id": new_id(), "distributor_id": did, "full_name": r["full_name"],
+            "email": r.get("email") or None, "mobile": r["mobile"], "password_hash": r["password_hash"],
+            "role": "distributor", "status": "red", "account_status": "active",
+            "mobile_verified": False, "email_verified": bool(r.get("email_verified")),
+            "google_linked": bool(r.get("google_linked")),
+            "sponsor_id": r.get("sponsor_id") or None, "sponsor_user_id": None,
+            "address": r.get("address", ""), "state": r.get("state", ""), "city": r.get("city", ""),
+            "pincode": r.get("pincode", ""), "aadhaar_number": r.get("aadhaar_number", ""), "kyc_status": "not_started",
+            "profile_complete": bool(r.get("email")), "created_at": now_iso(), "updated_at": now_iso(),
+        }
+        try:
+            await db.users.insert_one(dict(user))
+        except Exception:
+            raise HTTPException(status_code=400, detail="Could not create distributor (possibly a duplicate email or mobile). Please check and try again.")
+        await get_or_create_wallet(user["id"])
+        # HOME GENIES: approval records the sponsor link only. No reward is paid.
+        sp_did = r.get("sponsor_id")
+        if sp_did:
+            rc = await db.referral_codes.find_one({"code": sp_did, "active": True})
+            if rc:
+                sponsor = await db.users.find_one({"id": rc.get("created_by")}) or await db.users.find_one({"role": "super_admin"})
+                parent_label = rc["code"]  # the referral code itself is the recorded parent
+            else:
+                sponsor = await db.users.find_one({"distributor_id": sp_did})
+                parent_label = sp_did
+            if sponsor:
+                await db.users.update_one({"id": user["id"]},
+                                          {"$set": {"sponsor_user_id": sponsor["id"], "sponsor_distributor_id": parent_label}})
+                if not await db.referral_relationships.find_one({"referred_user_id": user["id"]}):
+                    await db.referral_relationships.insert_one({
+                        "id": new_id(), "sponsor_id": sponsor["id"],
+                        "sponsor_distributor_id": parent_label,
+                        "referred_user_id": user["id"], "referred_distributor_id": did,
+                        "commission_paid": False, "created_at": now_iso(),
+                    })
+                # HOME GENIES: no reward is paid for a registration. Recruitment alone
+                # never generates commission — only the sponsor link is recorded above.
+    await db.registration_requests.update_one({"id": r["id"]},
+        {"$set": {"status": "approved", "distributor_id": did, "approved_by": (approver or {}).get("id") or "auto",
+                  "approved_at": now_iso()}})
+    return did
+
+
+async def activate_pending_registrations() -> int:
+    """One-off, idempotent sweep: turn requests left 'pending' into accounts (no duplicates). Run at DB init."""
+    n = 0
+    async for r in db.registration_requests.find({"status": "pending"}):
+        try:
+            await activate_registration(r)
+            n += 1
+        except Exception:
+            continue
+    return n
+
+
 @router.post("/registration-requests/{req_id}/approve")
 async def approve_registration_request(req_id: str, request: Request, admin: dict = Depends(require_admin)):
     r = await db.registration_requests.find_one({"id": req_id})
@@ -566,48 +631,8 @@ async def approve_registration_request(req_id: str, request: Request, admin: dic
         raise HTTPException(status_code=400, detail="This request is already approved.")
     if await db.users.find_one({"mobile": r["mobile"]}):
         raise HTTPException(status_code=400, detail="A user with this mobile already exists.")
-    did = await next_distributor_id()
-    user = {
-        "id": new_id(), "distributor_id": did, "full_name": r["full_name"],
-        "email": r.get("email") or None, "mobile": r["mobile"], "password_hash": r["password_hash"],
-        "role": "distributor", "status": "red", "account_status": "active",
-        "mobile_verified": False, "email_verified": bool(r.get("email_verified")),
-        "google_linked": bool(r.get("google_linked")),
-        "sponsor_id": r.get("sponsor_id") or None, "sponsor_user_id": None,
-        "address": r.get("address", ""), "state": r.get("state", ""), "city": r.get("city", ""),
-        "pincode": r.get("pincode", ""), "aadhaar_number": r.get("aadhaar_number", ""), "kyc_status": "not_started",
-        "profile_complete": bool(r.get("email")), "created_at": now_iso(), "updated_at": now_iso(),
-    }
-    try:
-        await db.users.insert_one(dict(user))
-    except Exception:
-        raise HTTPException(status_code=400, detail="Could not create distributor (possibly a duplicate email or mobile). Please check and try again.")
-    await get_or_create_wallet(user["id"])
-    # HOME GENIES: approval records the sponsor link only. No reward is paid.
-    sp_did = r.get("sponsor_id")
-    if sp_did:
-        rc = await db.referral_codes.find_one({"code": sp_did, "active": True})
-        if rc:
-            sponsor = await db.users.find_one({"id": rc.get("created_by")}) or await db.users.find_one({"role": "super_admin"})
-            parent_label = rc["code"]  # the referral code itself is the recorded parent
-        else:
-            sponsor = await db.users.find_one({"distributor_id": sp_did})
-            parent_label = sp_did
-        if sponsor:
-            await db.users.update_one({"id": user["id"]},
-                                      {"$set": {"sponsor_user_id": sponsor["id"], "sponsor_distributor_id": parent_label}})
-            if not await db.referral_relationships.find_one({"referred_user_id": user["id"]}):
-                await db.referral_relationships.insert_one({
-                    "id": new_id(), "sponsor_id": sponsor["id"],
-                    "sponsor_distributor_id": parent_label,
-                    "referred_user_id": user["id"], "referred_distributor_id": did,
-                    "commission_paid": False, "created_at": now_iso(),
-                })
-            # HOME GENIES: no reward is paid for a registration. Recruitment alone
-            # never generates commission — only the sponsor link is recorded above.
-    await db.registration_requests.update_one({"id": req_id},
-        {"$set": {"status": "approved", "distributor_id": did, "approved_by": admin["id"], "approved_at": now_iso()}})
-    await log_audit(admin, "registration_approved", "user", user["id"], new_value={"distributor_id": did}, request=request)
+    did = await activate_registration(r, admin)
+    await log_audit(admin, "registration_approved", "user", did, new_value={"distributor_id": did}, request=request)
     return {"message": f"Approved. HomeGenie ID {did} created.", "distributor_id": did}
 
 
