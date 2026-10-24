@@ -218,9 +218,10 @@ async def _init_db():
     # bootstrap a flag is set so deleted products/categories NEVER reappear on restart.
     boot = await db.business_settings.find_one({"id": "catalogue_bootstrap"})
     if not boot:
+        await _safe(db.product_categories.create_index("name", unique=True))  # fails harmlessly if duplicates already exist
         for c in CATEGORY_SEED:
-            if not await db.product_categories.find_one({"name": c}):
-                await db.product_categories.insert_one({"id": new_id(), "name": c, "created_at": now_iso()})
+            # upsert: two serverless instances cold-starting together must not both insert the same category
+            await db.product_categories.update_one({"name": c}, {"$setOnInsert": {"id": new_id(), "created_at": now_iso()}}, upsert=True)
         if await db.products.count_documents({}) == 0:
             for p in PRODUCT_SEED:
                 doc = dict(p)
