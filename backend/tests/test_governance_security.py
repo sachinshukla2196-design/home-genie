@@ -18,6 +18,7 @@ for k in ("WEBHOOK_CRON_SECRET", "ADMIN_EMAIL", "CLOUDINARY_CLOUD_NAME", "CLOUDI
 
 from fastapi.testclient import TestClient  # noqa: E402
 import server  # noqa: E402
+import db_indexes  # noqa: E402
 import core  # noqa: E402
 from core import db, hash_password, create_token, now_iso, new_id  # noqa: E402
 
@@ -35,6 +36,7 @@ def c():
         async def seed():
             await server.client.drop_database(os.environ["DB_NAME"])
             await server._init_db()
+            await db_indexes.apply()      # the migration step: startup no longer creates indexes
 
             async def user(mobile, role, did, status="green"):
                 u = {"id": new_id(), "distributor_id": did, "full_name": did, "mobile": mobile, "email": None,
@@ -71,10 +73,13 @@ def _restore_limits():
 # ====================================================================== status history & onboarding
 def _register(c, mobile):
     """Vendor accounts are created by an admin only. The vendor then signs in through the normal login, like everyone else."""
+    core.RATE_LIMITS["staff_accept"] = (1000, 3600)
     made = c.post("/api/admin/vendors/create", headers=_hdr(S["adm"]["id"]),
-                  json={"business_name": "Hist Store", "full_name": "Hist Owner", "mobile": mobile, "email": "", "password": PW})
+                  json={"business_name": "Hist Store", "full_name": "Hist Owner", "mobile": mobile, "email": ""})
     if made.status_code != 200:
         return made
+    acc = c.post("/api/vendor/invitation/owner/accept", json={"token": made.json()["invitation"]["token"], "password": PW})
+    assert acc.status_code == 200, acc.text
     return c.post("/api/auth/login", json={"email": mobile, "password": PW})
 
 
@@ -380,13 +385,16 @@ def test_contact_verification_status_is_honest_about_missing_providers(c):
 
 
 def test_only_an_admin_can_create_a_vendor_account(c):
-    body = {"business_name": "Made By Admin", "full_name": "Owner Name", "mobile": "9876500555", "email": "owner555@example.test", "password": PW}
+    core.RATE_LIMITS["staff_accept"] = (1000, 3600)
+    body = {"business_name": "Made By Admin", "full_name": "Owner Name", "mobile": "9876500555", "email": "owner555@example.test"}
     assert c.post("/api/admin/vendors/create", headers=_hdr(S["cust"]["id"]), json=body).status_code in (401, 403)
     assert c.post("/api/admin/vendors/create", headers=_hdr(S["ua"]["id"]), json=body).status_code in (401, 403)
     assert c.post("/api/admin/vendors/create", json=body).status_code in (401, 403)
     made = c.post("/api/admin/vendors/create", headers=_hdr(S["adm"]["id"]), json=body)
-    assert made.status_code == 200 and made.json()["status"] == "draft"
+    assert made.status_code == 200 and made.json()["status"] == "draft" and made.json()["invitation"]["token"]
     assert c.post("/api/admin/vendors/create", headers=_hdr(S["adm"]["id"]), json=body).status_code == 400          # duplicate mobile
+    assert c.post("/api/auth/login", json={"email": "owner555@example.test", "password": PW}).status_code in (400, 401, 403)   # not active yet
+    assert c.post("/api/vendor/invitation/owner/accept", json={"token": made.json()["invitation"]["token"], "password": PW}).status_code == 200
     login = c.post("/api/auth/login", json={"email": "owner555@example.test", "password": PW})
     assert login.status_code == 200 and login.json()["user"]["role"] == "vendor"
     assert c.get("/api/vendor/me", headers={"Authorization": f"Bearer {login.json()['token']}"}).json()["vendor"]["status"] == "draft"

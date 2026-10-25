@@ -29,7 +29,19 @@ export default function AuthCallback() {
       return;
     }
 
+    const recovering = new URLSearchParams(location.search).get("recover") === "google";
+
     (async () => {
+      if (recovering) {
+        try {
+          const { data } = await API.post("/auth/forgot/google", { session_id: sessionId });
+          navigate("/forgot", { replace: true, state: { resetToken: data.reset_token || "", googleDone: true } });
+        } catch (err) {
+          toast.error(apiError(err, "Google verification failed."));
+          navigate("/forgot", { replace: true });
+        }
+        return;
+      }
       try {
         const { data } = await API.post("/auth/google/session", { session_id: sessionId });
         if (data.mode === "register") {
@@ -45,7 +57,7 @@ export default function AuthCallback() {
         navigate("/login", { replace: true });
       }
     })();
-  }, [location.hash, navigate, applyAuth]);
+  }, [location.hash, location.search, navigate, applyAuth]);
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-center gap-6 bg-background px-4" role="status" aria-label="Loading" data-testid="google-auth-callback">

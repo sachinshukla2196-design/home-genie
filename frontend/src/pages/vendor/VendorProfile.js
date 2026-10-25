@@ -67,6 +67,8 @@ export default function VendorProfile() {
 
       {underReview && <Banner icon={Clock} tone="gold" testid="vendor-pending">{t("vp.onboard.pending")}</Banner>}
       {status === "rejected" && <Banner icon={AlertTriangle} tone="danger" testid="vendor-rejected">{t("vp.onboard.rejected")} <b>{vendor.rejection_reason}</b></Banner>}
+      {status === "changes_requested" && <Banner icon={AlertTriangle} tone="danger" testid="vendor-changes-requested">{t("vp.onboard.changesRequested")} <b>{vendor.status_reason}</b></Banner>}
+      {status === "pending_documents" && <Banner icon={AlertTriangle} tone="gold" testid="vendor-pending-docs">{t("vp.onboard.pendingDocs")} {vendor.status_reason && <b>{vendor.status_reason}</b>}</Banner>}
       {status === "suspended" && <Banner icon={AlertTriangle} tone="danger">{t("vp.onboard.suspended")} {vendor.status_reason && <b>{vendor.status_reason}</b>}</Banner>}
       {status === "approved" && <Banner icon={CheckCircle2} tone="success">{t("vp.st.approved")} · {vendor.vendor_code}</Banner>}
 

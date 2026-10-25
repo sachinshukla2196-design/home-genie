@@ -29,6 +29,19 @@ def sms_configured() -> bool:
     return TWILIO_ENABLED and bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_FROM_NUMBER)
 
 
+def _test_sms_adapter() -> bool:
+    """TEST ONLY. Active only when SMS_TEST_ADAPTER=true AND DB_NAME is a dedicated *_test database (never the
+    production name). The code is written to the test database's test_sms_outbox collection so tests can read it;
+    it is never returned in an API response or logged."""
+    name = os.environ.get("DB_NAME", "")
+    return (os.environ.get("SMS_TEST_ADAPTER", "false").strip().lower() == "true"
+            and name.endswith("_test") and name != "homegenies")
+
+
+def sms_available() -> bool:
+    return sms_configured() or _test_sms_adapter()
+
+
 OTP_UNAVAILABLE = HTTPException(status_code=503, detail={
     "code": "OTP_SERVICE_UNAVAILABLE",
     "message": "OTP verification is temporarily unavailable. Please try again later."})
@@ -48,6 +61,9 @@ def _hash(code: str) -> str:
 
 async def _send_sms_otp(mobile: str, code: str) -> None:
     """Deliver OTP via Twilio Messages API. Never logs the code or provider secrets."""
+    if _test_sms_adapter():
+        await db.test_sms_outbox.insert_one({"mobile": mobile, "code": code, "created_at": now_iso()})
+        return
     if not sms_configured():
         raise OTP_UNAVAILABLE
     url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json"
@@ -91,7 +107,7 @@ async def send_account_id_sms(mobile: str, distributor_id: str) -> bool:
 
 async def otp_create(identifier: str, purpose: str) -> dict:
     """Generate + store a hashed single-use OTP and deliver it via SMS. Returns NO code."""
-    if not sms_configured():
+    if not sms_available():
         raise OTP_UNAVAILABLE
     last = await db.otp_sessions.find_one({"identifier": identifier, "purpose": purpose}, sort=[("created_at", -1)])
     if last:
@@ -123,7 +139,7 @@ async def otp_create(identifier: str, purpose: str) -> dict:
 
 
 async def otp_verify(identifier: str, purpose: str, code: str) -> bool:
-    if not sms_configured():
+    if not sms_available():
         raise OTP_UNAVAILABLE
     rec = await db.otp_sessions.find_one({"identifier": identifier, "purpose": purpose}, sort=[("created_at", -1)])
     if not rec:

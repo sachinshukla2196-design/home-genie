@@ -3,7 +3,7 @@ import { Link, useLocation, Outlet } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
   LayoutDashboard, Users, Package, ShoppingCart, Banknote,
-  FileBarChart, Settings, ScrollText, LogOut, ShieldCheck, Store,
+  FileBarChart, Settings, ScrollText, LogOut, ShieldCheck, Store, Handshake, Award,
 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
@@ -19,6 +19,8 @@ const NAV = [
   { to: "/admin/orders", icon: ShoppingCart, key: "nav.orders" },
   { to: "/admin/withdrawals", icon: Banknote, key: "nav.withdrawals" },
   { to: "/admin/vendors", icon: Store, key: "av.title" },
+  { to: "/admin/agreements", icon: Handshake, key: "aa.nav" },
+  { to: "/admin/benefits", icon: Award, key: "bn.nav" },
   { to: "/admin/reports", icon: FileBarChart, key: "nav.reports" },
   { to: "/admin/settings", icon: Settings, key: "nav.settings" },
   { to: "/admin/audit", icon: ScrollText, key: "nav.audit" },

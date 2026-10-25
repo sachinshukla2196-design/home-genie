@@ -26,7 +26,7 @@ def rnd():
 
 
 def register(sponsor=""):
-    email = f"payflow_{rnd()}@qa-anjali.example.com"
+    email = f"payflow_{rnd()}@qa-homegenies.example.com"
     mobile = "9" + f"{secrets.randbelow(1000000000):09d}"
     r = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile}, timeout=30)
     r.raise_for_status()

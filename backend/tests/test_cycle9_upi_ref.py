@@ -1,5 +1,5 @@
 """
-Anjali Herbal Life — Cycle 9 tests
+HOME GENIES — Cycle 9 tests
   Module: shop_routes  -> PUT /api/admin/payments/upi-confirm/{order_id} MANDATORY reference
   Module: server       -> GET /api/settings/public returns gst_percent
   Module: auth_routes  -> /api/auth/admin-login accepts username OR email + new passcode
@@ -16,11 +16,11 @@ if not BASE_URL:
     raise RuntimeError("REACT_APP_BACKEND_URL missing")
 API = f"{BASE_URL}/api"
 
-ADMIN_EMAIL = "sachin.shukla2196@gmail.com"
-ADMIN_USERNAME = "admin.rahulnirwana"
+ADMIN_EMAIL = os.environ["TEST_ADMIN_EMAIL"]
+ADMIN_USERNAME = os.environ.get("TEST_ADMIN_USERNAME", ADMIN_EMAIL)
 ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Admin@12345")
 ADMIN_PASSCODE = os.environ.get("TEST_ADMIN_PASSCODE", "anj000088sk")
-DEMO_EMAIL = "demo.distributor@anjaliherballife.in"
+DEMO_EMAIL = "demo.distributor@homegenies.example.com"
 DEMO_PASSWORD = os.environ.get("TEST_DEMO_PASSWORD", "Demo@1234")
 
 ADDRESS = {"full_name": "QA Tester", "mobile": "9812345678", "line1": "1 QA Street",
@@ -173,10 +173,12 @@ class TestAdminLoginUsername:
             "username": ADMIN_EMAIL, "password": ADMIN_PASSWORD, "passcode": ADMIN_PASSCODE}, timeout=30)
         assert r.status_code == 200, r.text
 
-    def test_old_passcode_rejected(self):
+    def test_old_passcode_is_ignored(self):
+        # approved design: the passcode is no longer required and is ignored, so the password alone signs in
         r = requests.post(f"{API}/auth/admin-login", json={
-            "username": ADMIN_USERNAME, "password": ADMIN_PASSWORD, "passcode": "Anjali@Secure#2026"}, timeout=30)
-        assert r.status_code == 401, f"{r.status_code} {r.text[:200]}"
+            "username": ADMIN_USERNAME, "password": ADMIN_PASSWORD, "passcode": "retired-passcode-value"}, timeout=30)
+        assert r.status_code == 200, f"{r.status_code} {r.text[:200]}"
+        assert r.json().get("token")
 
     def test_wrong_password_rejected(self):
         r = requests.post(f"{API}/auth/admin-login", json={

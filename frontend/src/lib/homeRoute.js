@@ -4,6 +4,6 @@ const ADMIN_ROLES = ["super_admin", "admin", "accounts_admin", "support_admin"];
 export function homeRouteFor(user) {
   if (!user) return "/login";
   if (ADMIN_ROLES.includes(user.role)) return "/admin";
-  if (user.role === "vendor") return "/vendor";
+  if (user.role === "vendor" || user.role === "vendor_staff") return "/vendor";
   return "/app/dashboard";
 }

@@ -72,6 +72,14 @@ import vendor_dashboard
 app.include_router(vendor_dashboard.router)
 import vendor_reports
 app.include_router(vendor_reports.router)
+import vendor_staff_routes
+app.include_router(vendor_staff_routes.router)
+import commercial_routes
+app.include_router(commercial_routes.router)
+import vendor_benefits
+app.include_router(vendor_benefits.router)
+import vendor_invitations
+app.include_router(vendor_invitations.router)
 import governance_routes
 app.include_router(governance_routes.router)
 
@@ -176,40 +184,9 @@ async def _safe(coro):
 
 
 async def _init_db():
-    # indexes
-    try:
-        await db.users.drop_index("email_1")
-    except Exception:
-        pass
-    await _safe(db.users.create_index("email", unique=True, partialFilterExpression={"email": {"$type": "string"}}))
-    await _safe(db.users.create_index("distributor_id", unique=True))
-    await _safe(db.products.create_index("sku", unique=True))
-    await _safe(db.commissions.create_index("referred_user_id"))
-    await _safe(db.orders.create_index("order_number", unique=True))
-    await _safe(db.orders.create_index([("payment_method", 1), ("payment_status", 1), ("status", 1), ("created_at", 1)]))
-    await _safe(db.orders.create_index([("fulfilments.vendor_id", 1), ("created_at", -1)]))
-    await _safe(db.stock_txns.create_index("key", unique=True))
-    await _safe(db.rate_limits.create_index([("key", 1), ("w", 1)], unique=True))
-    await _safe(db.rate_limits.create_index("expires_at", expireAfterSeconds=0))
-    await _safe(db.support_tickets.create_index([("vendor_id", 1), ("updated_at", -1)]))
-    await _safe(db.support_tickets.create_index([("status", 1), ("urgent", -1), ("updated_at", -1)]))
-    await _safe(db.vendor_documents.create_index([("vendor_id", 1), ("created_at", -1)]))
-    await _safe(db.vendor_status_history.create_index([("vendor_id", 1), ("at", -1)]))
-    await _safe(db.products.create_index("variants.sku", unique=True, partialFilterExpression={"variants.sku": {"$type": "string"}}))
-    await _safe(db.vendor_ledger.create_index("source_key", unique=True))
-    await _safe(db.refund_cases.create_index("source_key", unique=True))
-    await _safe(db.refund_cases.create_index([("status", 1), ("created_at", 1)]))
-    await _safe(db.return_cases.create_index([("vendor_id", 1), ("created_at", -1)]))
-    await _safe(db.return_cases.create_index([("user_id", 1), ("created_at", -1)]))
-    await _safe(db.vendor_ledger.create_index([("vendor_id", 1), ("posted_at", -1)]))
-    await _safe(db.settlements.create_index([("vendor_id", 1), ("created_at", -1)]))
-    await _safe(db.settlements.create_index("vendor_id", unique=True, partialFilterExpression={"status": {"$in": ["requested", "approved"]}}))
-    await _safe(db.stock_txns.create_index([("status", 1), ("updated_at", 1)]))
-    await _safe(db.products.create_index([("vendor_id", 1), ("created_at", -1)]))
-    await _safe(db.wallet_transactions.create_index("user_id"))
-    await _safe(db.notifications.create_index("user_id"))
-    await _safe(db.otp_sessions.create_index([("identifier", 1), ("purpose", 1)]))
-    await _safe(db.users.create_index("mobile", unique=True, sparse=True))
+    # indexes: read-only check. Creating, changing or dropping indexes happens only in the migration (db_indexes.apply).
+    from db_indexes import check_missing
+    await _safe(check_missing())
     from admin_routes import activate_pending_registrations  # normal users no longer wait for admin approval
     await _safe(activate_pending_registrations())
 
@@ -220,7 +197,6 @@ async def _init_db():
     # bootstrap a flag is set so deleted products/categories NEVER reappear on restart.
     boot = await db.business_settings.find_one({"id": "catalogue_bootstrap"})
     if not boot:
-        await _safe(db.product_categories.create_index("name", unique=True))  # fails harmlessly if duplicates already exist
         for c in CATEGORY_SEED:
             # upsert: two serverless instances cold-starting together must not both insert the same category
             await db.product_categories.update_one({"name": c}, {"$setOnInsert": {"id": new_id(), "created_at": now_iso()}}, upsert=True)

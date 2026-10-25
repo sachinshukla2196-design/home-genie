@@ -77,7 +77,17 @@ async def vendor_settlements(page: int = 1, page_size: int = 25, user: dict = De
     q = {"vendor_id": user["_vendor"]["id"]}
     total = await db.settlements.count_documents(q)
     rows = await db.settlements.find(q, {"_id": 0}).sort("created_at", -1).skip((page - 1) * page_size).limit(page_size).to_list(page_size)
-    return {"items": [_money_view(r) for r in rows], **page_meta(total, page, page_size)}
+    return {"items": [_vendor_settlement_view(r) for r in rows], **page_meta(total, page, page_size)}
+
+
+
+def _vendor_settlement_view(s: dict) -> dict:
+    """What a vendor may see of a payout: amounts, dates, status and reference. Not which admin created, approved or paid it."""
+    v = _money_view(s)
+    for k in ("created_by", "approved_by", "paid_by"):
+        v.pop(k, None)
+    v["events"] = [{"status": e.get("status"), "at": e.get("at"), "note": e.get("note", "")} for e in (s.get("events") or [])]
+    return v
 
 
 @router.get("/vendor/finance/statement.csv")
@@ -267,7 +277,8 @@ async def create_settlement(body: SettlementIn, request: Request, admin: dict = 
     policy = await get_policy()
     if not policy["active"]:
         raise HTTPException(status_code=409, detail="Settlement policy is not approved yet. Activate it in Finance policy first.")
-    v = await db.vendors.find_one({"id": body.vendor_id, "status": "approved"}, {"_id": 0})
+    from vendor_lifecycle import SELLING
+    v = await db.vendors.find_one({"id": body.vendor_id, "status": {"$in": list(SELLING)}}, {"_id": 0})
     if not v:
         raise HTTPException(status_code=404, detail="Approved vendor not found.")
     bal = await L.balances(body.vendor_id)

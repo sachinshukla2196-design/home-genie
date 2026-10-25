@@ -1,5 +1,6 @@
 """Products, cart -> orders, and payment capture with server-side verification."""
 import os
+import logging
 from decimal import Decimal, ROUND_HALF_UP
 from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel, Field
@@ -13,11 +14,13 @@ except ImportError:  # other hosts (e.g. Vercel): same interface on the official
     _STRIPE_VIA_EMERGENT = False
 
 from money import to_paise, paise_to_float, mul_pct, mul_ratio, paise_of
+from pymongo.errors import DuplicateKeyError
 from core import (db, now_iso, new_id, get_current_user, get_settings, next_sequence, wallet_apply,
                   add_wallet_transaction, create_notification, log_audit, require_admin, P_PUBLIC)
 from stock import (expire_one, expire_pending_online_orders, handle_late_payment, EXPIRY_REASON, reserve_for_order,
                    mark_reserve_bound, abandon_reservation)
 
+logger = logging.getLogger("homegenies")
 router = APIRouter(prefix="/api", tags=["shop"])
 
 import razorpay
@@ -451,92 +454,135 @@ async def razorpay_webhook(request: Request):
 HG_COMMISSION_TYPES = ["COMMISSION_DIRECT", "COMMISSION_REFERRAL", "COMMISSION_TEAM"]
 
 
-async def reverse_order_financials(order_id: str, actor: dict = None, request: Request = None,
-                                   refund_amount: float = None, reference: str = "", reason: str = "",
-                                   case_id: str = None, vendor_id: str = None):
-    """Auditable refund/clawback in EXACT integer paise. Full refund (refund_amount None) or PARTIAL refund (amount of the
-    order total actually returned). Each income credit tied to the order is clawed back in the same proportion
-    (refund / order total, rounded half-up per credit), never beyond what was credited; the FINAL refund that closes the
-    order claws back exactly the remainder, so credits and clawbacks always reconcile to the paisa. Originals are kept and
-    marked REVERSED/PARTIALLY_REVERSED; linked CLAWBACK ledger entries are written. Idempotent: a refund event is keyed by
-    (order, reference) and total refunds can never exceed the order total."""
-    order = await db.orders.find_one({"id": order_id})
-    if not order or order.get("payment_status") not in ("paid", "refunded", "partially_refunded"):
-        return {"reversed": 0, "refund_amount": 0.0}
+async def _reserve_refund(order_id: str, event: dict):
+    """Reserve the refund amount on the order exactly once (keyed by the event id). Returns None on success, or
+    "exceeds" / "conflict". Nothing is clawed back until the reservation exists, so a refused reservation moves no money."""
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if event["id"] in order.get("refund_event_ids", []):
+        return None
     total_p = paise_of(order, "total_paise", "total")
     already_p = paise_of(order, "refunded_paise", "refunded_amount")
-    remaining_p = total_p - already_p
-    amt_p = remaining_p if refund_amount is None else to_paise(refund_amount)
-    if amt_p <= 0 or remaining_p <= 0:
-        return {"reversed": 0, "refund_amount": 0.0}
-    amt_p = min(amt_p, remaining_p)
-    new_total_refunded_p = already_p + amt_p
-    closes_order = new_total_refunded_p >= total_p
-    event_id = f"{order_id}:refund:{reference or 'full'}"
-    try:
-        await db.order_refunds.insert_one({"_id": event_id, "id": event_id, "order_id": order_id, "amount": paise_to_float(amt_p),
-                                           "amount_paise": amt_p, "closes_order": closes_order, "reference": reference, "case_id": case_id, "vendor_id": vendor_id,
-                                           "reason": reason, "status": "processing", "created_at": now_iso(),
-                                           "actor_id": (actor or {}).get("id")})
-    except Exception:
-        return {"reversed": 0, "refund_amount": 0.0, "duplicate": True}
-    # Optimistic claim on the exact refunded counter (equal to the value read above), so two refunds cannot interleave.
+    new_total_p = already_p + int(event["amount_paise"])
+    if new_total_p > total_p or (new_total_p >= total_p) != bool(event["closes_order"]):
+        return "exceeds"
     if "refunded_paise" in order:
-        claim_filter = {"id": order_id, "refunded_paise": already_p}
+        refunded_filter = {"refunded_paise": already_p}
     else:   # legacy order: guard on the stored float counter exactly as it was read
-        claim_filter = {"id": order_id, "refunded_paise": {"$exists": False}, "refunded_amount": order.get("refunded_amount")}
+        refunded_filter = {"refunded_paise": {"$exists": False}, "refunded_amount": order.get("refunded_amount")}
     claim = await db.orders.update_one(
-        claim_filter,
-        {"$set": {"refunded_paise": new_total_refunded_p, "refunded_amount": paise_to_float(new_total_refunded_p),
-                  "updated_at": now_iso(),
-                  "payment_status": "refunded" if closes_order else "partially_refunded",
-                  "financials_reversed": closes_order}})
-    if claim.modified_count != 1:
-        await db.order_refunds.delete_one({"id": event_id})
-        return {"reversed": 0, "refund_amount": 0.0, "conflict": True}
-    n = 0
-    # Clawback HOME GENIES commissions tied to this order, in the refunded proportion.
-    comms = await db.commissions.find(
-        {"order_id": order_id, "status": {"$in": ["PENDING", "RELEASED", "PARTIALLY_REVERSED"]},
-         "type": {"$in": HG_COMMISSION_TYPES}}).to_list(1000)
-    for c in comms:
+        {"id": order_id, "refund_event_ids": {"$ne": event["id"]}, **refunded_filter},
+        {"$set": {"refunded_paise": new_total_p, "refunded_amount": paise_to_float(new_total_p), "updated_at": now_iso(),
+                  "payment_status": "refunded" if event["closes_order"] else "partially_refunded",
+                  "financials_reversed": bool(event["closes_order"])},
+         "$push": {"refund_event_ids": event["id"]}})
+    if claim.modified_count == 1:
+        return None
+    current = await db.orders.find_one({"id": order_id}, {"_id": 0, "refund_event_ids": 1})
+    return None if event["id"] in (current or {}).get("refund_event_ids", []) else "conflict"
+
+
+async def _reverse_commission(c: dict, event: dict, order: dict) -> int:
+    """Claw back one commission's share of one refund event, exactly once. The reversal INTENT is recorded with a
+    conditional update on the record as read; a changed record is re-read and recomputed. Then the intent is finished
+    (financial_ops). A retry finds the recorded intent and only finishes it. Returns 1 when this commission carries a
+    clawback for the event."""
+    from commission import snapshot_filter
+    from financial_ops import finish_release, finish_reversal
+    event_id = event["id"]
+    for _ in range(5):
+        rec = next((r for r in c.get("reversal_records", []) if r["event_id"] == event_id), None)
+        if rec:
+            await finish_reversal(c, rec)
+            return 1 if rec["claw_paise"] > 0 else 0
+        if (c.get("release") or {}).get("applied") is False:
+            await finish_release(c)            # complete an interrupted release before reversing it
         credited_p = paise_of(c, "amount_paise", "amount")
         done_p = paise_of(c, "reversed_paise", "reversed_amount")
         room_p = credited_p - done_p
-        claw_p = room_p if closes_order else mul_ratio(credited_p, amt_p, total_p)
-        claw_p = min(claw_p, room_p)
+        total_p = paise_of(order, "total_paise", "total")
+        claw_p = min(room_p if event["closes_order"] else mul_ratio(credited_p, int(event["amount_paise"]), total_p), room_p)
         if claw_p <= 0:
-            continue
+            return 0
         new_done_p = done_p + claw_p
-        was_pending = not c.get("released_at")   # not yet released: the credit still sits in the PENDING pool (also when
-                                                  # it was already partially reversed by an earlier partial refund)
-        await db.commissions.update_one({"id": c["id"]}, {"$set": {
+        rec = {"op_key": f"clawback:{event_id}:{c['id']}", "event_id": event_id, "claw_paise": claw_p,
+               "was_pending": not c.get("released_at"), "applied": False, "order_number": order.get("order_number")}
+        claim = await db.commissions.update_one({"id": c["id"], **snapshot_filter(c)}, {"$set": {
             "reversed_paise": new_done_p, "reversed_amount": paise_to_float(new_done_p), "reversed_at": now_iso(),
-            "status": "REVERSED" if new_done_p >= credited_p else "PARTIALLY_REVERSED"}})
-        claw = paise_to_float(claw_p)
-        if was_pending:
-            # never released: simply remove it from the pending pool
-            await wallet_apply(c["user_id"], {"pending_balance": -claw_p})
-            await add_wallet_transaction(
-                c["user_id"], "COMMISSION_CLAWBACK", claw, "INFO",
-                reference=event_id, direction="debit",
-                description=f"Pending commission cancelled - refund of order {order.get('order_number')}")
-        else:
-            await add_wallet_transaction(
-                c["user_id"], "COMMISSION_CLAWBACK", claw, "CLAWBACK",
-                reference=event_id, direction="debit",
-                description=f"Clawback of {c.get('type')} on refund of order {order.get('order_number')}")
-        n += 1
-    await db.order_refunds.update_one({"id": event_id}, {"$set": {"status": "completed", "clawbacks": n}})
+            "status": "REVERSED" if new_done_p >= credited_p else "PARTIALLY_REVERSED"},
+            "$push": {"reversal_records": rec}})
+        if claim.modified_count == 1:
+            await finish_reversal(c, rec)
+            return 1
+        c = await db.commissions.find_one({"id": c["id"]}, {"_id": 0})
+        if not c or c.get("status") not in ("PENDING", "RELEASED", "PARTIALLY_REVERSED", "REVERSED"):
+            return 0
+    logger.error("commission %s kept changing during refund %s; not completed", c.get("id"), event_id)
+    raise RuntimeError("commission changed repeatedly during the refund; retry the refund")
+
+
+async def reverse_order_financials(order_id: str, actor: dict = None, request: Request = None,
+                                   refund_amount: float = None, reference: str = "", reason: str = "",
+                                   case_id: str = None, vendor_id: str = None):
+    """Refund and clawback in EXACT integer paise, crash-safe and idempotent per refund event.
+
+    Steps, in order: (1) the refund EVENT is recorded (keyed by order and reference); (2) the amount is RESERVED on the
+    order exactly once; (3) every commission share is clawed back through a recorded intent; (4) vendor shares and open
+    refund cases are settled; (5) only then is the event marked completed. A crash at any step is resumed by calling this
+    function again with the same reference: completed steps are skipped, and the stored event amount is used, so a retry
+    never recomputes the refund.
+    """
+    order = await db.orders.find_one({"id": order_id})
+    if not order or order.get("payment_status") not in ("paid", "refunded", "partially_refunded"):
+        return {"reversed": 0, "refund_amount": 0.0}
+    event_id = f"{order_id}:refund:{reference or 'full'}"
+    event = await db.order_refunds.find_one({"id": event_id}, {"_id": 0})
+    if event is None:
+        total_p = paise_of(order, "total_paise", "total")
+        already_p = paise_of(order, "refunded_paise", "refunded_amount")
+        remaining_p = total_p - already_p
+        amt_p = remaining_p if refund_amount is None else to_paise(refund_amount)
+        if amt_p <= 0 or remaining_p <= 0:
+            return {"reversed": 0, "refund_amount": 0.0}
+        amt_p = min(amt_p, remaining_p)
+        event = {"_id": event_id, "id": event_id, "order_id": order_id, "amount": paise_to_float(amt_p), "amount_paise": amt_p,
+                 "closes_order": already_p + amt_p >= total_p, "reference": reference, "case_id": case_id,
+                 "vendor_id": vendor_id, "reason": reason, "status": "processing", "created_at": now_iso(),
+                 "actor_id": (actor or {}).get("id")}
+        try:
+            await db.order_refunds.insert_one(dict(event))
+        except DuplicateKeyError:
+            event = await db.order_refunds.find_one({"id": event_id}, {"_id": 0})
+    if event["status"] == "completed":
+        return {"reversed": event.get("clawbacks", 0), "refund_amount": event["amount"], "duplicate": True}
+    if event["status"] == "rejected":
+        return {"reversed": 0, "refund_amount": 0.0, "rejected": True}
+    outcome = await _reserve_refund(order_id, event)
+    if outcome == "exceeds":
+        await db.order_refunds.update_one({"id": event_id, "status": "processing"}, {"$set": {"status": "rejected"}})
+        return {"reversed": 0, "refund_amount": 0.0, "rejected": True}
+    if outcome == "conflict":
+        return {"reversed": 0, "refund_amount": 0.0, "conflict": True}
+    from commission import resume_distribution
+    if await db.commission_plans.find_one({"_id": order_id, "completed_at": None}, {"_id": 1}):
+        await resume_distribution(order_id)             # no clawback may act on a half-created commission
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    n = 0
+    comms = await db.commissions.find({"order_id": order_id, "$or": [
+        {"status": {"$in": ["PENDING", "RELEASED", "PARTIALLY_REVERSED"]}},
+        {"reversal_records.event_id": event_id}]}, {"_id": 0}).to_list(1000)
+    for c in comms:
+        n += await _reverse_commission(c, event, order)
     from ledger import post_refund_shares
-    refund_doc = await db.order_refunds.find_one({"id": event_id}, {"_id": 0})
-    await post_refund_shares(await db.orders.find_one({"id": order_id}, {"_id": 0}), refund_doc)     # vendors' share of this refund
-    if not case_id:                                         # the one-step Refund action also settles any open refund case
+    await post_refund_shares(order, event)                 # idempotent per (refund event, vendor)
+    if not event.get("case_id"):                           # the one-step Refund action also settles any open refund case
         from returns_routes import confirm_open_cases_for_order
-        await confirm_open_cases_for_order(order_id, refund_doc, (actor or {}).get("id", "system"))
-    await log_audit(actor, "order_financials_reversed", "order", order_id,
-                    new_value={"reversed_entries": n, "refund_amount": paise_to_float(amt_p), "reference": reference, "reason": reason}, request=request)
-    return {"reversed": n, "refund_amount": paise_to_float(amt_p), "refund_event": event_id}
+        await confirm_open_cases_for_order(order_id, event, (actor or {}).get("id", "system"))
+    done = await db.order_refunds.update_one({"id": event_id, "status": "processing"},
+                                             {"$set": {"status": "completed", "clawbacks": n, "completed_at": now_iso()}})
+    if done.modified_count == 1:
+        await log_audit(actor, "order_financials_reversed", "order", order_id,
+                        new_value={"reversed_entries": n, "refund_amount": event["amount"], "reference": reference, "reason": reason}, request=request)
+    return {"reversed": n, "refund_amount": event["amount"], "refund_event": event_id}
 
 
 async def _process_paid_order(session_id: str, request: Request = None):

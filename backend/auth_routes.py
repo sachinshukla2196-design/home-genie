@@ -2,6 +2,9 @@
 import os
 import re
 import random
+import secrets
+import hashlib
+import logging
 import httpx
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, HTTPException, Request, Depends
@@ -10,10 +13,12 @@ from typing import Optional
 
 from core import (db, now_iso, new_id, hash_password, verify_password, create_token,
                   clean_user, get_current_user, next_distributor_id, get_or_create_wallet,
-                  create_notification, log_audit, send_email, email_shell)
+                  create_notification, log_audit, send_email, email_shell, password_update)
 from providers import otp_create, otp_verify, send_account_id_sms
+from pymongo import ReturnDocument
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+logger = logging.getLogger("homegenies")
 
 ADMIN_ROLES = {"super_admin", "admin", "accounts_admin", "support_admin"}
 
@@ -57,23 +62,24 @@ def _valid_email(e: str) -> bool:
     return bool(re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", (e or "").strip()))
 
 
-async def _resolve_sponsor(sid_raw: str) -> dict:
-    """Optional referral: when given it must match an active member or an admin-generated code."""
+async def _find_referrer(sid_raw: str) -> tuple:
+    """Referral is OPTIONAL. Blank -> (None, None): no sponsor, no default. Given -> it must be an active admin
+    code or an active member, and is returned as (sponsor, code). Read-only: the code's use counter is incremented
+    by the caller only when an account is actually created."""
     sid = (sid_raw or "").strip().upper()
     if not sid:
-        raise HTTPException(status_code=400, detail="A referral / sponsor ID is required to register.")
+        return None, None
     rc = await db.referral_codes.find_one({"code": sid, "active": True})
     if rc:
         admin = await db.users.find_one({"id": rc.get("created_by")}) or await db.users.find_one({"role": "super_admin"})
         if admin:
-            await db.referral_codes.update_one({"code": sid}, {"$inc": {"uses": 1}})
-            return admin
+            return admin, sid
     sponsor = await db.users.find_one({"distributor_id": sid})
     if not sponsor:
-        raise HTTPException(status_code=400, detail="Invalid referral / sponsor ID. Please check and try again.")
+        raise HTTPException(status_code=400, detail="Invalid referral / sponsor ID. Please check and try again, or leave it blank if you were not referred.")
     if sponsor.get("role") not in ADMIN_ROLES and sponsor.get("status") != "green":
         raise HTTPException(status_code=400, detail="This referral ID belongs to an inactive member. Please use an active HomeGenie referral ID.")
-    return sponsor
+    return sponsor, None
 
 
 @router.post("/send-otp")
@@ -87,7 +93,7 @@ async def send_otp(body: SendOtp, request: Request):
         raise HTTPException(status_code=400, detail="This mobile number is already registered.")
     if not _valid_mobile(mobile):
         raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number.")
-    await _resolve_sponsor(body.sponsor_id)
+    await _find_referrer(body.sponsor_id)
     await otp_create(mobile, "register")
     return {"message": "OTP sent to your mobile."}
 
@@ -134,14 +140,9 @@ async def register_request(body: RegRequestBody, request: Request):
         raise HTTPException(status_code=400, detail="Enter a valid 12-digit Aadhaar number or leave it blank.")
     if not body.state.strip() or not body.city.strip() or not body.pincode.strip():
         raise HTTPException(status_code=400, detail="State, City and Pincode are required.")
-    sponsor_raw = (body.sponsor_id or "").strip().upper()
     # HOME GENIES: a referral is OPTIONAL. Anyone may register and shop; the
     # HomeGenie selling role is granted by admin approval, not by a sponsor.
-    if sponsor_raw:
-        sponsor_ok = (await db.referral_codes.find_one({"code": sponsor_raw, "active": True})
-                      or await db.users.find_one({"distributor_id": sponsor_raw}))
-        if not sponsor_ok:
-            raise HTTPException(status_code=400, detail="Invalid referral ID. Leave it blank if you were not referred.")
+    await _find_referrer(body.sponsor_id)
     if await db.users.find_one({"mobile": mobile}):
         raise HTTPException(status_code=400, detail="An account already exists for this mobile number.")
     if email and await db.users.find_one({"email": email}):
@@ -152,7 +153,7 @@ async def register_request(body: RegRequestBody, request: Request):
         raise HTTPException(status_code=400, detail="A registration request for this email is already pending admin approval.")
     doc = {
         "id": new_id(), "full_name": body.full_name.strip(), "mobile": mobile,
-        "email": email,
+        "email": email or None,  # blank is stored as null everywhere, so optional e-mail is not an empty string
         "password_hash": pw_hash,
         "email_verified": bool(body.google_verified),
         "google_linked": bool(body.google_verified),
@@ -195,15 +196,15 @@ async def register(body: RegisterBody, request: Request):
     if await db.users.find_one({"mobile": mobile}):
         raise HTTPException(status_code=400, detail="This mobile number is already registered.")
 
+    # referral is checked BEFORE the OTP is consumed, so a bad referral does not burn the code
+    sponsor, referral_code = await _find_referrer(body.sponsor_id)
+
     await otp_verify(mobile, "register", body.otp)
 
     # HOME GENIES: Aadhaar is NOT collected at signup. If an identity document is
     # ever required (e.g. for point withdrawal), it is captured separately.
     if body.aadhaar_number and not _valid_aadhaar(body.aadhaar_number):
         raise HTTPException(status_code=400, detail="Enter a valid 12-digit Aadhaar number or leave it blank.")
-
-    # sponsor resolution — referral ID is mandatory + must be an active (GREEN) member or admin-generated code
-    sponsor = await _resolve_sponsor(body.sponsor_id)
 
     distributor_id = await next_distributor_id()
     uid = new_id()
@@ -227,6 +228,8 @@ async def register(body: RegisterBody, request: Request):
     }
     await db.users.insert_one(dict(user))
     await get_or_create_wallet(uid)
+    if referral_code:
+        await db.referral_codes.update_one({"code": referral_code}, {"$inc": {"uses": 1}})
 
     if sponsor:
         await db.referral_relationships.insert_one({
@@ -306,13 +309,9 @@ class GoogleSessionBody(BaseModel):
     session_id: str
 
 
-@router.post("/google/session")
-async def google_session(body: GoogleSessionBody, request: Request):
-    """Emergent-managed Google sign-in for EXISTING distributors only.
-    We use Emergent Auth solely to obtain the verified Google email, then match it to an
-    existing account and mint the app's own JWT (same as password login). No new account
-    is created here — sponsor/KYC/admin-approval rules are never bypassed."""
-    sid = (body.session_id or "").strip()
+async def _google_identity(session_id: str) -> dict:
+    """The Google identity (email, name) behind a sign-in session, as verified by the managed Google auth service."""
+    sid = (session_id or "").strip()
     if not sid:
         raise HTTPException(status_code=400, detail="Missing session. Please try signing in again.")
     try:
@@ -322,7 +321,16 @@ async def google_session(body: GoogleSessionBody, request: Request):
         raise HTTPException(status_code=503, detail="Could not verify Google sign-in right now. Please try again.")
     if resp.status_code != 200:
         raise HTTPException(status_code=401, detail="Google sign-in could not be verified. Please try again.")
-    data = resp.json()
+    return resp.json()
+
+
+@router.post("/google/session")
+async def google_session(body: GoogleSessionBody, request: Request):
+    """Emergent-managed Google sign-in for EXISTING distributors only.
+    We use Emergent Auth solely to obtain the verified Google email, then match it to an
+    existing account and mint the app's own JWT (same as password login). No new account
+    is created here — sponsor/KYC/admin-approval rules are never bypassed."""
+    data = await _google_identity(body.session_id)
     email = (data.get("email") or "").strip().lower()
     if not email:
         raise HTTPException(status_code=401, detail="Google did not return an email. Please try another account.")
@@ -341,6 +349,73 @@ async def google_session(body: GoogleSessionBody, request: Request):
     await log_audit(clean_user(user), "login_google", "user", user["id"], request=request)
     token = create_token(user["id"])
     return {"mode": "login", "token": token, "user": clean_user(user)}
+
+
+# ---------------- Password recovery with Google (mobile OTP recovery to follow) ----------------
+GOOGLE_RESET_MINUTES = 15
+GENERIC_RECOVERY_MESSAGE = "If an account matches this Google email, you can now set a new password."
+
+
+def _token_hash(token: str) -> str:
+    return hashlib.sha256((token or "").encode()).hexdigest()
+
+
+class GoogleRecoveryBody(BaseModel):
+    session_id: str
+
+
+class GoogleResetBody(BaseModel):
+    token: str
+    password: str
+
+
+@router.post("/forgot/google")
+async def forgot_google(body: GoogleRecoveryBody, request: Request):
+    """Google-verified password recovery. Proves control of the account's Google e-mail, then issues a
+    single-use reset token valid for 15 minutes. Unknown, blocked and admin accounts get the same answer
+    with no token, so the endpoint cannot be used to discover accounts or to reset admin passwords."""
+    from core import rate_limit, client_ip
+    await rate_limit("forgot_password", client_ip(request))
+    data = await _google_identity(body.session_id)
+    email = (data.get("email") or "").strip().lower()
+    if not email:
+        return {"message": GENERIC_RECOVERY_MESSAGE}
+    user = await db.users.find_one({"email": email})
+    if not user or user.get("blocked") or user.get("role") in ADMIN_ROLES:
+        return {"message": GENERIC_RECOVERY_MESSAGE}
+    now = datetime.now(timezone.utc)
+    await db.password_reset_tokens.update_many({"user_id": user["id"], "used": False}, {"$set": {"used": True}})
+    token = secrets.token_urlsafe(32)
+    await db.password_reset_tokens.insert_one({
+        "id": new_id(), "user_id": user["id"], "token_hash": _token_hash(token), "used": False,
+        "expires_at": (now + timedelta(minutes=GOOGLE_RESET_MINUTES)).isoformat(), "created_at": now.isoformat(),
+    })
+    await log_audit(clean_user(user), "password_reset_started_google", "user", user["id"], request=request)
+    return {"message": GENERIC_RECOVERY_MESSAGE, "reset_token": token}
+
+
+@router.post("/forgot/google/reset")
+async def forgot_google_reset(body: GoogleResetBody, request: Request):
+    """Sets the new password with a token from /forgot/google. The token is claimed atomically, so it works once."""
+    from core import rate_limit, client_ip
+    await rate_limit("forgot_reset", client_ip(request))
+    if len(body.password or "") < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
+    now = datetime.now(timezone.utc).isoformat()
+    row = await db.password_reset_tokens.find_one_and_update(
+        {"token_hash": _token_hash(body.token), "used": False, "expires_at": {"$gt": now}},
+        {"$set": {"used": True, "used_at": now}}, return_document=ReturnDocument.BEFORE)
+    invalid = HTTPException(status_code=400, detail="This reset link is invalid or has expired. Please start again.")
+    if not row:
+        raise invalid
+    user = await db.users.find_one({"id": row["user_id"]})
+    if not user or user.get("blocked") or user.get("role") in ADMIN_ROLES:
+        raise invalid
+    await db.users.update_one({"id": user["id"]}, {"$set": {**password_update(body.password), "updated_at": now_iso()}})
+    await db.password_reset_requests.update_many({"user_id": user["id"], "status": "pending"},
+        {"$set": {"status": "resolved", "resolved_at": now_iso()}})
+    await log_audit(clean_user(user), "password_reset_completed_google", "user", user["id"], request=request)
+    return {"message": "Your password has been updated. You can log in now with the new password."}
 
 
 class AdminLoginBody(BaseModel):
@@ -445,27 +520,53 @@ class ForgotResetBody(BaseModel):
     password: str = Field(min_length=6)
 
 
+LOGIN_OTP_SENT = "If this mobile number is registered, an OTP has been sent to it."
+LOGIN_OTP_INVALID = "The OTP is invalid or has expired. Please request a new one."
+
+
+def _eligible_for_login_otp(user: Optional[dict]) -> bool:
+    """Only ordinary, unblocked accounts can sign in with a mobile OTP. Admins use the secure admin login."""
+    return bool(user) and user.get("role") not in ADMIN_ROLES and not user.get("blocked") \
+        and user.get("account_status") != "blocked"
+
+
 @router.post("/login-otp/send")
-async def login_otp_send(body: MobileBody):
+async def login_otp_send(body: MobileBody, request: Request):
+    """Same public answer for registered and unregistered numbers. An OTP is sent only to an eligible account.
+    Provider configuration problems are global, so they are reported the same way for every number."""
+    from core import rate_limit, client_ip
+    from providers import sms_available, OTP_UNAVAILABLE
+    await rate_limit("login_otp_send", client_ip(request))
     mobile = body.mobile.strip()
+    if not sms_available():
+        raise OTP_UNAVAILABLE
     user = await db.users.find_one({"mobile": mobile})
-    if not user:
-        raise HTTPException(status_code=404, detail="No account found for this mobile number.")
-    if user.get("role") in ADMIN_ROLES:
-        raise HTTPException(status_code=403, detail="Admins must sign in with the secure admin login.")
-    await otp_create(mobile, "login")
-    return {"message": "OTP sent to your mobile."}
+    if _eligible_for_login_otp(user):
+        try:
+            await otp_create(mobile, "login")
+        except HTTPException as e:
+            # a cooldown (429) or a single failed delivery must not reveal that the number is registered
+            if e.status_code not in (429, 503):
+                raise
+            logger.warning("login OTP not issued (status %s)", e.status_code)
+    return {"message": LOGIN_OTP_SENT}
 
 
 @router.post("/login-otp/verify")
 async def login_otp_verify(body: MobileOtpBody, request: Request):
+    """Unknown, ineligible, expired, reused, wrong and over-attempted codes all get the same answer."""
+    from core import rate_limit, client_ip
+    await rate_limit("login_otp_verify", client_ip(request))
     mobile = body.mobile.strip()
     user = await db.users.find_one({"mobile": mobile})
-    if not user:
-        raise HTTPException(status_code=404, detail="No account found for this mobile number.")
-    if user.get("role") in ADMIN_ROLES:
-        raise HTTPException(status_code=403, detail="Admins must sign in with the secure admin login.")
-    await otp_verify(mobile, "login", body.otp)
+    if not _eligible_for_login_otp(user):
+        raise HTTPException(status_code=400, detail=LOGIN_OTP_INVALID)
+    try:
+        await otp_verify(mobile, "login", body.otp)
+    except HTTPException as e:
+        if e.status_code in (400, 429):
+            raise HTTPException(status_code=400, detail=LOGIN_OTP_INVALID)
+        raise
     await log_audit(clean_user(user), "login_otp", "user", user["id"], request=request)
     return {"token": create_token(user["id"]), "user": clean_user(user)}
 
@@ -484,15 +585,14 @@ async def forgot_request(body: ForgotRequestBody, request: Request):
     if not ident:
         raise HTTPException(status_code=400, detail="Enter your HomeGenie ID or registered mobile number.")
     user = await db.users.find_one({"$or": [{"distributor_id": ident.upper()}, {"mobile": ident}]})
-    if not user:
-        raise HTTPException(status_code=404, detail="No account found for that HomeGenie ID / mobile number.")
-    if not await db.password_reset_requests.find_one({"user_id": user["id"], "status": "pending"}):
+    # Same answer whether or not the account exists, so the endpoint cannot be used to find registered members.
+    if user and not await db.password_reset_requests.find_one({"user_id": user["id"], "status": "pending"}):
         await db.password_reset_requests.insert_one({
             "id": new_id(), "user_id": user["id"], "distributor_id": user.get("distributor_id"),
             "full_name": user.get("full_name"), "mobile": user.get("mobile"),
             "status": "pending", "created_at": now_iso(),
         })
-    return {"message": "Your request has been sent to the admin. Our team will reset your password and contact you shortly."}
+    return {"message": "If an account matches, your request has been sent to the admin. Our team will reset your password and contact you shortly."}
 
 
 @router.put("/change-mobile/send")

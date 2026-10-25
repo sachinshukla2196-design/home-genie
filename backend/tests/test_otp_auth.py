@@ -20,18 +20,34 @@ if not BASE:
 API = f"{BASE}/api"
 TIMEOUT = 30
 
-ADMIN_EMAIL = "sachin.shukla2196@gmail.com"
+ADMIN_EMAIL = os.environ["TEST_ADMIN_EMAIL"]
 ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Admin@12345")
-TEST_NUMBER = "9999999999"
-TEST_OTP = "123456"
+TEST_NUMBER = "9999999999"  # the admin seed mobile: admins never sign in by login-OTP
+TEST_OTP = "123456"  # a fixed code that must never be accepted
+LOGIN_OTP_GENERIC = {"message": "If this mobile number is registered, an OTP has been sent to it."}
+LOGIN_OTP_INVALID = "The OTP is invalid or has expired. Please request a new one."
 
 _created_emails = []
 _created_mobiles = []
 
 
+SPONSOR = os.getenv("TEST_SPONSOR_ID", "MST000001")
+
+
 def _mongo():
-    cli = MongoClient(be.get("MONGO_URL"), serverSelectionTimeoutMS=5000)
-    return cli, cli[be.get("DB_NAME")]
+    cli = MongoClient(os.environ.get("MONGO_URL") or be.get("MONGO_URL"), serverSelectionTimeoutMS=5000)
+    return cli, cli[os.environ.get("DB_NAME") or be.get("DB_NAME")]
+
+
+def _last_sms_otp():
+    """The code the TEST SMS adapter recorded for the most recent OTP. The API never returns it."""
+    cli, db = _mongo()
+    try:
+        row = db.test_sms_outbox.find_one({}, sort=[("created_at", -1)])
+    finally:
+        cli.close()
+    assert row, "no test SMS recorded (backend needs SMS_TEST_ADAPTER=true on a *_test database)"
+    return row["code"]
 
 
 def rnd_mobile():
@@ -41,18 +57,18 @@ def rnd_mobile():
 
 
 def rnd_email():
-    e = f"test_otp_{secrets.randbelow(900000) + 100000}@qa-anjali.example.com"
+    e = f"test_otp_{secrets.randbelow(900000) + 100000}@qa-homegenies.example.com"
     _created_emails.append(e)
     return e
 
 
-def register_user(sponsor_id="", password=os.getenv("TEST_USER_PASSWORD", "Test@1234")):
+def register_user(sponsor_id=os.getenv("TEST_SPONSOR_ID", "MST000001"), password=os.getenv("TEST_USER_PASSWORD", "Test@1234")):
     """Register a throwaway RED user; returns dict with creds + token."""
     email, mobile = rnd_email(), rnd_mobile()
-    r = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile}, timeout=TIMEOUT)
+    r = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile, "sponsor_id": SPONSOR}, timeout=TIMEOUT)
     assert r.status_code == 200, f"send-otp failed: {r.status_code} {r.text[:300]}"
-    otp = r.json().get("dev_otp")
-    assert otp, "dev_otp not returned in beta"
+    assert "dev_otp" not in r.json()
+    otp = _last_sms_otp()
     r = requests.post(f"{API}/auth/register", json={
         "full_name": "TEST QA User", "email": email, "mobile": mobile,
         "password": password, "confirm_password": password, "otp": otp,
@@ -78,13 +94,13 @@ def cleanup():
 
 # ---------------- Registration OTP ----------------
 class TestRegistrationOtp:
-    def test_send_otp_returns_dev_otp_for_normal_number(self):
+    def test_send_otp_delivers_by_sms_and_never_returns_the_code(self):
         r = requests.post(f"{API}/auth/send-otp",
-                          json={"email": rnd_email(), "mobile": rnd_mobile()}, timeout=TIMEOUT)
+                          json={"email": rnd_email(), "mobile": rnd_mobile(), "sponsor_id": SPONSOR}, timeout=TIMEOUT)
         assert r.status_code == 200, r.text[:300]
-        d = r.json()
-        assert d.get("test_number") is False
-        assert isinstance(d.get("dev_otp"), str) and len(d["dev_otp"]) == 6 and d["dev_otp"].isdigit()
+        assert r.json() == {"message": "OTP sent to your mobile."}
+        code = _last_sms_otp()
+        assert len(code) == 6 and code.isdigit()
 
     def test_send_otp_duplicate_email_rejected(self):
         r = requests.post(f"{API}/auth/send-otp",
@@ -108,7 +124,7 @@ class TestRegistrationOtp:
         b = register_user()
         for u in (a["user"], b["user"]):
             assert u["status"] == "red"
-            assert u["distributor_id"].startswith("ANJ") and len(u["distributor_id"]) == 9
+            assert u["distributor_id"].startswith("HG") and len(u["distributor_id"]) == 8  # HG + 6 digits
             assert "password_hash" not in u and "_id" not in u
         assert a["user"]["distributor_id"] != b["user"]["distributor_id"]
         # /me persistence check
@@ -119,9 +135,9 @@ class TestRegistrationOtp:
 
     def test_register_wrong_otp_rejected(self):
         email, mobile = rnd_email(), rnd_mobile()
-        r = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile}, timeout=TIMEOUT)
+        r = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile, "sponsor_id": SPONSOR}, timeout=TIMEOUT)
         assert r.status_code == 200
-        good = r.json()["dev_otp"]
+        good = _last_sms_otp()
         bad = "000000" if good != "000000" else "111111"
         r = requests.post(f"{API}/auth/register", json={
             "full_name": "TEST Bad OTP", "email": email, "mobile": mobile,
@@ -157,37 +173,31 @@ class TestApprovedTestNumber:
         cli.close()
         yield
 
-    def test_login_otp_send_hides_dev_otp(self):
+    # Retired by design: the static "approved test number" OTP was removed. Admin accounts never sign in by
+    # login-OTP, and no fixed code is accepted for any number.
+    def test_login_otp_send_for_admin_number_gives_the_generic_answer_and_no_code(self):
         r = requests.post(f"{API}/auth/login-otp/send", json={"mobile": TEST_NUMBER}, timeout=TIMEOUT)
         assert r.status_code == 200, r.text[:300]
-        d = r.json()
-        assert d.get("test_number") is True
-        assert d.get("dev_otp") is None
+        assert r.json() == LOGIN_OTP_GENERIC
+        assert "dev_otp" not in r.text
 
-    def test_login_otp_verify_static_otp_super_admin(self):
+    def test_static_otp_is_never_accepted_for_admin_number(self):
         r = requests.post(f"{API}/auth/login-otp/verify",
                           json={"mobile": TEST_NUMBER, "otp": TEST_OTP}, timeout=TIMEOUT)
-        if r.status_code == 400 and "request an OTP" in r.text:
-            requests.post(f"{API}/auth/login-otp/send", json={"mobile": TEST_NUMBER}, timeout=TIMEOUT)
-            r = requests.post(f"{API}/auth/login-otp/verify",
-                              json={"mobile": TEST_NUMBER, "otp": TEST_OTP}, timeout=TIMEOUT)
-        assert r.status_code == 200, r.text[:300]
-        d = r.json()
-        assert d["user"]["role"] == "super_admin"
-        assert d["user"]["email"] == ADMIN_EMAIL
-        assert isinstance(d["token"], str) and len(d["token"]) > 20
-        # token usable
-        me = requests.get(f"{API}/auth/me", headers={"Authorization": f"Bearer {d['token']}"}, timeout=TIMEOUT)
-        assert me.status_code == 200 and me.json()["role"] == "super_admin"
+        assert r.status_code == 400, r.text[:300]
+        assert r.json()["detail"] == LOGIN_OTP_INVALID
+        assert "token" not in r.json()
 
-    def test_login_otp_unknown_mobile_404(self):
-        r = requests.post(f"{API}/auth/login-otp/send", json={"mobile": "6000000001"}, timeout=TIMEOUT)
-        assert r.status_code == 404, r.text[:300]
+    def test_login_otp_unknown_mobile_gets_the_same_send_answer_as_a_registered_one(self):
+        unknown = requests.post(f"{API}/auth/login-otp/send", json={"mobile": "6000000001"}, timeout=TIMEOUT)
+        assert unknown.status_code == 200, unknown.text[:300]
+        assert unknown.json() == LOGIN_OTP_GENERIC
 
-    def test_login_otp_verify_unknown_mobile_404(self):
-        r = requests.post(f"{API}/auth/login-otp/verify",
-                          json={"mobile": "6000000002", "otp": "123456"}, timeout=TIMEOUT)
-        assert r.status_code == 404, r.text[:300]
+    def test_login_otp_unknown_mobile_verify_gets_the_same_refusal_as_a_wrong_code(self):
+        unknown = requests.post(f"{API}/auth/login-otp/verify",
+                                json={"mobile": "6000000002", "otp": "123456"}, timeout=TIMEOUT)
+        assert unknown.status_code == 400, unknown.text[:300]
+        assert unknown.json()["detail"] == LOGIN_OTP_INVALID
 
 
 # ---------------- Login with OTP (normal user) ----------------
@@ -196,8 +206,8 @@ class TestLoginOtpNormalUser:
         u = register_user()
         r = requests.post(f"{API}/auth/login-otp/send", json={"mobile": u["mobile"]}, timeout=TIMEOUT)
         assert r.status_code == 200, r.text[:300]
-        otp = r.json()["dev_otp"]
-        assert otp and r.json()["test_number"] is False
+        otp = _last_sms_otp()
+        assert otp and r.json() == LOGIN_OTP_GENERIC
         r = requests.post(f"{API}/auth/login-otp/verify",
                           json={"mobile": u["mobile"], "otp": otp}, timeout=TIMEOUT)
         assert r.status_code == 200, r.text[:300]
@@ -210,50 +220,73 @@ class TestLoginOtpNormalUser:
         assert r.status_code == 400, r.text[:300]
 
 
-# ---------------- Forgot password ----------------
+# ---------------- Forgot password: admin-assisted by design (no OTP, no SMS) ----------------
+NEW_PW = "NewPass@9876"
+
+
+def _admin_headers():
+    r = requests.post(f"{API}/auth/admin-login", json={"username": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=TIMEOUT)
+    assert r.status_code == 200, r.text[:200]
+    return {"Authorization": f"Bearer {r.json()['token']}"}
+
+
+def _login(identifier, password):
+    return requests.post(f"{API}/auth/login", json={"email": identifier, "password": password}, timeout=TIMEOUT)
+
+
 class TestForgotPassword:
-    def test_forgot_reset_and_login_with_new_password(self):
-        u = register_user()
-        r = requests.post(f"{API}/auth/forgot/send", json={"mobile": u["mobile"]}, timeout=TIMEOUT)
-        assert r.status_code == 200, r.text[:300]
-        otp = r.json()["dev_otp"]
-        new_pw = "NewPass@9876"
-        r = requests.post(f"{API}/auth/forgot/reset",
-                          json={"mobile": u["mobile"], "otp": otp, "password": new_pw}, timeout=TIMEOUT)
-        assert r.status_code == 200, r.text[:300]
-        # new password works
-        r = requests.post(f"{API}/auth/login", json={"email": u["email"], "password": new_pw}, timeout=TIMEOUT)
-        assert r.status_code == 200, r.text[:300]
-        assert r.json()["user"]["email"] == u["email"]
-        # old password rejected
-        r = requests.post(f"{API}/auth/login", json={"email": u["email"], "password": u["password"]},
-                          timeout=TIMEOUT)
-        assert r.status_code == 401, r.text[:300]
+    """Approved recovery design: the member files a request, an admin sets a new password. The UI states there is no OTP."""
 
-    def test_forgot_send_unknown_mobile_404(self):
-        r = requests.post(f"{API}/auth/forgot/send", json={"mobile": "6000000003"}, timeout=TIMEOUT)
-        assert r.status_code == 404
-
-    def test_forgot_reset_wrong_otp_rejected(self):
+    def test_request_reaches_the_admin_queue_and_exposes_no_secret(self):
         u = register_user()
-        r = requests.post(f"{API}/auth/forgot/send", json={"mobile": u["mobile"]}, timeout=TIMEOUT)
-        good = r.json()["dev_otp"]
-        bad = "000000" if good != "000000" else "111111"
-        r = requests.post(f"{API}/auth/forgot/reset",
-                          json={"mobile": u["mobile"], "otp": bad, "password": "Whatever@123"}, timeout=TIMEOUT)
-        assert r.status_code == 400, r.text[:300]
-        # original password still valid
-        r = requests.post(f"{API}/auth/login", json={"email": u["email"], "password": u["password"]},
-                          timeout=TIMEOUT)
-        assert r.status_code == 200
+        r = requests.post(f"{API}/auth/forgot/send", json={"identifier": u["mobile"]}, timeout=TIMEOUT)
+        assert r.status_code == 200, r.text[:300]
+        assert set(r.json()) == {"message"}                  # no code, token or password field in the response
+        queue = requests.get(f"{API}/admin/password-reset-requests", headers=_admin_headers(), timeout=TIMEOUT).json()
+        assert any(x["user_id"] == u["user"]["id"] for x in queue)
 
-    def test_forgot_reset_short_password_rejected(self):
+    def test_unknown_and_known_identifiers_get_the_same_answer(self):
         u = register_user()
-        r = requests.post(f"{API}/auth/forgot/send", json={"mobile": u["mobile"]}, timeout=TIMEOUT)
-        otp = r.json()["dev_otp"]
-        r = requests.post(f"{API}/auth/forgot/reset",
-                          json={"mobile": u["mobile"], "otp": otp, "password": "123"}, timeout=TIMEOUT)
-        assert r.status_code == 422, r.text[:300]
+        known = requests.post(f"{API}/auth/forgot/send", json={"identifier": u["mobile"]}, timeout=TIMEOUT)
+        unknown = requests.post(f"{API}/auth/forgot/send", json={"identifier": "6000000003"}, timeout=TIMEOUT)
+        assert known.status_code == unknown.status_code == 200
+        assert known.json() == unknown.json()
+
+    def test_blank_identifier_is_refused(self):
+        r = requests.post(f"{API}/auth/forgot/send", json={"identifier": "  "}, timeout=TIMEOUT)
+        assert r.status_code == 400
+
+    def test_admin_reset_then_new_password_works_and_old_password_fails(self):
+        u = register_user()
+        requests.post(f"{API}/auth/forgot/send", json={"identifier": u["mobile"]}, timeout=TIMEOUT)
+        r = requests.post(f"{API}/admin/users/{u['user']['id']}/reset-password",
+                          json={"password": NEW_PW}, headers=_admin_headers(), timeout=TIMEOUT)
+        assert r.status_code == 200, r.text[:300]
+        assert _login(u["email"], NEW_PW).status_code == 200
+        assert _login(u["email"], u["password"]).status_code == 401
+        queue = requests.get(f"{API}/admin/password-reset-requests", headers=_admin_headers(), timeout=TIMEOUT).json()
+        assert not any(x["user_id"] == u["user"]["id"] for x in queue)     # the request was resolved
+
+    def test_reset_revokes_sessions_issued_before_it(self):
+        u = register_user()
+        h = {"Authorization": f"Bearer {u['token']}"}
+        assert requests.get(f"{API}/auth/me", headers=h, timeout=TIMEOUT).status_code == 200
+        requests.post(f"{API}/admin/users/{u['user']['id']}/reset-password",
+                      json={"password": NEW_PW}, headers=_admin_headers(), timeout=TIMEOUT)
+        assert requests.get(f"{API}/auth/me", headers=h, timeout=TIMEOUT).status_code == 401
+
+    def test_short_admin_password_is_refused(self):
+        u = register_user()
+        r = requests.post(f"{API}/admin/users/{u['user']['id']}/reset-password",
+                          json={"password": "123"}, headers=_admin_headers(), timeout=TIMEOUT)
+        assert r.status_code == 400
+
+    def test_members_cannot_reset_other_passwords(self):
+        u, other = register_user(), register_user()
+        r = requests.post(f"{API}/admin/users/{other['user']['id']}/reset-password",
+                          json={"password": NEW_PW}, headers={"Authorization": f"Bearer {u['token']}"}, timeout=TIMEOUT)
+        assert r.status_code in (401, 403), r.text[:200]
+        assert _login(other["email"], other["password"]).status_code == 200
 
 
 # ---------------- Change mobile ----------------
@@ -264,7 +297,7 @@ class TestChangeMobile:
         new_mobile = rnd_mobile()
         r = requests.put(f"{API}/auth/change-mobile/send", json={"mobile": new_mobile}, headers=h, timeout=TIMEOUT)
         assert r.status_code == 200, r.text[:300]
-        otp = r.json()["dev_otp"]
+        otp = _last_sms_otp()
         r = requests.put(f"{API}/auth/change-mobile/verify",
                          json={"mobile": new_mobile, "otp": otp}, headers=h, timeout=TIMEOUT)
         assert r.status_code == 200, r.text[:300]
@@ -274,7 +307,7 @@ class TestChangeMobile:
         assert me.json()["mobile"] == new_mobile
         # old mobile no longer resolves for login-otp
         r = requests.post(f"{API}/auth/login-otp/send", json={"mobile": u["mobile"]}, timeout=TIMEOUT)
-        assert r.status_code == 404, r.text[:300]
+        assert r.status_code == 200 and r.json() == LOGIN_OTP_GENERIC      # no longer reveals that the number is gone
 
     def test_change_mobile_duplicate_rejected(self):
         u = register_user()
@@ -298,8 +331,8 @@ class TestChangeMobile:
 class TestOtpSecurity:
     def test_otp_stored_hashed_not_plaintext(self):
         email, mobile = rnd_email(), rnd_mobile()
-        r = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile}, timeout=TIMEOUT)
-        otp = r.json()["dev_otp"]
+        r = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile, "sponsor_id": SPONSOR}, timeout=TIMEOUT)
+        otp = _last_sms_otp()
         cli, db = _mongo()
         rec = db.otp_sessions.find_one({"identifier": mobile, "purpose": "register"})
         cli.close()
@@ -312,9 +345,9 @@ class TestOtpSecurity:
 
     def test_attempt_limit_locks_after_5(self):
         email, mobile = rnd_email(), rnd_mobile()
-        r = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile}, timeout=TIMEOUT)
+        r = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile, "sponsor_id": SPONSOR}, timeout=TIMEOUT)
         assert r.status_code == 200
-        good = r.json()["dev_otp"]
+        good = _last_sms_otp()
         bad = "000000" if good != "000000" else "111111"
         codes = []
         for _ in range(5):
@@ -333,29 +366,30 @@ class TestOtpSecurity:
 
     def test_resend_cooldown_429(self):
         email, mobile = rnd_email(), rnd_mobile()
-        r1 = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile}, timeout=TIMEOUT)
+        r1 = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile, "sponsor_id": SPONSOR}, timeout=TIMEOUT)
         assert r1.status_code == 200
-        r2 = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile}, timeout=TIMEOUT)
+        r2 = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile, "sponsor_id": SPONSOR}, timeout=TIMEOUT)
         assert r2.status_code == 429, f"{r2.status_code} {r2.text[:300]}"
 
     @pytest.mark.slow
     def test_resend_allowed_after_cooldown(self):
         email, mobile = rnd_email(), rnd_mobile()
-        r1 = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile}, timeout=TIMEOUT)
+        r1 = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile, "sponsor_id": SPONSOR}, timeout=TIMEOUT)
         assert r1.status_code == 200
-        time.sleep(32)
-        r2 = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile}, timeout=TIMEOUT)
+        first_code = _last_sms_otp()
+        time.sleep(int(os.getenv("OTP_RESEND_COOLDOWN", "60")) + 2)  # the configured cooldown, not a fixed guess
+        r2 = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile, "sponsor_id": SPONSOR}, timeout=TIMEOUT)
         assert r2.status_code == 200, f"{r2.status_code} {r2.text[:300]}"
-        assert r2.json()["dev_otp"] != r1.json()["dev_otp"] or True
+        second_code = _last_sms_otp()
         # old OTP invalidated, new one works
         r = requests.post(f"{API}/auth/register", json={
             "full_name": "TEST Cooldown", "email": email, "mobile": mobile,
-            "password": "Test@1234", "confirm_password": "Test@1234", "otp": r1.json()["dev_otp"],
+            "password": "Test@1234", "confirm_password": "Test@1234", "otp": first_code,
             "accept_terms": True}, timeout=TIMEOUT)
         assert r.status_code == 400, f"old OTP should be invalid: {r.status_code}"
         r = requests.post(f"{API}/auth/register", json={
             "full_name": "TEST Cooldown", "email": email, "mobile": mobile,
-            "password": "Test@1234", "confirm_password": "Test@1234", "otp": r2.json()["dev_otp"],
+            "password": "Test@1234", "confirm_password": "Test@1234", "otp": second_code,
             "accept_terms": True}, timeout=TIMEOUT)
         assert r.status_code == 200, r.text[:300]
 
@@ -373,7 +407,7 @@ class TestCredentialRegression:
 
     def test_demo_distributor_login(self):
         r = requests.post(f"{API}/auth/login",
-                          json={"email": "demo.distributor@anjaliherballife.in", "password": "Demo@1234"},
+                          json={"email": "demo.distributor@homegenies.example.com", "password": "Demo@1234"},
                           timeout=TIMEOUT)
         assert r.status_code == 200, r.text[:300]
         u = r.json()["user"]

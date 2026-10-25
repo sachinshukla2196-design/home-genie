@@ -16,7 +16,8 @@ sys.path.insert(0, '/app/backend')
 async def main():
     from core import db, new_id, now_iso, hash_password, get_or_create_wallet
     from commission import distribute_sale_commissions, release_due_points
-    assert os.environ['DB_NAME'] == 'homegenies', 'refusing to run against another database'
+    _db = os.environ.get('DB_NAME', '')
+    assert _db.endswith('_test') and _db != 'homegenies', 'set DB_NAME to a dedicated *_test database (never the production name)'
 
     tag = uuid.uuid4().hex[:6]
 

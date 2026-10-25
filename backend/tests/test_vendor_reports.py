@@ -16,6 +16,7 @@ os.environ.pop("ADMIN_EMAIL", None)
 
 from fastapi.testclient import TestClient  # noqa: E402
 import server  # noqa: E402
+import db_indexes  # noqa: E402
 from core import db, hash_password, create_token, now_iso, new_id  # noqa: E402
 
 ADDR = {"full_name": "Cust", "mobile": "9000011111", "line1": "1 Road", "city": "Pune", "state": "MH", "pincode": "411001"}
@@ -58,6 +59,7 @@ def c():
         async def seed():
             await server.client.drop_database(os.environ["DB_NAME"])
             await server._init_db()
+            await db_indexes.apply()      # the migration step: startup no longer creates indexes
 
             async def user(mobile, role, did, status="green"):
                 u = {"id": new_id(), "distributor_id": did, "full_name": did, "mobile": mobile, "email": None,
@@ -193,7 +195,7 @@ def test_earnings_and_settlements_are_the_ledger_posted_in_the_period(c):
     assert e["adjustments_paise"] == 0                                                   # the 40-day-old adjustment is outside 30d
     assert e["net_paise"] == 480000 and e["settled_paise"] == 100000
     assert r["settlements"]["by_status"] == {"paid": {"count": 1, "amount_paise": 100000}}   # 40-day-old request outside the window
-    assert r["commission"] == {"available": False}
+    assert r["commission"]["available"] is False and r["commission"]["paise"] == 0
 
 
 def test_advancement_growth_targets_and_repeat_customers(c):

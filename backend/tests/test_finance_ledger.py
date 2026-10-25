@@ -18,6 +18,7 @@ os.environ.pop("ADMIN_EMAIL", None)
 
 from fastapi.testclient import TestClient  # noqa: E402
 import server  # noqa: E402
+import db_indexes  # noqa: E402
 import shop_routes  # noqa: E402
 import ledger as L  # noqa: E402
 from money import to_paise  # noqa: E402
@@ -38,6 +39,7 @@ def c():
         async def seed():
             await server.client.drop_database(os.environ["DB_NAME"])
             await server._init_db()
+            await db_indexes.apply()      # the migration step: startup no longer creates indexes
 
             async def user(mobile, role, did, status="green"):
                 u = {"id": new_id(), "distributor_id": did, "full_name": did, "mobile": mobile, "email": None,

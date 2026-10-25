@@ -43,6 +43,10 @@ import Withdrawals from "@/pages/Withdrawals";
 import AdminWithdrawals from "@/pages/admin/AdminWithdrawals";
 import AdminVendors from "@/pages/admin/AdminVendors";
 import AdminVendorCreate from "@/pages/admin/AdminVendorCreate";
+import AdminAgreements from "@/pages/admin/AdminAgreements";
+import AdminBenefits from "@/pages/admin/AdminBenefits";
+import VendorTerms from "@/pages/vendor/VendorTerms";
+import VendorOwnerInvite from "@/pages/vendor/VendorOwnerInvite";
 import VendorDashboard from "@/pages/vendor/VendorDashboard";
 import VendorProducts from "@/pages/vendor/VendorProducts";
 import VendorOrders from "@/pages/vendor/VendorOrders";
@@ -54,6 +58,8 @@ import VendorAnalytics from "@/pages/vendor/VendorAnalytics";
 import VendorReports from "@/pages/vendor/VendorReports";
 import VendorEarnings from "@/pages/vendor/VendorEarnings";
 import VendorShipping from "@/pages/vendor/VendorShipping";
+import VendorStaff from "@/pages/vendor/VendorStaff";
+import VendorStaffInvite from "@/pages/vendor/VendorStaffInvite";
 import { PendingApproval } from "@/components/vendor/PendingApproval";
 import VendorAdvancement from "@/pages/vendor/VendorAdvancement";
 import VendorFinance from "@/pages/vendor/VendorFinance";
@@ -140,11 +146,15 @@ function AppRoutes() {
                   <Route path="withdrawals" element={<AdminWithdrawals />} />
                   <Route path="vendors" element={<AdminVendors />} />
                   <Route path="vendors/new" element={<AdminVendorCreate />} />
+                  <Route path="agreements" element={<AdminAgreements />} />
+                  <Route path="benefits" element={<AdminBenefits />} />
                   <Route path="reports" element={<AdminReports />} />
                   <Route path="settings" element={<AdminSettings />} />
                   <Route path="audit" element={<AdminAuditLogs />} />
                 </Route>
 
+                <Route path="/vendor/invite" element={<VendorStaffInvite />} />
+                <Route path="/vendor/owner-invite" element={<VendorOwnerInvite />} />
                 <Route path="/vendor" element={<ProtectedRoute vendor><VendorLayout /></ProtectedRoute>}>
                   <Route index element={<Navigate to="dashboard" replace />} />
                   <Route path="dashboard" element={<VendorHome />} />
@@ -158,10 +168,12 @@ function AppRoutes() {
                   <Route path="advancement" element={<VendorGate><VendorAdvancement /></VendorGate>} />
                   <Route path="finance" element={<VendorGate><VendorFinance /></VendorGate>} />
                   <Route path="earnings" element={<VendorGate><VendorEarnings /></VendorGate>} />
+                  <Route path="terms" element={<VendorGate><VendorTerms /></VendorGate>} />
                   <Route path="shipping" element={<VendorGate><VendorShipping /></VendorGate>} />
                   <Route path="cod" element={<VendorGate><VendorCod /></VendorGate>} />
                   <Route path="notifications" element={<VendorGate><VendorNotifications /></VendorGate>} />
                   <Route path="support" element={<VendorGate><VendorSupport /></VendorGate>} />
+                  <Route path="staff" element={<VendorStaff />} />
                   <Route path="security" element={<VendorSecurity />} />
                   <Route path="profile" element={<VendorProfile />} />
                 </Route>

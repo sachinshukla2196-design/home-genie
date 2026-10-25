@@ -11,6 +11,7 @@ import { captureSellerRef } from "@/lib/sellerRef";
 import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
 import { API } from "@/lib/api";
+import { homeRouteFor } from "@/lib/homeRoute";
 import { LandingHero, HowItWorks } from "@/components/LandingHero";
 import { PillarsSection, WhySection, DashboardPreviewSection, TrustSection, ClosingCTA, SiteFooter } from "@/components/LandingSections";
 
@@ -52,7 +53,7 @@ export default function Landing() {
   const { t, lang } = useI18n();
   const { user } = useAuth();
   const navigate = useNavigate();
-  const homeLink = user ? "/app/dashboard" : "/register";
+  const homeLink = user ? homeRouteFor(user) : "/register";
   const [products, setProducts] = useState([]);
   const [scrolled, setScrolled] = useState(false);
 
@@ -85,6 +86,7 @@ export default function Landing() {
           </nav>
           <div className="flex items-center gap-1.5 sm:gap-3">
             <LanguageSwitcher />
+            {(user?.role === "vendor" || user?.role === "vendor_staff") && <Link to="/vendor" className="hg-btn inline-flex h-10 items-center whitespace-nowrap rounded-full px-4 text-xs font-semibold sm:px-5 sm:text-sm" data-testid="header-vendor-panel">{t("vp.portal")}</Link>}
             <Link to="/login" className="hg-icon-btn !h-10 !w-10 sm:!w-auto sm:px-4 text-sm font-medium" aria-label={t("cta.login")} data-testid="header-login">
               <LogIn size={18} className="sm:hidden" /><span className="hidden sm:inline">{t("cta.login")}</span>
             </Link>

@@ -17,7 +17,8 @@ async def main():
     from core import db, new_id, now_iso, hash_password, get_or_create_wallet, get_settings
     from shop_routes import cod_collected
     from badges import monthly_badge
-    assert os.environ['DB_NAME'] == 'homegenies', 'refusing to run against another database'
+    _db = os.environ.get('DB_NAME', '')
+    assert _db.endswith('_test') and _db != 'homegenies', 'set DB_NAME to a dedicated *_test database (never the production name)'
 
     tag = uuid.uuid4().hex[:6]
 

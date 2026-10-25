@@ -5,7 +5,6 @@ Iteration 5 tests:
 - Core flows regression (admin login, wallet, team, referral, products, register OTP)
 """
 import os
-import time
 import uuid
 import requests
 import pytest
@@ -17,9 +16,9 @@ if not BASE_URL:
     raise RuntimeError("REACT_APP_BACKEND_URL missing")
 API = f"{BASE_URL}/api"
 
-ADMIN_EMAIL = "sachin.shukla2196@gmail.com"
+ADMIN_EMAIL = os.environ["TEST_ADMIN_EMAIL"]
 ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Admin@12345")
-DEMO_EMAIL = "demo.distributor@anjaliherballife.in"
+DEMO_EMAIL = "demo.distributor@homegenies.example.com"
 DEMO_PASSWORD = os.environ.get("TEST_DEMO_PASSWORD", "Demo@1234")
 
 
@@ -99,20 +98,8 @@ class TestCoreFlows:
         assert data.get("pending_balance") == 500
         assert data.get("total_earned") == 1000
 
-    def test_team(self, demo_token):
-        r = requests.get(f"{API}/team", headers=_auth(demo_token), timeout=15)
-        assert r.status_code == 200, r.text
-        data = r.json()
-        # accept either flat list or root+members
-        members = data.get("members") if isinstance(data, dict) else None
-        root = data.get("root") if isinstance(data, dict) else None
-        assert root is not None or members is not None, data
-        if members is not None:
-            assert len(members) >= 3
-            for m in members[:3]:
-                assert "downline_count" in m
-                # photo field may be photo/photo_url
-                assert any(k in m for k in ("photo", "photo_url", "avatar"))
+    # test_team was retired: GET /api/team belonged to the club-income / team-turnover feature removed in commit 96f8719.
+    # No frontend or backend code calls it, so there is no active contract to test.
 
     def test_referral(self, demo_token):
         r = requests.get(f"{API}/referral", headers=_auth(demo_token), timeout=15)
@@ -132,4 +119,6 @@ class TestCoreFlows:
         r = requests.post(f"{API}/auth/send-otp", json={"email": email, "mobile": mobile}, timeout=15)
         assert r.status_code == 200, r.text
         data = r.json()
-        assert "dev_otp" in data or "otp" in data or data.get("success") is True
+        # approved design: the OTP is delivered by SMS only and is never returned to the client
+        assert "dev_otp" not in data and "otp" not in data
+        assert data.get("message") == "OTP sent to your mobile."

@@ -1,11 +1,14 @@
-"""Iteration 11 retest: FIX 1 - multiple EMAIL-LESS registration approvals must all succeed (no 500).
+"""Registration without admin approval: several EMAIL-LESS registrations all succeed and log in immediately, an
+e-mail registration works, and a duplicate e-mail is refused. Writes the created test credentials to
+TEST_REPORTS_DIR (or the temp dir) for the browser login test.
 
-Also emits credentials of an email-less approved distributor to /app/test_reports/it11_creds.json
-for the Playwright login test (FIX 2).
+Live suite: needs REACT_APP_BACKEND_URL (or frontend env) and TEST_ADMIN_USER / TEST_ADMIN_PASSWORD.
+Run it on its own: `pytest tests/test_it11_emailless.py -n 0`.
 """
 import json
 import os
 import secrets
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -19,10 +22,18 @@ if not base_url:
 BASE_URL = base_url.rstrip("/")
 API = f"{BASE_URL}/api"
 PW = "Test@1234"
+CREDS_PATH = Path(os.environ.get("TEST_REPORTS_DIR") or tempfile.gettempdir()) / "it11_creds.json"
 
 
 def rand_mobile():
     return "9" + "".join(secrets.choice("0123456789") for _ in range(9))
+
+
+def register(client, mobile, full_name, email=""):
+    return client.post(f"{API}/auth/register-request",
+                       json={"full_name": full_name, "mobile": mobile, "password": PW, "confirm_password": PW,
+                             "state": "Rajasthan", "city": "Jaipur", "pincode": "302001", "address": "1 Test Road",
+                             "email": email})
 
 
 @pytest.fixture(scope="module")
@@ -35,42 +46,33 @@ def client():
 @pytest.fixture(scope="module")
 def admin(client):
     r = client.post(f"{API}/auth/admin-login",
-                    json={"username": "admin", "password": "admin123", "passcode": "admin123"})
+                    json={"username": os.environ["TEST_ADMIN_USER"], "password": os.environ["TEST_ADMIN_PASSWORD"],
+                          "passcode": os.environ.get("TEST_ADMIN_PASSCODE", "")})
     if r.status_code != 200:
         pytest.fail(f"admin-login failed {r.status_code}: {r.text[:300]}")
-    tok = r.json().get("token")
-    assert tok
     s = requests.Session()
-    s.headers.update({"Content-Type": "application/json", "Authorization": f"Bearer {tok}"})
+    s.headers.update({"Content-Type": "application/json", "Authorization": f"Bearer {r.json()['token']}"})
     return s
 
 
-class TestMultipleEmaillessApprovals:
-    """FIX 1"""
-
-    def test_three_emailless_approvals(self, client, admin):
+class TestEmaillessRegistrations:
+    def test_three_emailless_registrations_activate_and_log_in(self, client, admin):
         created = []
         for i in range(3):
             mob = rand_mobile()
-            r = client.post(f"{API}/auth/register-request",
-                            json={"full_name": f"TEST_NoEmail{i}", "mobile": mob,
-                                  "password": PW, "confirm_password": PW, "email": ""})
+            r = register(client, mob, f"TEST_NoEmail{i}")
             assert r.status_code == 200, r.text
             rows = admin.get(f"{API}/admin/registration-requests").json()
             req = [x for x in rows if x["mobile"] == mob]
-            assert len(req) == 1
-            assert req[0]["email"] is None
-            ap = admin.post(f"{API}/admin/registration-requests/{req[0]['id']}/approve")
-            assert ap.status_code == 200, f"#{i} approve -> {ap.status_code}: {ap.text[:300]}"
-            body = ap.json()
-            did = body.get("distributor_id")
-            assert did and did.startswith("ANJ") and len(did) == 9, body
-            created.append({"mobile": mob, "did": did})
+            assert len(req) == 1 and req[0]["email"] is None
+            lr = client.post(f"{API}/auth/login", json={"email": mob, "password": PW})
+            assert lr.status_code == 200, f"#{i} login -> {lr.status_code}: {lr.text[:200]}"
+            created.append({"mobile": mob, "did": lr.json()["user"]["distributor_id"]})
 
         dids = [c["did"] for c in created]
         assert len(set(dids)) == 3, f"duplicate distributor ids: {dids}"
+        assert all(d.startswith("HG") and len(d) == 8 for d in dids), dids
 
-        # verify each user: RED rank, active, login by DID and by mobile
         users = admin.get(f"{API}/admin/users").json()
         if isinstance(users, dict):
             users = users.get("users", users.get("items", []))
@@ -82,51 +84,25 @@ class TestMultipleEmaillessApprovals:
             assert u.get("account_status") == "active", u.get("account_status")
             assert u.get("email") in (None, ""), u.get("email")
             assert "_id" not in u
+            assert client.post(f"{API}/auth/login", json={"email": c["did"], "password": PW}).status_code == 200
 
-            for ident in (c["did"], c["mobile"]):
-                lr = client.post(f"{API}/auth/login", json={"email": ident, "password": PW})
-                assert lr.status_code == 200, f"login {ident} -> {lr.status_code}: {lr.text[:200]}"
-                assert lr.json().get("token")
+        CREDS_PATH.write_text(json.dumps({"password": PW, "emailless": created}, indent=2))
 
-        out = Path("/app/test_reports/it11_creds.json")
-        out.write_text(json.dumps({"password": PW, "emailless": created}, indent=2))
-        print("EMAILLESS_CREDS", json.dumps(created))
-
-    def test_emailless_then_email_user_both_work(self, client, admin):
-        """Regression: email-based registration + approval + email login still works."""
+    def test_email_registration_logs_in_by_email(self, client, admin):
         mob = rand_mobile()
-        em = f"test_{mob}@example.test"
-        r = client.post(f"{API}/auth/register-request",
-                        json={"full_name": "TEST_WithEmail", "mobile": mob,
-                              "password": PW, "confirm_password": PW, "email": em})
-        assert r.status_code == 200, r.text
-        rows = admin.get(f"{API}/admin/registration-requests").json()
-        req = [x for x in rows if x["mobile"] == mob][0]
-        ap = admin.post(f"{API}/admin/registration-requests/{req['id']}/approve")
-        assert ap.status_code == 200, ap.text
+        em = f"test_{mob}@example.com"
+        assert register(client, mob, "TEST_WithEmail", em).status_code == 200
         lr = client.post(f"{API}/auth/login", json={"email": em, "password": PW})
         assert lr.status_code == 200, lr.text
         assert lr.json()["user"]["email"] == em
-        creds_path = Path("/app/test_reports/it11_creds.json")
-        data = json.loads(creds_path.read_text()) if creds_path.exists() else {"password": PW}
-        data["email_user"] = {"email": em, "mobile": mob, "did": ap.json()["distributor_id"]}
-        creds_path.write_text(json.dumps(data, indent=2))
-        print("EMAIL_CREDS", em)
+        data = json.loads(CREDS_PATH.read_text()) if CREDS_PATH.exists() else {"password": PW}
+        data["email_user"] = {"email": em, "mobile": mob, "did": lr.json()["user"]["distributor_id"]}
+        CREDS_PATH.write_text(json.dumps(data, indent=2))
 
-    def test_duplicate_email_still_blocked(self, client, admin):
-        """Partial unique index must still enforce uniqueness for real string emails."""
-        creds_path = Path("/app/test_reports/it11_creds.json")
-        data = json.loads(creds_path.read_text())
-        existing = data["email_user"]["email"]
+    def test_duplicate_email_is_refused_at_registration(self, client, admin):
+        """The e-mail is still unique: a second registration with the same address creates nothing."""
+        existing = json.loads(CREDS_PATH.read_text())["email_user"]["email"]
         mob = rand_mobile()
-        r = client.post(f"{API}/auth/register-request",
-                        json={"full_name": "TEST_DupEmail", "mobile": mob,
-                              "password": PW, "confirm_password": PW, "email": existing})
-        if r.status_code == 200:
-            rows = admin.get(f"{API}/admin/registration-requests").json()
-            req = [x for x in rows if x["mobile"] == mob][0]
-            ap = admin.post(f"{API}/admin/registration-requests/{req['id']}/approve")
-            assert ap.status_code in (400, 409), (
-                f"duplicate email approve returned {ap.status_code} (expected 400/409): {ap.text[:200]}")
-        else:
-            assert r.status_code in (400, 409), r.status_code
+        r = register(client, mob, "TEST_DupEmail", existing)
+        assert r.status_code == 400, r.text
+        assert client.post(f"{API}/auth/login", json={"email": mob, "password": PW}).status_code == 401

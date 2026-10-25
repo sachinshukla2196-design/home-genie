@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel, Field, field_validator
 
 import re
+import secrets
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import timedelta
 from money import paise_of
@@ -19,6 +20,8 @@ from pagination import clamp_page, page_meta, text_filter, date_range
 from stock import release_stock, run_intents, intent
 from validators import safe_image_refs
 from vendor_history import record_vendor_status, missing_required_documents
+from vendor_lifecycle import move, ADMIN_ACTIONS, REASON_REQUIRED, SELLING, CONTACT_ONLY
+from vendor_staff import authorize_staff, VENDOR_STAFF_ROLE
 import catalogue as cat
 from fastapi.responses import Response
 from core import (db, now_iso, new_id, get_current_user, require_admin, create_notification, log_audit,
@@ -60,11 +63,14 @@ def _public_vendor(v: dict) -> dict:
     return v
 
 
-async def require_vendor_user(user: dict = Depends(get_current_user)) -> dict:
-    if user.get("role") != "vendor":
+async def require_vendor_user(request: Request, user: dict = Depends(get_current_user)) -> dict:
+    """Every vendor route passes here. The owner account passes; a staff account passes only through its membership rules."""
+    if user.get("role") not in ("vendor", VENDOR_STAFF_ROLE):
         raise HTTPException(status_code=403, detail="Vendor access only.")
     if user.get("blocked"):
         raise HTTPException(status_code=403, detail="Your account has been blocked.")
+    if user.get("role") == VENDOR_STAFF_ROLE:
+        return await authorize_staff(user, request.method, request.url.path)
     return user
 
 
@@ -73,8 +79,8 @@ async def _vendor_of(user: dict) -> Optional[dict]:
 
 
 async def require_approved_vendor(user: dict = Depends(require_vendor_user)) -> dict:
-    v = await _vendor_of(user)
-    if not v or v.get("status") != "approved":
+    v = user.get("_vendor") or await _vendor_of(user)
+    if not v or v.get("status") not in SELLING:
         raise HTTPException(status_code=403, detail="Your vendor account is not approved yet.")
     return {**user, "_vendor": v}
 
@@ -103,17 +109,20 @@ class VendorProfileIn(BaseModel):
 
 @router.get("/vendor/me")
 async def vendor_me(user: dict = Depends(require_vendor_user)):
-    v = await _vendor_of(user)
-    return {"vendor": _public_vendor(v) if v else None, "pillars": PILLARS}
+    v = user.get("_vendor") or await _vendor_of(user)
+    member = user.get("_member")
+    access = {"role": "owner", "permissions": None} if not member else {"role": member["role"], "permissions": member.get("permissions", [])}
+    return {"vendor": _public_vendor(v) if v else None, "pillars": PILLARS, "access": access}
 
 
 @router.put("/vendor/me")
 async def vendor_save(body: VendorProfileIn, request: Request, user: dict = Depends(require_vendor_user)):
+    """Save or submit the business profile. The status is never read from the request: it only changes through vendor_lifecycle.move."""
     v = await _vendor_of(user)
     if v and v.get("status") in ("submitted", "under_review"):
         raise HTTPException(status_code=409, detail="Your application is with the HOME GENIES team. You can edit it again if changes are requested.")
-    if v and v.get("status") in ("approved", "suspended"):
-        # Approved/suspended vendors may update contact details only; legal/bank changes go through admin.
+    if v and v.get("status") in CONTACT_ONLY:
+        # Approved/active/suspended vendors may update contact details only; legal/bank changes go through admin.
         allowed = {k: getattr(body, k) for k in ("contact_person", "phone", "support_email", "address", "city",
                                                   "state", "pincode", "return_address")}
         await db.vendors.update_one({"user_id": user["id"]}, {"$set": {**allowed, "updated_at": now_iso()}})
@@ -128,7 +137,6 @@ async def vendor_save(body: VendorProfileIn, request: Request, user: dict = Depe
     for k in ("bank_account", "pan"):
         if not data[k].strip() and v and v.get(k):
             data[k] = v[k]
-    status = "draft"
     if body.submit:
         if not body.agree_terms:
             raise HTTPException(status_code=400, detail="Please accept the vendor terms to submit.")
@@ -140,24 +148,31 @@ async def vendor_save(body: VendorProfileIn, request: Request, user: dict = Depe
             missing = await missing_required_documents(v["id"])
             if missing:
                 raise HTTPException(status_code=400, detail="Please upload the required document(s) first: " + ", ".join(missing) + ".")
-        status = "submitted"
-    if v and v.get("status") == "rejected" and not body.submit:
-        status = "rejected"
     now = now_iso()
-    doc = {**data, "status": status, "updated_at": now}
+    doc = {**data, "updated_at": now}                  # profile fields only
+    stamps = {}                                        # written only by the submit step
     if body.submit:
         import governance_routes as _g
-        doc.update({"submitted_at": now, "terms_accepted_at": now, "terms_version": _g.TERMS_VERSION, "rejection_reason": ""})
-    if v:
-        await db.vendors.update_one({"user_id": user["id"]}, {"$set": doc})
+        stamps = {"submitted_at": now, "terms_accepted_at": now, "terms_version": _g.TERMS_VERSION, "rejection_reason": ""}
+
+    if v is None:
+        # A new vendor record gets a system code from the vendor sequence, never from the user's own ID.
+        v = {"id": new_id(), "user_id": user["id"], "vendor_code": await next_sequence("vendor", "VD", 6),
+             "status": "draft", "categories": [], "created_at": now, **doc}
+        await db.vendors.insert_one(dict(v))
+        if body.submit:
+            await move(v, "submitted", "vendor", user["id"], "Submitted for review", extra=stamps)
+    elif v["status"] == "invited":                     # the first profile save turns an invitation into a draft
+        await move(v, "draft", "vendor", user["id"], "Profile started", extra=doc)
+        v = {**v, "status": "draft"}
+        if body.submit:
+            await move(v, "submitted", "vendor", user["id"], "Submitted for review", extra=stamps)
+    elif body.submit:
+        reason = "Resubmitted after changes" if v["status"] in ("rejected", "changes_requested") else "Submitted for review"
+        await move(v, "submitted", "vendor", user["id"], reason, extra={**doc, **stamps})
     else:
-        await db.vendors.insert_one({"id": new_id(), "user_id": user["id"], "vendor_code": user.get("distributor_id"),
-                                     "created_at": now, **doc})
-    if body.submit:
-        await record_vendor_status((v or {}).get("id", user["id"]), (v or {}).get("status", "draft"), "submitted", user["id"],
-                                   "Resubmitted after changes" if v and v.get("status") == "rejected" else "Submitted for review")
-    await log_audit(user, "vendor_submitted" if body.submit else "vendor_draft_saved", "vendor",
-                    (v or {}).get("id", user["id"]), request=request)
+        await db.vendors.update_one({"user_id": user["id"]}, {"$set": doc})
+    await log_audit(user, "vendor_submitted" if body.submit else "vendor_draft_saved", "vendor", v["id"], request=request)
     return {"vendor": _public_vendor(await _vendor_of(user))}
 
 
@@ -786,21 +801,18 @@ class VendorAccountIn(BaseModel):
     full_name: str = Field(min_length=2, max_length=80)
     mobile: str
     email: str = ""
-    password: str = Field(min_length=8, max_length=128)
 
 
 @router.post("/admin/vendors/create")
 async def admin_vendor_create(body: VendorAccountIn, request: Request, admin: dict = Depends(require_admin)):
-    """Only an admin creates vendor accounts. The vendor signs in at /login with the details the admin set, then completes
-    their business profile. Nothing on the public site can create a vendor account."""
+    """Only an admin creates vendor accounts. The owner is invited and sets their own password through a single-use link
+    (vendor_invitations.py); until then the account has an unguessable password and cannot sign in."""
     mobile = body.mobile.strip()
     email = (body.email or "").strip().lower()
     if not re.fullmatch(r"[6-9]\d{9}", mobile):
         raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number.")
     if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
         raise HTTPException(status_code=400, detail="Enter a valid email address, or leave it blank.")
-    if not (re.search(r"[A-Za-z]", body.password) and re.search(r"\d", body.password)):
-        raise HTTPException(status_code=400, detail="Use at least 8 characters with letters and numbers.")
     if await db.users.find_one({"mobile": mobile}) or (email and await db.users.find_one({"email": email})):
         raise HTTPException(status_code=400, detail="An account with this mobile or email already exists.")
 
@@ -809,8 +821,8 @@ async def admin_vendor_create(body: VendorAccountIn, request: Request, admin: di
         vid = await next_sequence("vendor", "VD", 6)
     now = now_iso()
     user = {"id": new_id(), "distributor_id": vid, "full_name": body.full_name.strip(), "mobile": mobile,
-            "email": email or None, "password_hash": hash_password(body.password), "role": "vendor", "status": "green",
-            "account_status": "active", "mobile_verified": False, "email_verified": False, "kyc_status": "not_started",
+            "email": email or None, "password_hash": hash_password(secrets.token_urlsafe(32)), "role": "vendor", "status": "green",
+            "account_status": "invited", "mobile_verified": False, "email_verified": False, "kyc_status": "not_started",
             "sponsor_id": None, "sponsor_user_id": None, "created_at": now, "updated_at": now}
     try:
         await db.users.insert_one(dict(user))
@@ -824,7 +836,9 @@ async def admin_vendor_create(body: VendorAccountIn, request: Request, admin: di
     await create_notification(user["id"], "vendor", "Vendor account created",
                               "HomeGenie created your vendor account. Sign in and complete your business profile.")
     await log_audit(admin, "vendor_account_created", "vendor", vrec["id"], new_value={"vendor_code": vid, "user_id": user["id"]}, request=request)
-    return {"ok": True, "vendor_id": vrec["id"], "vendor_code": vid, "status": "draft", "user_id": user["id"]}
+    from vendor_invitations import issue
+    invitation = await issue(user, vrec, admin, request)
+    return {"ok": True, "vendor_id": vrec["id"], "vendor_code": vid, "status": "draft", "user_id": user["id"], "invitation": invitation}
 
 
 @router.get("/admin/vendors")
@@ -842,7 +856,7 @@ async def admin_vendors(admin: dict = Depends(require_admin)):
 
 
 class VendorDecision(BaseModel):
-    action: str          # start_review / approve / reject / suspend / reinstate
+    action: str          # start_review / request_documents / request_changes / approve / reject / suspend / reinstate / activate
     reason: str = ""     # shown to the vendor
     internal_note: str = Field(default="", max_length=500)   # admin-only, never returned to vendors
 
@@ -852,27 +866,22 @@ async def admin_vendor_decision(vendor_id: str, body: VendorDecision, request: R
     v = await db.vendors.find_one({"id": vendor_id}, {"_id": 0})
     if not v:
         raise HTTPException(status_code=404, detail="Vendor not found.")
-    allowed = {"start_review": ({"submitted"}, "under_review"), "approve": ({"submitted", "under_review", "rejected"}, "approved"),
-               "reject": ({"submitted", "under_review"}, "rejected"),
-               "suspend": ({"approved"}, "suspended"), "reinstate": ({"suspended"}, "approved")}
-    if body.action not in allowed:
+    target = ADMIN_ACTIONS.get(body.action)
+    if not target:
         raise HTTPException(status_code=400, detail="Unknown action.")
-    frm, to = allowed[body.action]
-    if v["status"] not in frm:
-        raise HTTPException(status_code=400, detail=f"Cannot {body.action} a vendor that is '{v['status']}'.")
-    if body.action in ("reject", "suspend") and len(body.reason.strip()) < 5:
+    reason = body.reason.strip()
+    if body.action in REASON_REQUIRED and len(reason) < 5:
         raise HTTPException(status_code=400, detail="A reason is required.")
-    await db.vendors.update_one({"id": vendor_id, "status": v["status"]},
-                                {"$set": {"status": to, "rejection_reason": body.reason.strip() if body.action == "reject" else v.get("rejection_reason", ""),
-                                          "status_reason": body.reason.strip(), "reviewed_by": admin["id"],
-                                          "reviewed_at": now_iso(), "updated_at": now_iso()}})
-    if to == "suspended":   # hide all listings; history stays intact
+    extra = {"reviewed_by": admin["id"], "reviewed_at": now_iso()}
+    if target == "rejected":
+        extra["rejection_reason"] = reason
+    await move(v, target, "admin", admin["id"], reason, body.internal_note.strip(), extra=extra)
+    if target == "suspended":   # hide all listings; history stays intact
         await db.products.update_many({"vendor_id": vendor_id}, {"$set": {"is_active": False}})
-    await record_vendor_status(vendor_id, v["status"], to, admin["id"], body.reason.strip(), body.internal_note.strip())
     await create_notification(v["user_id"], "vendor", "Vendor account update",
-                              f"Your vendor account is now {to}." + (f" Reason: {body.reason.strip()}" if body.reason.strip() else ""))
+                              f"Your vendor account is now {target}." + (f" Reason: {reason}" if reason else ""))
     await log_audit(admin, f"vendor_{body.action}", "vendor", vendor_id, old_value={"status": v["status"]},
-                    new_value={"status": to, "reason": body.reason}, request=request)
+                    new_value={"status": target, "reason": body.reason}, request=request)
     return _public_vendor(await db.vendors.find_one({"id": vendor_id}, {"_id": 0}))
 
 
@@ -898,7 +907,7 @@ async def admin_product_decision(product_id: str, body: ProductDecision, request
         raise HTTPException(status_code=400, detail="Only products awaiting review can be decided.")
     if body.action == "approve":
         v = await db.vendors.find_one({"id": p["vendor_id"]}, {"_id": 0, "status": 1, "user_id": 1})
-        sets = {"approval_status": "approved", "is_active": (v or {}).get("status") == "approved", "rejection_reason": ""}
+        sets = {"approval_status": "approved", "is_active": (v or {}).get("status") in SELLING, "rejection_reason": ""}
     elif body.action == "reject":
         if len(body.reason.strip()) < 5:
             raise HTTPException(status_code=400, detail="A reason is required.")

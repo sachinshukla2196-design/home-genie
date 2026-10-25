@@ -1,5 +1,5 @@
 """
-Anjali Herbal Life — Cycle 7 tests:
+HOME GENIES — Cycle 7 tests:
   Module: shop_routes  -> Manual UPI checkout (claim -> admin confirm -> paid, idempotent)
   Module: shop_routes  -> Stripe checkout regression
   Module: auth_routes  -> Secured admin login (/api/auth/admin-login)
@@ -17,11 +17,11 @@ if not BASE_URL:
     raise RuntimeError("REACT_APP_BACKEND_URL missing")
 API = f"{BASE_URL}/api"
 
-ADMIN_EMAIL = "sachin.shukla2196@gmail.com"
+ADMIN_EMAIL = os.environ["TEST_ADMIN_EMAIL"]
 ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD", "Admin@12345")
 ADMIN_PASSCODE = os.environ.get("TEST_ADMIN_PASSCODE", "anj000088sk")
-ADMIN_USERNAME = "admin.rahulnirwana"
-DEMO_EMAIL = "demo.distributor@anjaliherballife.in"
+ADMIN_USERNAME = os.environ.get("TEST_ADMIN_USERNAME", ADMIN_EMAIL)
+DEMO_EMAIL = "demo.distributor@homegenies.example.com"
 DEMO_PASSWORD = os.environ.get("TEST_DEMO_PASSWORD", "Demo@1234")
 
 ADDRESS = {"full_name": "QA Tester", "mobile": "9812345678", "line1": "1 QA Street",
@@ -197,16 +197,17 @@ class TestAdminLogin:
         adm = requests.get(f"{API}/admin/dashboard", headers={"Authorization": f"Bearer {d['token']}"}, timeout=25)
         assert adm.status_code == 200, adm.status_code
 
-    def test_wrong_passcode_401(self):
+    def test_wrong_passcode_is_ignored(self):
+        # approved design: the passcode is ignored, so a wrong value does not block a correct password
         r = requests.post(f"{API}/auth/admin-login", json={
             "username": ADMIN_EMAIL, "password": ADMIN_PASSWORD, "passcode": "wrong-passcode"}, timeout=25)
-        assert r.status_code == 401, f"{r.status_code} {r.text[:200]}"
-        assert "token" not in r.text
+        assert r.status_code == 200, f"{r.status_code} {r.text[:200]}"
+        assert r.json().get("token")
 
-    def test_missing_passcode_rejected(self):
+    def test_missing_passcode_is_not_required(self):
         r = requests.post(f"{API}/auth/admin-login", json={
             "username": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=25)
-        assert r.status_code in (401, 422), r.status_code
+        assert r.status_code == 200, r.status_code
 
     def test_distributor_role_gated(self):
         r = requests.post(f"{API}/auth/admin-login", json={
@@ -215,7 +216,7 @@ class TestAdminLogin:
 
     def test_lockout_after_5_wrong_attempts(self):
         """Uses a throwaway email so the real admin identifier is never locked."""
-        email = f"qa_lock_{secrets.randbelow(90000) + 10000}@qa-anjali.example.com"
+        email = f"qa_lock_{secrets.randbelow(90000) + 10000}@qa-homegenies.example.com"
         codes = []
         for _ in range(6):
             r = requests.post(f"{API}/auth/admin-login", json={

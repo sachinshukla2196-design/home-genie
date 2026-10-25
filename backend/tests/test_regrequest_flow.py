@@ -1,7 +1,8 @@
-"""BETA registration-request -> admin approval -> login-by-ID workflow + product permanent delete + security.
+"""Registration request -> immediate account activation (approved design: normal customers need no admin approval),
+login by HomeGenie ID or mobile, admin safeguards, security, and product permanent delete.
 
-NOTE: users.email has a NON-sparse unique index (server.py:110) so only ONE email-less user can
-ever exist. Approving a 2nd request without an email -> 500 DuplicateKeyError. Documented below.
+Live suite: needs REACT_APP_BACKEND_URL (or frontend env) and TEST_ADMIN_USER / TEST_ADMIN_PASSWORD (+ optional
+TEST_ADMIN_PASSCODE, ignored by the server). Run it on its own: `pytest tests/test_regrequest_flow.py -n 0`.
 """
 import os
 import secrets
@@ -33,7 +34,8 @@ def client():
 @pytest.fixture(scope="module")
 def admin(client):
     r = client.post(f"{API}/auth/admin-login",
-                    json={"username": "admin", "password": "admin123", "passcode": "admin123"})
+                    json={"username": os.environ["TEST_ADMIN_USER"], "password": os.environ["TEST_ADMIN_PASSWORD"],
+                          "passcode": os.environ.get("TEST_ADMIN_PASSCODE", "")})
     if r.status_code != 200:
         pytest.fail(f"admin-login failed {r.status_code}: {r.text[:300]}")
     tok = r.json().get("token")
@@ -44,7 +46,8 @@ def admin(client):
 
 
 def submit_request(client, mobile, email="", name="TEST_Applicant"):
-    body = {"full_name": name, "mobile": mobile, "password": PW, "confirm_password": PW, "email": email}
+    body = {"full_name": name, "mobile": mobile, "password": PW, "confirm_password": PW, "email": email,
+            "state": "Rajasthan", "city": "Jaipur", "pincode": "302001", "address": "1 Test Road"}
     return client.post(f"{API}/auth/register-request", json=body)
 
 
@@ -55,43 +58,48 @@ def find_req(admin, mobile):
     return matches[0]
 
 
+def find_user(admin, did):
+    users = admin.get(f"{API}/admin/users").json()
+    rows = users if isinstance(users, list) else users.get("items", [])
+    return next(x for x in rows if x["distributor_id"] == did)
+
+
 @pytest.fixture(scope="module")
-def approved_distributor(client, admin):
-    """Submit + approve a request WITH email (works around the null-email unique index bug)."""
+def activated(client, admin):
+    """Registration with an e-mail; the account exists as soon as the request succeeds."""
     mob = rand_mobile()
-    em = f"test_{mob}@example.test"
-    assert submit_request(client, mob, em, "TEST_Approved Distributor").status_code == 200
+    em = f"test_{mob}@example.com"
+    assert submit_request(client, mob, em, "TEST_Activated Distributor").status_code == 200
     req = find_req(admin, mob)
-    ap = admin.post(f"{API}/admin/registration-requests/{req['id']}/approve")
-    if ap.status_code != 200:
-        pytest.fail(f"approve failed {ap.status_code}: {ap.text[:300]}")
-    return {"mobile": mob, "email": em, "req_id": req["id"], "did": ap.json()["distributor_id"]}
+    login = client.post(f"{API}/auth/login", json={"email": mob, "password": PW})
+    assert login.status_code == 200, login.text
+    did = login.json()["user"]["distributor_id"]
+    return {"mobile": mob, "email": em, "req_id": req["id"], "did": did}
 
 
 # ---------- POST /api/auth/register-request ----------
 class TestRegistrationRequest:
-    def test_submit_request_creates_pending_no_user(self, client, admin):
+    def test_registration_activates_the_account_immediately(self, client, admin):
         mob = rand_mobile()
-        r = submit_request(client, mob, name="TEST_Pending Only")
+        r = submit_request(client, mob, name="TEST_Immediate")
         assert r.status_code == 200, r.text
         data = r.json()
-        assert "approval" in data["message"].lower()
+        assert "log in" in data["message"].lower() and "approval" not in data["message"].lower()
         assert "token" not in data and "user" not in data
 
         req = find_req(admin, mob)
-        assert req["status"] == "pending"
-        assert req["email"] is None
+        assert req["status"] == "approved"
+        assert req["email"] is None                           # blank e-mail is stored as null
         assert "password_hash" not in req and "_id" not in req
 
-        # no user yet -> login must fail
-        assert client.post(f"{API}/auth/login", json={"email": mob, "password": PW}).status_code == 401
+        login = client.post(f"{API}/auth/login", json={"email": mob, "password": PW})
+        assert login.status_code == 200, login.text
+        assert login.json()["token"]
 
-    def test_duplicate_pending_rejected(self, client):
-        mob = rand_mobile()
-        assert submit_request(client, mob, name="TEST_Dup1").status_code == 200
-        r = submit_request(client, mob, name="TEST_Dup2")
-        assert r.status_code == 400, r.text
-        assert "pending" in r.json()["detail"].lower()
+    def test_registered_mobile_blocks_a_second_request(self, client, activated):
+        r = submit_request(client, activated["mobile"], name="TEST_Again")
+        assert r.status_code == 400
+        assert "already exists" in r.json()["detail"].lower()
 
     def test_invalid_mobile(self, client):
         r = submit_request(client, "12345")
@@ -105,79 +113,71 @@ class TestRegistrationRequest:
         assert r.status_code == 400
         assert "match" in r.json()["detail"].lower()
 
-    def test_short_password_422(self, client):
+    def test_short_password_refused(self, client):
         r = client.post(f"{API}/auth/register-request",
                         json={"full_name": "TEST_S", "mobile": rand_mobile(),
                               "password": "123", "confirm_password": "123"})
-        assert r.status_code == 422
+        assert r.status_code == 400
+        assert "6 characters" in r.json()["detail"]
+
+    def test_two_registrations_without_email_both_succeed(self, client, admin):
+        """Regression: blank e-mail used to be stored as '' and collided on the unique e-mail index."""
+        for _ in range(2):
+            mob = rand_mobile()
+            assert submit_request(client, mob, name="TEST_No Email").status_code == 200
+            assert client.post(f"{API}/auth/login", json={"email": mob, "password": PW}).status_code == 200
+
+    def test_invalid_referral_is_refused_and_creates_nothing(self, client, admin):
+        mob = rand_mobile()
+        body = {"full_name": "TEST_Bad Ref", "mobile": mob, "password": PW, "confirm_password": PW,
+                "state": "Rajasthan", "city": "Jaipur", "pincode": "302001", "address": "1 Test Road",
+                "sponsor_id": "NOSUCH99"}
+        r = client.post(f"{API}/auth/register-request", json=body)
+        assert r.status_code == 400 and "Invalid referral" in r.json()["detail"]
+        assert client.post(f"{API}/auth/login", json={"email": mob, "password": PW}).status_code == 401
 
 
-# ---------- admin approve / reject + login by DID / mobile ----------
-class TestApprovalAndLogin:
-    def test_approved_user_is_red_active(self, client, admin, approved_distributor):
-        did = approved_distributor["did"]
-        assert did.startswith("ANJ") and len(did) == 9, did
-        assert find_req(admin, approved_distributor["mobile"])["status"] == "approved"
-
-        users = admin.get(f"{API}/admin/users").json()
-        u = next(x for x in (users if isinstance(users, list) else users.get("items", []))
-                 if x["distributor_id"] == did)
+# ---------- login by HomeGenie ID / mobile, admin safeguards ----------
+class TestActivatedAccount:
+    def test_account_is_red_and_active(self, admin, activated):
+        assert activated["did"].startswith("HG") and len(activated["did"]) == 8, activated["did"]
+        u = find_user(admin, activated["did"])
         assert u["status"] == "red"
         assert u.get("account_status") == "active"
 
-    def test_login_by_distributor_id(self, client, approved_distributor):
-        did = approved_distributor["did"]
+    def test_login_by_distributor_id(self, client, activated):
+        did = activated["did"]
         r = client.post(f"{API}/auth/login", json={"email": did, "password": PW})
         assert r.status_code == 200, r.text
         u = r.json()["user"]
         assert u["distributor_id"] == did
-        assert u["status"] == "red"
         assert "password_hash" not in u and "_id" not in u
-        assert r.json()["token"]
-        # lowercase DID also works
         assert client.post(f"{API}/auth/login", json={"email": did.lower(), "password": PW}).status_code == 200
 
-    def test_login_by_mobile(self, client, approved_distributor):
-        r = client.post(f"{API}/auth/login", json={"email": approved_distributor["mobile"], "password": PW})
+    def test_login_by_mobile(self, client, activated):
+        r = client.post(f"{API}/auth/login", json={"email": activated["mobile"], "password": PW})
         assert r.status_code == 200, r.text
-        assert r.json()["user"]["distributor_id"] == approved_distributor["did"]
+        assert r.json()["user"]["distributor_id"] == activated["did"]
 
-    def test_login_wrong_password(self, client, approved_distributor):
-        r = client.post(f"{API}/auth/login", json={"email": approved_distributor["did"], "password": "Wrong@999"})
+    def test_login_wrong_password(self, client, activated):
+        r = client.post(f"{API}/auth/login", json={"email": activated["did"], "password": "Wrong@999"})
         assert r.status_code == 401
 
-    def test_double_approve_rejected(self, admin, approved_distributor):
-        r = admin.post(f"{API}/admin/registration-requests/{approved_distributor['req_id']}/approve")
+    def test_approve_of_an_activated_request_is_refused(self, admin, activated):
+        r = admin.post(f"{API}/admin/registration-requests/{activated['req_id']}/approve")
         assert r.status_code == 400, r.text
 
-    def test_registered_mobile_blocks_new_request(self, client, approved_distributor):
-        r = submit_request(client, approved_distributor["mobile"], name="TEST_Again")
-        assert r.status_code == 400
-        assert "already exists" in r.json()["detail"].lower()
-
-    def test_reject_flow(self, client, admin):
-        mob = rand_mobile()
-        assert submit_request(client, mob, name="TEST_Reject Me").status_code == 200
-        req = find_req(admin, mob)
-        assert admin.post(f"{API}/admin/registration-requests/{req['id']}/reject").status_code == 200
-        assert find_req(admin, mob)["status"] == "rejected"
-        assert client.post(f"{API}/auth/login", json={"email": mob, "password": PW}).status_code == 401
+    def test_reject_of_an_activated_request_is_refused_and_account_stays_active(self, client, admin, activated):
+        r = admin.post(f"{API}/admin/registration-requests/{activated['req_id']}/reject")
+        assert r.status_code == 400, r.text
+        assert find_req(admin, activated["mobile"])["status"] == "approved"
+        assert client.post(f"{API}/auth/login", json={"email": activated["mobile"], "password": PW}).status_code == 200
 
     def test_approve_nonexistent_404(self, admin):
         assert admin.post(f"{API}/admin/registration-requests/does-not-exist/approve").status_code == 404
 
-    def test_emailless_approval_bug(self, client, admin):
-        """BUG: users.email unique index is not sparse/partial -> only one null-email user allowed."""
-        mob = rand_mobile()
-        assert submit_request(client, mob, name="TEST_No Email").status_code == 200
-        req = find_req(admin, mob)
-        r = admin.post(f"{API}/admin/registration-requests/{req['id']}/approve")
-        assert r.status_code == 200, (
-            f"Email-less approval returned {r.status_code} ({r.text[:200]}) - "
-            "DuplicateKeyError on users.email_1 unique index (null). "
-            "Fix: partialFilterExpression {email: {$type: 'string'}} or omit null email field."
-        )
-        assert client.post(f"{API}/auth/login", json={"email": mob, "password": PW}).status_code == 200
+    def test_reject_nonexistent_404(self, admin):
+        assert admin.post(f"{API}/admin/registration-requests/does-not-exist/reject").status_code == 404
 
 
 # ---------- security ----------
@@ -194,9 +194,9 @@ class TestSecurity:
         r = client.get(f"{API}/admin/registration-requests", headers={"Authorization": "Bearer bogus"})
         assert r.status_code in (401, 403)
 
-    def test_distributor_token_cannot_access_admin(self, client, approved_distributor):
+    def test_distributor_token_cannot_access_admin(self, client, activated):
         tok = client.post(f"{API}/auth/login",
-                          json={"email": approved_distributor["did"], "password": PW}).json()["token"]
+                          json={"email": activated["did"], "password": PW}).json()["token"]
         r = client.get(f"{API}/admin/registration-requests", headers={"Authorization": f"Bearer {tok}"})
         assert r.status_code == 403, r.status_code
 

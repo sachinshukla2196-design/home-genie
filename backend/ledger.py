@@ -30,7 +30,8 @@ SALE_REVERSAL = "SALE_REVERSAL"
 REFUND = "REFUND"
 ADJUSTMENT = "ADJUSTMENT"
 SETTLEMENT_PAID = "SETTLEMENT_PAID"
-TYPES = (SALE, SALE_REVERSAL, REFUND, ADJUSTMENT, SETTLEMENT_PAID)
+COMMISSION = "COMMISSION"          # negative when charged on a sale, positive when returned for an unfulfilled order
+TYPES = (SALE, SALE_REVERSAL, REFUND, ADJUSTMENT, SETTLEMENT_PAID, COMMISSION)
 
 SALE_BLOCKING_FULFILMENT = {"rejected", "cancelled"}      # no sale for a vendor who did not supply the goods
 HELD_PAYMENT_STATUSES = {"cod_discrepancy"}
@@ -84,7 +85,25 @@ async def post_order_collected(order: dict, scale: Optional[tuple] = None) -> in
             _, created = await post_entry(f["vendor_id"], SALE, amt, f"sale:{order['id']}:{f['vendor_id']}", order_id=order["id"],
                                           meta={"order_number": order.get("order_number"), "payment_method": order.get("payment_method")})
             n += 1 if created else 0
+            await post_commission(order, f["vendor_id"], amt)
     return n
+
+
+async def post_commission(order: dict, vendor_id: str, sale_paise: int) -> int:
+    """Charge the commission of the approved agreement in force on the order date. The agreement version is stored on the entry,
+    so later agreements never change it. No approved agreement on that date means no commission."""
+    from commercial_terms import effective_agreement, commission_for
+    on = (order.get("paid_at") or order.get("created_at") or "")[:10]
+    agreement = await effective_agreement(vendor_id, on) if on else None
+    if not agreement:
+        return 0
+    charge = commission_for(agreement, sale_paise)
+    if charge <= 0:
+        return 0
+    _, created = await post_entry(vendor_id, COMMISSION, -charge, f"comm:{order['id']}:{vendor_id}", order_id=order["id"],
+                                  meta={"agreement_id": agreement["id"], "version": agreement["version"], "commission_pct": agreement["commission_pct"],
+                                        "fixed_fee_paise": agreement["fixed_fee_paise"], "sale_paise": sale_paise})
+    return 1 if created else 0
 
 
 async def post_sale_reversal(order: dict, vendor_id: str) -> bool:
@@ -94,6 +113,12 @@ async def post_sale_reversal(order: dict, vendor_id: str) -> bool:
         return False
     _, created = await post_entry(vendor_id, SALE_REVERSAL, -sale["amount_paise"], f"salerev:{order['id']}:{vendor_id}",
                                   order_id=order["id"], reverses=sale["id"], reason="Vendor did not fulfil the order")
+    if created:      # no sale, no commission: return what was charged for this order
+        charged = -sum(r["amount_paise"] for r in await db.vendor_ledger.find({"vendor_id": vendor_id, "order_id": order["id"], "type": COMMISSION},
+                                                                              {"_id": 0, "amount_paise": 1}).to_list(1000))
+        if charged > 0:
+            await post_entry(vendor_id, COMMISSION, charged, f"commrev:{order['id']}:{vendor_id}", order_id=order["id"],
+                             reason="Commission returned: vendor did not fulfil the order")
     return created
 
 
@@ -146,13 +171,14 @@ async def balances(vendor_id: str) -> dict:
                                             {"$group": {"_id": "$type", "n": {"$sum": "$amount_paise"}, "c": {"$sum": 1}}}]).to_list(20)
     by = {r["_id"]: r["n"] for r in agg}
     sales, rev, ref, adj, paid = (by.get(SALE, 0), by.get(SALE_REVERSAL, 0), by.get(REFUND, 0), by.get(ADJUSTMENT, 0), by.get(SETTLEMENT_PAID, 0))
-    payable_before_settlements = sales + rev + ref + adj
+    comm = by.get(COMMISSION, 0)
+    payable_before_settlements = sales + rev + ref + adj + comm
     open_settle = await db.settlements.aggregate([{"$match": {"vendor_id": vendor_id, "status": {"$in": ["requested", "approved"]}}},
                                                   {"$group": {"_id": None, "n": {"$sum": "$amount_paise"}}}]).to_list(1)
     under_settlement = open_settle[0]["n"] if open_settle else 0
     settled = -paid
     return {"currency": "INR", "eligible_sales_paise": sales, "sale_reversals_paise": rev, "refunds_paise": ref,
-            "adjustments_paise": adj, "vendor_payable_paise": payable_before_settlements,
+            "adjustments_paise": adj, "commissions_paise": comm, "vendor_payable_paise": payable_before_settlements,
             "settled_paise": settled, "settlement_in_progress_paise": under_settlement,
             "pending_settlement_paise": payable_before_settlements - settled,
             "available_for_settlement_paise": payable_before_settlements - settled - under_settlement,

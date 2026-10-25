@@ -589,6 +589,7 @@ async def activate_registration(r: dict, approver: Optional[dict] = None) -> str
             if rc:
                 sponsor = await db.users.find_one({"id": rc.get("created_by")}) or await db.users.find_one({"role": "super_admin"})
                 parent_label = rc["code"]  # the referral code itself is the recorded parent
+                await db.referral_codes.update_one({"code": sp_did}, {"$inc": {"uses": 1}})  # counted once, when the account is created
             else:
                 sponsor = await db.users.find_one({"distributor_id": sp_did})
                 parent_label = sp_did
@@ -645,6 +646,9 @@ async def reject_registration_request(req_id: str, request: Request, body: Rejec
     r = await db.registration_requests.find_one({"id": req_id})
     if not r:
         raise HTTPException(status_code=404, detail="Request not found.")
+    if r.get("status") == "approved":
+        # the account was already created at registration; rejecting the record would contradict the live account
+        raise HTTPException(status_code=400, detail="This registration has already created an active account and cannot be rejected.")
     await db.registration_requests.update_one({"id": req_id},
         {"$set": {"status": "rejected", "rejection_reason": (body.reason or "").strip(),
                   "rejected_by": admin["id"], "rejected_at": now_iso()}})
@@ -670,16 +674,24 @@ async def block_user(user_id: str, body: BlockBody, request: Request, admin: dic
 
 @router.delete("/users/{user_id}")
 async def delete_user(user_id: str, request: Request, admin: dict = Depends(require_admin)):
+    """DEACTIVATES the account; it never erases it. The user document, wallet, ledger, orders, commissions and audit
+    references stay, so financial history is kept. The account is blocked and every existing session is refused.
+    Repeated requests change nothing. Personal-data anonymisation is not performed: no retention policy is defined yet."""
     u = await db.users.find_one({"id": user_id})
     if not u:
         raise HTTPException(status_code=404, detail="User not found.")
     if u.get("role") in {"super_admin", "admin", "accounts_admin", "support_admin"}:
         raise HTTPException(status_code=400, detail="Admin accounts cannot be deleted.")
-    await db.users.delete_one({"id": user_id})
-    await db.wallets.delete_many({"user_id": user_id})
-    await log_audit(admin, "user_deleted", "user", user_id,
-                    old_value={"distributor_id": u.get("distributor_id"), "name": u.get("full_name")}, request=request)
-    return {"ok": True}
+    if u.get("account_status") == "deleted":
+        return {"ok": True, "already_deactivated": True}
+    now = now_iso()
+    await db.users.update_one({"id": user_id, "account_status": {"$ne": "deleted"}},
+                              {"$set": {"account_status": "deleted", "blocked": True, "deleted_at": now,
+                                        "deleted_by": admin["id"], "updated_at": now}})
+    await log_audit(admin, "user_deactivated", "user", user_id,
+                    old_value={"distributor_id": u.get("distributor_id"), "account_status": u.get("account_status")},
+                    new_value={"account_status": "deleted"}, request=request)
+    return {"ok": True, "deactivated": True}
 
 
 class AdminUserUpdate(BaseModel):

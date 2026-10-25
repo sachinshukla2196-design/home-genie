@@ -7,7 +7,7 @@ Repeat-customer figures are counts only: buyer ids never leave the server.
 """
 import csv
 import io
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends
@@ -75,9 +75,49 @@ async def _ledger_in_period(vid: str, f, t) -> dict:
     ]).to_list(20)
     by = {r["_id"]: r for r in rows}
     n = lambda k: by.get(k, {}).get("n", 0)
-    sales, rev, ref, adj = n(L.SALE), n(L.SALE_REVERSAL), n(L.REFUND), n(L.ADJUSTMENT)
-    return {"sales_paise": sales, "reversals_paise": rev, "refunds_paise": ref, "adjustments_paise": adj,
-            "net_paise": sales + rev + ref + adj, "settled_paise": -n(L.SETTLEMENT_PAID), "refund_count": by.get(L.REFUND, {}).get("c", 0)}
+    sales, rev, ref, adj, com = n(L.SALE), n(L.SALE_REVERSAL), n(L.REFUND), n(L.ADJUSTMENT), n(L.COMMISSION)
+    return {"sales_paise": sales, "reversals_paise": rev, "refunds_paise": ref, "adjustments_paise": adj, "commissions_paise": com,
+            "net_paise": sales + rev + ref + adj + com, "settled_paise": -n(L.SETTLEMENT_PAID), "refund_count": by.get(L.REFUND, {}).get("c", 0)}
+
+
+async def _dispatch_performance(vid: str, f, t) -> dict:
+    """Hours from payment (online) or order (COD) to the dispatch event, for orders placed in the period. Null when none measured."""
+    rows = await db.orders.find(_window(vid, f, t), {"_id": 0, "paid_at": 1, "created_at": 1, "payment_method": 1, "fulfilments": 1}).to_list(5000)
+    hours, dispatched = [], 0
+    for o in rows:
+        fl = next((x for x in o.get("fulfilments") or [] if x["vendor_id"] == vid), None)
+        disp = next((e.get("at") for e in (fl or {}).get("events", []) if e.get("status") == "dispatched"), None)
+        if not disp:
+            continue
+        dispatched += 1
+        base = o.get("paid_at") if o.get("payment_method") == "online" else o.get("created_at")
+        try:
+            hours.append((datetime.fromisoformat(disp) - datetime.fromisoformat(base)).total_seconds() / 3600)
+        except (TypeError, ValueError):
+            pass
+    return {"dispatched_orders": dispatched, "measured_orders": len(hours),
+            "average_hours_to_dispatch": round(sum(hours) / len(hours), 1) if hours else None, "capped_at": 5000 if len(rows) >= 5000 else None}
+
+
+async def _stock_movement_report(vid: str, f, t) -> dict:
+    """Every stock change on this vendor's products in the period (adjustments, newest first, capped for display)."""
+    products = {p["id"]: p for p in await db.products.find({"vendor_id": vid}, {"_id": 0, "id": 1, "name": 1, "sku": 1}).to_list(5000)}
+    q = {"product_id": {"$in": list(products)}, "created_at": {"$gte": f.isoformat(), "$lte": f"{t.isoformat()}T23:59:59.999999"}}
+    total = await db.stock_movements.count_documents(q)
+    moves = await db.stock_movements.aggregate([{"$match": q}, {"$group": {"_id": None,
+        "added": {"$sum": {"$cond": [{"$gt": ["$delta", 0]}, "$delta", 0]}}, "removed": {"$sum": {"$cond": [{"$lt": ["$delta", 0]}, "$delta", 0]}}}}]).to_list(1)
+    agg = moves[0] if moves else {"added": 0, "removed": 0}
+    rows = await db.stock_movements.find(q, {"_id": 0, "product_id": 1, "variant_sku": 1, "delta": 1, "before": 1, "after": 1, "reason": 1, "created_at": 1}) \
+        .sort("created_at", -1).to_list(200)
+    return {"movements": total, "added": agg["added"], "removed": -agg["removed"],
+            "rows": [{**r, "name": (products.get(r["product_id"]) or {}).get("name", ""), "sku": (products.get(r["product_id"]) or {}).get("sku", "")} for r in rows]}
+
+
+async def _settlement_rows(vid: str, f, t) -> list:
+    """Payouts requested in the period, with reference and dates. No internal admin identities."""
+    return await db.settlements.find({"vendor_id": vid, "created_at": {"$gte": f.isoformat(), "$lte": f"{t.isoformat()}T23:59:59.999999"}},
+                                     {"_id": 0, "number": 1, "amount_paise": 1, "status": 1, "reference": 1, "created_at": 1, "paid_at": 1}) \
+        .sort("created_at", -1).to_list(100)
 
 
 async def _settlements_in_period(vid: str, f, t) -> dict:
@@ -103,8 +143,12 @@ async def _current(user: dict, range: str, date_from: Optional[str], date_to: Op
         "best_sellers": d["best_sellers"],
         "earnings": await _ledger_in_period(vid, f, t),
         "settlements": await _settlements_in_period(vid, f, t),
-        # HomeGenie's platform commission is not recorded on the vendor ledger yet (the settlement policy is not approved).
-        "commission": {"available": False},
+        "settlement_rows": await _settlement_rows(vid, f, t),
+        "dispatch": await _dispatch_performance(vid, f, t),
+        "stock_movements": await _stock_movement_report(vid, f, t),
+        # Commission is shown only when an approved commercial agreement exists for this vendor; otherwise it is not applicable.
+        "commission": {"available": await db.vendor_agreements.count_documents({"vendor_id": vid, "status": "approved"}) > 0,
+                       "paise": (await _ledger_in_period(vid, f, t))["commissions_paise"]},
         "products": await _product_report(vid, f, t),
     }
 
@@ -141,12 +185,26 @@ async def vendor_current_csv(range: str = "30d", date_from: Optional[str] = None
     w.writerow(["adjustments_inr", inr(e["adjustments_paise"])])
     w.writerow(["net_before_settlements_inr", inr(e["net_paise"])])
     w.writerow(["settled_in_period_inr", inr(e["settled_paise"])])
-    w.writerow(["platform_commission", "not recorded"])
+    w.writerow(["commission_inr", inr(-e["commissions_paise"]) if r["commission"]["available"] else "not applicable (no approved agreement)"])
+    w.writerow(["commission_applies", "yes" if r["commission"]["available"] else "no"])
+    w.writerow(["dispatched_orders", r["dispatch"]["dispatched_orders"]])
+    w.writerow(["average_hours_to_dispatch", r["dispatch"]["average_hours_to_dispatch"] if r["dispatch"]["average_hours_to_dispatch"] is not None else "no data"])
+    w.writerow(["stock_movements", r["stock_movements"]["movements"]])
+    w.writerow(["stock_added", r["stock_movements"]["added"]])
+    w.writerow(["stock_removed", r["stock_movements"]["removed"]])
     w.writerow([])
     w.writerow(["product", "sku", "category", "units_sold", "value_inr", "stock", "listed", "approval"])
     for p in r["products"]:
         w.writerow([_csv_safe(p["name"]), _csv_safe(p["sku"]), _csv_safe(p["category"]), p["units_sold"], inr(p["value_paise"]),
                     p["stock"], "yes" if p["is_active"] else "no", _csv_safe(p["approval_status"] or "")])
+    w.writerow([])
+    w.writerow(["settlement", "amount_inr", "status", "reference", "requested_at", "paid_at"])
+    for st in r["settlement_rows"]:
+        w.writerow([_csv_safe(st["number"]), inr(st["amount_paise"]), st["status"], _csv_safe(st.get("reference") or ""), st["created_at"], st.get("paid_at") or ""])
+    w.writerow([])
+    w.writerow(["stock_date", "product", "sku", "change", "before", "after", "reason"])
+    for m in r["stock_movements"]["rows"]:
+        w.writerow([m["created_at"], _csv_safe(m["name"]), _csv_safe(m["sku"]), m["delta"], m["before"], m["after"], _csv_safe(m["reason"])])
     buf.seek(0)
     return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
                              headers={"Content-Disposition": "attachment; filename=vendor-current-report.csv"})
@@ -225,4 +283,7 @@ async def vendor_advancement(range: str = "30d", date_from: Optional[str] = None
         "repeat_customers": repeat,
         "stock": {"low_stock": stock["low_stock"], "out_of_stock": stock["out_of_stock"], "items": d["inventory_alerts"]},
         "suggestions": sugg,
+        # No source exists for these yet, so they are reported as unavailable rather than estimated.
+        "ratings": {"available": False, "reason": "HomeGenie does not collect customer ratings yet."},
+        "milestones": {"available": False, "reason": "No training or operational milestone records exist yet."},
     }

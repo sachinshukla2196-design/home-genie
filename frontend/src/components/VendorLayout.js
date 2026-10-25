@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import { Link, useLocation, Outlet } from "react-router-dom";
 import { MotionConfig, motion } from "framer-motion";
 import {
-  LayoutDashboard, Package, ClipboardList, Store, LogOut, Bell, Boxes, Truck, Undo2, BarChart3, Landmark, Banknote, LifeBuoy, ShieldCheck, Menu, FileBarChart, TrendingUp,
+  LayoutDashboard, Package, ClipboardList, Store, LogOut, Bell, Boxes, Truck, Undo2, BarChart3, Landmark, Banknote, LifeBuoy, ShieldCheck, Menu, FileBarChart, TrendingUp, Users, FileText,
 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
@@ -34,10 +34,12 @@ export const NAV_GROUPS = [
   ] },
   { key: "vx.nav.g.finance", items: [
     { to: "/vendor/earnings", icon: Landmark, key: "vx.nav.earnings", id: "earnings" },
+    { to: "/vendor/terms", icon: FileText, key: "vt.nav", id: "terms" },
     { to: "/vendor/cod", icon: Banknote, key: "vx.nav.cod", id: "cod" },
   ] },
   { key: "vx.nav.g.account", items: [
     { to: "/vendor/profile", icon: Store, key: "vp.profile", id: "profile" },
+    { to: "/vendor/staff", icon: Users, key: "vx.nav.staff", id: "staff" },
     { to: "/vendor/support", icon: LifeBuoy, key: "vx.nav.support", id: "support" },
     { to: "/vendor/security", icon: ShieldCheck, key: "vx.nav.security", id: "security" },
   ] },
@@ -55,6 +57,10 @@ export const VENDOR_STATUS_TONE = {
   approved: "bg-hg-success/15 text-hg-success ring-hg-success/30",
   rejected: "bg-danger/10 text-danger ring-danger/30",
   suspended: "bg-danger/10 text-danger ring-danger/30",
+  invited: "bg-[#5B7CFF]/15 text-[#8FA6FF] ring-[#8FA6FF]/30",
+  pending_documents: "bg-hg-gold/15 text-hg-gold ring-hg-gold/30",
+  changes_requested: "bg-hg-gold/15 text-hg-gold ring-hg-gold/30",
+  active: "bg-hg-success/15 text-hg-success ring-hg-success/30",
 };
 
 export function VendorLayout() {

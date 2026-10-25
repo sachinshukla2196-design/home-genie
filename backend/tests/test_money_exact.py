@@ -20,9 +20,10 @@ os.environ.pop("ADMIN_EMAIL", None)
 
 from fastapi.testclient import TestClient  # noqa: E402
 import server  # noqa: E402
+import db_indexes  # noqa: E402
 import shop_routes  # noqa: E402
 import money_migration as mm  # noqa: E402
-from money import (to_paise, paise_to_float, mul_pct, mul_ratio, split_exact, fmt_inr, dec, paise_of)  # noqa: E402
+from money import (to_paise, paise_to_float, mul_pct, mul_ratio, split_exact, fmt_inr, paise_of)  # noqa: E402
 from core import db, hash_password, create_token, now_iso, new_id, get_or_create_wallet, wallet_apply  # noqa: E402
 
 ADDR = {"full_name": "Cust", "mobile": "9000011111", "line1": "1 Road", "city": "Pune", "state": "MH", "pincode": "411001"}
@@ -63,7 +64,10 @@ def test_split_exact_never_loses_or_creates_a_paisa():
 
 def test_sums_of_many_float_amounts_drift_but_paise_never_do():
     amounts = [0.1] * 1000
-    assert sum(amounts) != 100.0                            # floats really do drift
+    running = 0.0
+    for a in amounts:                                       # a plain running total: floats drift on every Python version
+        running += a                                        # (builtin sum() is compensated from Python 3.12, so it is not used here)
+    assert running != 100.0
     assert sum(to_paise(a) for a in amounts) == 10000       # paise do not
     assert fmt_inr(123456789) == "₹1,234,567.89" and fmt_inr(-5) == "-₹0.05"
     assert paise_of({"total_paise": 250}, "total_paise", "total") == 250 and paise_of({"total": 2.5}, "total_paise", "total") == 250
@@ -80,6 +84,7 @@ def c():
         async def seed():
             await server.client.drop_database(os.environ["DB_NAME"])
             await server._init_db()
+            await db_indexes.apply()      # the migration step: startup no longer creates indexes
 
             async def user(mobile, role, did, sponsor=None, status="green"):
                 u = {"id": new_id(), "distributor_id": did, "full_name": did, "mobile": mobile, "email": None,

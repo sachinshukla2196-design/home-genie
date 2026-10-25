@@ -1,5 +1,5 @@
 """
-Anjali Herbal Life Ayurveda — Backend API tests.
+HOME GENIES — Backend API tests.
 
 Notes:
 - Stripe checkout completion cannot be automated headlessly here; we verify
@@ -396,7 +396,7 @@ class TestAdminApis:
 
 
 # ============================= DEMO SEED REGRESSION =============================
-DEMO_DIST_EMAIL = "demo.distributor@anjaliherballife.in"
+DEMO_DIST_EMAIL = "demo.distributor@homegenies.example.com"
 DEMO_DIST_PASSWORD = os.environ.get("DEMO_PASSWORD", "Demo@1234")
 
 

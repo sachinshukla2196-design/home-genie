@@ -120,6 +120,8 @@ export default function VendorAdvancement() {
         </SectionCard>
       </div>
 
+      <BenefitsSection />
+
       <SectionCard title={t("vx.adv.suggest")} testid="adv-suggest">
         {suggestions.length === 0 ? <p className="hg-tile p-5 text-center text-sm text-muted2" data-testid="adv-suggest-empty">{t("vx.adv.suggestNone")}</p>
           : <ul className="space-y-2">{suggestions.map((s) => (
@@ -129,5 +131,59 @@ export default function VendorAdvancement() {
             </li>))}</ul>}
       </SectionCard>
     </div>
+  );
+}
+
+
+/** Benefit programmes measured against this vendor's own record, and the status of any benefit HOME GENIES has recorded.
+ *  Being eligible is not an approved benefit: only a recorded approval (status "approved", inside its dates) counts. */
+function BenefitsSection() {
+  const { t, lang } = useI18n();
+  const [d, setD] = useState(null);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    API.get("/vendor/advancement/eligibility").then(({ data }) => setD(data)).catch((e) => setError(apiError(e)));
+  }, []);
+  if (!d && !error) return <StateBlock loading rows={2} testid="adv-benefits" />;
+  if (error) return <SectionCard title={t("vx.adv.benefits")} testid="adv-benefits"><p role="alert" className="text-sm text-danger" data-testid="adv-benefits-error">{t("vx.loadFailed")}</p></SectionCard>;
+  const fmt = (m, v) => (v === null || v === undefined ? t("vx.adv.noData") : m === "order_value_paise" ? inrP(v) : m.endsWith("_rate") ? `${v}%` : v);
+  return (
+    <SectionCard title={t("vx.adv.benefits")} testid="adv-benefits">
+      <p className="mb-4 text-xs text-muted2">{t("vx.adv.benefitsNote")}</p>
+      {d.programmes.length === 0 ? <p className="hg-tile p-5 text-center text-sm text-muted2" data-testid="adv-programmes-empty">{t("vx.adv.noProgrammes")}</p> : (
+        <div className="space-y-3">
+          {d.programmes.map((p) => (
+            <div key={p.programme_id} className="hg-tile p-4" data-testid={`adv-prog-${p.key}`}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <span className="font-medium text-ink">{p.title}</span>
+                <Pill tone={p.eligible ? "info" : "muted"}>{p.eligible ? t("vx.adv.eligibleForReview") : t("vx.adv.notEligible")}</Pill>
+              </div>
+              <p className="mt-1 text-xs text-muted2">{t("vx.adv.window", { from: fmtDate(p.review_from, lang), to: fmtDate(p.review_to, lang) })}</p>
+              <ul className="mt-2 grid gap-1 text-xs sm:grid-cols-2">
+                {p.criteria.map((c) => (
+                  <li key={c.metric} className={c.met ? "text-hg-success" : "text-danger"} data-testid={`adv-crit-${p.key}-${c.metric}`}>
+                    {c.met ? "✓" : "✗"} {t(`vx.adv.metric.${c.metric}`)}: {fmt(c.metric, c.measured)} ({c.rule === "min" ? t("vx.adv.atLeast") : t("vx.adv.atMost")} {fmt(c.metric, c.required)})
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
+      <h4 className="mt-5 text-sm font-semibold text-ink">{t("vx.adv.benefitHistory")}</h4>
+      {d.benefits.length === 0 ? <p className="mt-2 text-sm text-muted2" data-testid="adv-history-empty">{t("vx.adv.noBenefits")}</p> : (
+        <ul className="mt-2 space-y-2">
+          {d.benefits.map((b) => (
+            <li key={b.id} className="hg-tile flex flex-wrap items-center justify-between gap-2 p-3 text-sm" data-testid={`adv-benefit-${b.status}`}>
+              <span className="text-ink">{b.benefit_text}</span>
+              <span className="flex items-center gap-2 text-xs text-muted2">
+                <Pill tone={b.status === "approved" ? "ok" : b.status === "rejected" ? "bad" : "info"}>{t(`vx.adv.status.${b.status}`)}</Pill>
+                {b.effective_from && <span>{fmtDate(b.effective_from, lang)}{b.expires_at_date ? ` – ${fmtDate(b.expires_at_date, lang)}` : ""}</span>}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </SectionCard>
   );
 }

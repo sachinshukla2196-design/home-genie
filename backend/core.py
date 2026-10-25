@@ -80,6 +80,7 @@ def create_token(user_id: str) -> str:
         "sub": user_id,
         "type": "access",
         "iat": now,  # lets a password change revoke sessions issued before it
+        "iat_ms": int(now.timestamp() * 1000),  # millisecond precision, so a session issued in the same second as a change is still revoked
         "exp": now + timedelta(days=7),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
@@ -117,6 +118,9 @@ async def get_current_user(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="User not found")
     if _issued_before_password_change(payload, user):
         raise HTTPException(status_code=401, detail="Your password was changed. Please log in again.")
+    if user.get("blocked") or user.get("account_status") in ("blocked", "suspended", "deleted"):
+        # an existing token stops working as soon as the account is blocked or deactivated
+        raise HTTPException(status_code=401, detail="This account is no longer active. Please contact the admin.")
     user.pop("password_hash", None)
     return user
 
@@ -127,10 +131,12 @@ def _issued_before_password_change(payload: dict, user: dict) -> bool:
     if not changed:
         return False
     try:
-        changed_ts = int(datetime.fromisoformat(changed).timestamp())
+        changed_dt = datetime.fromisoformat(changed)
     except ValueError:
         return False
-    return int(payload.get("iat") or 0) < changed_ts
+    if payload.get("iat_ms") is not None:
+        return int(payload["iat_ms"]) < int(changed_dt.timestamp() * 1000)
+    return int(payload.get("iat") or 0) < int(changed_dt.timestamp())   # legacy tokens: whole seconds
 
 
 def password_update(new_password: str) -> dict:
@@ -396,9 +402,9 @@ from datetime import datetime as _dt, timedelta as _td, timezone as _tz
 
 RATE_LIMIT_SCALE = float(_os.environ.get("RATE_LIMIT_SCALE", "1"))
 RATE_LIMITS = {   # name -> (max requests, window seconds); keys are per client IP (or per vendor for authenticated actions)
-    "vendor_register": (10, 3600), "customer_register": (20, 3600), "forgot_password": (10, 3600),
+    "vendor_register": (10, 3600), "staff_accept": (10, 3600), "customer_register": (20, 3600), "forgot_password": (10, 3600),
     "login_ip": (60, 600), "admin_login_ip": (20, 600), "support_ticket": (20, 86400), "upload_sign": (60, 3600),
-    "change_password": (10, 3600), "csv_import": (30, 3600),
+    "change_password": (10, 3600), "csv_import": (30, 3600), "forgot_reset": (20, 3600), "login_otp_send": (20, 3600), "login_otp_verify": (60, 3600),
 }
 
 

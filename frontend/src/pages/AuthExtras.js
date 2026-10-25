@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
@@ -69,8 +69,8 @@ export function LoginOtp() {
   const send = async () => {
     setLoading(true);
     try {
-      await API.post("/auth/login-otp/send", { mobile });
-      toast.success("OTP sent to your mobile");
+      const { data } = await API.post("/auth/login-otp/send", { mobile });
+      toast.success(data.message);
       setStep(2);
     } catch (e) { toast.error(apiError(e)); } finally { setLoading(false); }
   };
@@ -105,9 +105,31 @@ export function LoginOtp() {
 
 export function ForgotPassword() {
   const { t } = useI18n();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const resetToken = location.state?.resetToken || "";
+  const googleDone = !!location.state?.googleDone;
   const [identifier, setIdentifier] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
+
+  // Google verifies the account e-mail; the return URL carries recover=google so the callback knows the intent.
+  const googleRecovery = () => {
+    const redirectUrl = window.location.origin + "/forgot?recover=google";
+    window.location.href = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+  };
+
+  const submitNewPassword = async () => {
+    if (password !== confirm) { toast.error("Passwords do not match."); return; }
+    setLoading(true);
+    try {
+      const { data } = await API.post("/auth/forgot/google/reset", { token: resetToken, password });
+      toast.success(data.message);
+      navigate("/login", { replace: true });
+    } catch (e) { toast.error(apiError(e)); } finally { setLoading(false); }
+  };
 
   const submit = async () => {
     setLoading(true);
@@ -118,9 +140,37 @@ export function ForgotPassword() {
     } catch (e) { toast.error(apiError(e)); } finally { setLoading(false); }
   };
 
+  if (resetToken) {
+    return (
+      <Shell title="Set a new password" sub="Your Google account is verified. Choose a new password.">
+        <div className="mt-6 space-y-4" data-testid="forgot-new-password">
+          <Field label="New password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} testid="forgot-new-password-input" />
+          <Field label="Confirm new password" type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} testid="forgot-confirm-password-input" />
+          <p className="text-xs leading-relaxed text-muted2">At least 8 characters. This link works once and expires in 15 minutes.</p>
+          <Button onClick={submitNewPassword} disabled={loading || password.length < 8 || !confirm} className={primaryBtn} data-testid="forgot-set-password">
+            {loading ? <span className="inline-flex items-center gap-2">{spinner}{t("common.loading")}</span> : "Set new password"}
+          </Button>
+        </div>
+      </Shell>
+    );
+  }
+
   return (
-    <Shell title="Forgot password" sub="Request an admin-assisted password reset">
+    <Shell title="Forgot password" sub="Recover your account with Google">
       <div className="mt-6 space-y-4">
+        {googleDone ? (
+          <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ type: "spring", stiffness: 300, damping: 20 }}
+            className="flex items-start gap-3 rounded-2xl bg-hg-success/10 px-4 py-4 text-sm leading-relaxed text-ink ring-1 ring-hg-success/30" data-testid="forgot-google-done">
+            <CheckCircle2 size={20} className="mt-0.5 shrink-0 text-hg-success" />
+            <span>If an account matches this Google email, you can now set a new password. If you do not see the password form, check that you used the Google account registered with HomeGenie, or ask the admin for help below.</span>
+          </motion.div>
+        ) : (
+          <Button type="button" onClick={googleRecovery} variant="outline" className="h-12 w-full gap-2 rounded-2xl border-brand-50 bg-transparent" data-testid="forgot-google">
+            <img src="https://www.gstatic.com/firebasejs/ui/2.0.0/images/auth/google.svg" alt="" className="h-4 w-4" />
+            Continue with Google
+          </Button>
+        )}
+
         {done ? (
           <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ type: "spring", stiffness: 300, damping: 20 }}
             className="flex items-start gap-3 rounded-2xl bg-hg-success/10 px-4 py-4 text-sm leading-relaxed text-ink ring-1 ring-hg-success/30" data-testid="forgot-done">
@@ -129,8 +179,8 @@ export function ForgotPassword() {
           </motion.div>
         ) : (
           <>
+            <p className="text-center text-xs text-muted2">Cannot use Google? Ask the admin to reset your password.</p>
             <Field label="HomeGenie ID or registered mobile" value={identifier} onChange={(e) => setIdentifier(e.target.value)} testid="forgot-identifier" />
-            <p className="text-xs leading-relaxed text-muted2" data-testid="forgot-admin-note">There is no OTP. An admin will reset your password and share it with you.</p>
             <Button onClick={submit} disabled={loading || !identifier.trim()} className={primaryBtn} data-testid="forgot-submit">
               {loading ? <span className="inline-flex items-center gap-2">{spinner}{t("common.loading")}</span> : "Send request to admin"}
             </Button>
