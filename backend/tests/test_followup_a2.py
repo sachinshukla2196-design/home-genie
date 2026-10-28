@@ -27,6 +27,11 @@ CRON = {"Authorization": "Bearer cron-test-secret"}
 S = {}
 
 
+def _cod_ok(order):
+    """Full-amount courier confirmation with a reference (the evidence the route requires)."""
+    return {"amount_collected": order["total"], "evidence_type": "courier_confirmation", "evidence_reference": "AWB-TEST-0001"}
+
+
 def _hdr(uid):
     return {"Authorization": f"Bearer {create_token(uid)}"}
 
@@ -312,7 +317,7 @@ def test_dashboard_separates_order_value_collected_and_unpaid_cod(c):
     rejected = _order(c, p["id"], 5)                                         # vendor rejects: excluded
     unpaid_online = _order(c, p["id"], 4, method="online")                   # never paid: not visible at all
     ha = _hdr(S["admin"]["id"])
-    assert c.post(f"/api/orders/{cod_paid['id']}/cod-collected", headers=ha).status_code == 200
+    assert c.post(f"/api/orders/{cod_paid['id']}/cod-collected", headers=ha, json=_cod_ok(cod_paid)).status_code == 200
     sid = "cs_" + online["id"][:12]
     c.portal.call(lambda: db.payment_transactions.insert_one(
         {"id": new_id(), "session_id": sid, "order_id": online["id"], "user_id": online["user_id"], "amount": online["total"],

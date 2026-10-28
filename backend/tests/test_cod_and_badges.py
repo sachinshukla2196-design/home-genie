@@ -3,8 +3,9 @@
 Run: cd /app/backend && python3 tests/test_cod_and_badges.py
 
 Verifies: a COD order credits NO commission when placed; commission is credited only when
-cash collection is confirmed; the HomeGenie herself and an admin may both confirm; a second
-confirmation is a no-op; and the monthly badge reflects the confirmed sale value.
+cash collection is confirmed with evidence; the HomeGenie attributed to the sale can NOT confirm
+it (refused); an admin confirms with evidence; a second confirmation is a no-op; and the monthly
+badge reflects the confirmed sale value.
 """
 import asyncio, os, sys, uuid
 from dotenv import load_dotenv
@@ -16,6 +17,8 @@ sys.path.insert(0, '/app/backend')
 async def main():
     from core import db, new_id, now_iso, hash_password, get_or_create_wallet, get_settings
     from shop_routes import cod_collected
+    from cod_rules import CodCollectIn
+    from fastapi import HTTPException
     from badges import monthly_badge
     _db = os.environ.get('DB_NAME', '')
     assert _db.endswith('_test') and _db != 'homegenies', 'set DB_NAME to a dedicated *_test database (never the production name)'
@@ -61,13 +64,26 @@ async def main():
     assert b["sales_value"] == 0, "unpaid COD must not count toward a badge"
     print("PASS: COD order pays nothing and counts nothing until collected")
 
-    # the HomeGenie confirms her own delivery
-    r1 = await cod_collected(o1, request=None, user=seller)
+    async def evidence(oid):
+        o = await db.orders.find_one({"id": oid}, {"_id": 0})
+        return CodCollectIn(amount_collected=o["total"], evidence_type="courier_confirmation", evidence_reference="AWB-TEST-0001")
+
+    # the HomeGenie attributed to the sale cannot confirm her own delivery, even with full evidence
+    refused = None
+    try:
+        await cod_collected(o1, request=None, user=seller, body=await evidence(o1))
+    except HTTPException as e:
+        refused = e
+    assert refused is not None and refused.status_code == 403, "self-confirmation must be refused"
+    assert (await db.orders.find_one({"id": o1}, {"_id": 0}))["payment_status"] == "cod_pending"
+
+    # an admin confirms the first order with courier evidence
+    r1 = await cod_collected(o1, request=None, user=admin, body=await evidence(o1))
     assert r1["commissions"]["credited"] == 3, r1
-    assert (await cod_collected(o1, request=None, user=seller)).get("already") is True, "not idempotent"
+    assert (await cod_collected(o1, request=None, user=admin, body=await evidence(o1))).get("already") is True, "not idempotent"
 
     # an admin confirms the second one
-    r2 = await cod_collected(o2, request=None, user=admin)
+    r2 = await cod_collected(o2, request=None, user=admin, body=await evidence(o2))
     assert r2["commissions"]["credited"] == 3, r2
 
     w = await db.wallets.find_one({"user_id": seller["id"]}, {"_id": 0})
@@ -79,10 +95,11 @@ async def main():
     print("PASS: commission credited only on collection, by both HomeGenie and admin, idempotently")
 
     o1d = await db.orders.find_one({"id": o1}, {"_id": 0})
-    assert o1d["cod_collected_role"] == "homegenie" and o1d["payment_status"] == "paid"
+    assert o1d["cod_collected_role"] == "admin" and o1d["payment_status"] == "paid"
+    assert o1d["cod_collection"]["type"] == "courier_confirmation" and o1d["cod_collection"]["verified_by_system"] is False
     o2d = await db.orders.find_one({"id": o2}, {"_id": 0})
     assert o2d["cod_collected_role"] == "admin"
-    print("PASS: who confirmed the cash is recorded on each order")
+    print("PASS: self-confirmation refused; collection evidence recorded with the confirming admin")
 
     b = await monthly_badge(seller["id"])
     assert b["sales_value"] == 20000 and b["badge"] == "Bronze" and b["next_badge"] == "Silver", b

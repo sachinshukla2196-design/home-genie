@@ -27,6 +27,11 @@ ADDR = {"full_name": "Cust", "mobile": "9000011111", "line1": "1 Road", "city": 
 S = {}
 
 
+def _cod_ok(order):
+    """Full-amount courier confirmation with a reference (the evidence the route requires)."""
+    return {"amount_collected": order["total"], "evidence_type": "courier_confirmation", "evidence_reference": "AWB-TEST-0001"}
+
+
 def _hdr(uid):
     return {"Authorization": f"Bearer {create_token(uid)}"}
 
@@ -310,7 +315,7 @@ def test_dashboard_values_come_from_the_database_and_obey_the_money_identity(c):
     p = _post(c, "ub", _body("DB-1", selling_price=100, mrp=150, stock=500)).json()
     _approve(c, p["id"])
     o1, o2 = _cod_order(c, p, 2), _cod_order(c, p, 1)
-    c.post(f"/api/orders/{o2['id']}/cod-collected", headers=_hdr(S["admin"]["id"]))
+    c.post(f"/api/orders/{o2['id']}/cod-collected", headers=_hdr(S["admin"]["id"]), json=_cod_ok(o2))
     d = _dash(c, "ub")
     s = d["sales"]
     assert s["order_value_paise"] == s["collected_paise"] + s["cod_awaiting_paise"] + s["awaiting_confirmation_paise"] + s["under_review_paise"]

@@ -21,6 +21,7 @@ from core import (db, now_iso, new_id, get_settings, add_wallet_transaction, wal
                  create_notification, log_audit)
 from datetime import datetime, timezone, timedelta
 from money import to_paise, paise_to_float, mul_pct, paise_of
+from cod_rules import collection_is_proven
 from pymongo.errors import DuplicateKeyError
 
 logger = logging.getLogger("homegenies")
@@ -174,6 +175,11 @@ async def resume_distribution(order_id: str) -> dict:
     plan = await db.commission_plans.find_one({"_id": order_id}, {"_id": 0})
     if not plan:
         return {"credited": 0, "reason": "no_plan"}
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0, "payment_method": 1, "payment_status": 1, "cod_collection": 1})
+    if (order or {}).get("payment_method") == "cod" and not collection_is_proven(order):
+        # resume is reached from the release cron and the refund path too; neither may finish a distribution that the
+        # COD proof rule would refuse. The incomplete plan stays visible to wallet_reconcile for operator review.
+        return {"credited": 0, "reason": "cod_collection_not_proven"}
     newly = 0
     for item in plan["items"]:
         if await _apply_item(plan, item):
@@ -200,6 +206,9 @@ async def distribute_sale_commissions(order: dict, buyer: dict, request=None) ->
     seller_id = order.get("seller_user_id")
     if not seller_id or seller_id == buyer.get("id"):
         return {"credited": 0, "reason": "no_attributed_seller"}
+    if order.get("payment_method") == "cod" and not collection_is_proven(order):
+        # defence in depth: a manual exception, an unresolved hold, a short collection or a missing record never earns commission
+        return {"credited": 0, "reason": "cod_collection_not_proven"}
     if await db.commission_plans.find_one({"_id": order["id"]}, {"_id": 1}) is None:
         current = await db.orders.find_one({"id": order["id"]}, {"_id": 0, "commissions_paid": 1})
         if (current or {}).get("commissions_paid"):

@@ -110,7 +110,8 @@ async def open_refund_case(order: dict, kind: str, amount_paise: int, reason: st
 
 
 async def refundable_paise(order: dict) -> int:
-    return paise_of(order, "total_paise", "total") - paise_of(order, "refunded_paise", "refunded_amount")
+    from cod_rules import refundable_total_paise     # a COD order accepted short can only be refunded what was collected
+    return refundable_total_paise(order, paise_of(order, "total_paise", "total")) - paise_of(order, "refunded_paise", "refunded_amount")
 
 
 async def ensure_cases_for_flagged_orders(limit: int = 200):

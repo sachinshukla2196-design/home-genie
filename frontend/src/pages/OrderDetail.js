@@ -6,9 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Logo } from "@/components/Logo";
 import { useI18n } from "@/context/I18nContext";
-import { toast } from "sonner";
-import { useAuth } from "@/context/AuthContext";
-import { API, apiError } from "@/lib/api";
+import { API } from "@/lib/api";
 import { pressable } from "@/components/motion";
 
 const STATUS_COLORS = {
@@ -26,18 +24,10 @@ export default function OrderDetail() {
   const navigate = useNavigate();
   const [o, setO] = useState(null);
   const money = (v) => `₹${Number(v).toLocaleString("en-IN")}`;
-  const { user } = useAuth();
 
   const load = useCallback(() => { API.get(`/orders/${id}`).then(({ data }) => setO(data)).catch(() => {}); }, [id]);
   useEffect(() => { load(); }, [load]);
 
-  const markCollected = async () => {
-    try {
-      await API.post(`/orders/${id}/cod-collected`);
-      toast.success(t("order.collectedOk"));
-      load();
-    } catch (err) { toast.error(apiError(err)); }
-  };
   if (!o) return <Skeleton className="h-96 rounded-3xl" />;
 
   // Visual progress of the existing status field (no extra tracking data is invented).
@@ -160,13 +150,6 @@ export default function OrderDetail() {
           <div className="flex justify-between text-muted2"><span>{t("order.gst")} ({o.gst_percent}%)</span><span className="tabular-nums">{money(o.gst_amount)}</span></div>
           <div className="flex justify-between border-t border-brand-50 pt-2 font-display text-lg font-semibold text-ink"><span>{t("order.total")}</span><span className="tabular-nums text-hg-violet dark:text-hg-lavender">{money(o.total)}</span></div>
         </div>
-        {o.payment_method === "cod" && o.payment_status === "cod_pending" && o.seller_user_id === user?.id && (
-          <motion.div {...pressable} className="mt-6 print:hidden">
-            <Button onClick={markCollected} className="btn-gold h-11 w-full rounded-full" data-testid="order-cod-collected">
-              <Banknote size={16} className="mr-1.5" /> {t("order.markCollected")}
-            </Button>
-          </motion.div>
-        )}
         {o.payment_status !== "paid" && o.payment_method !== "cod" && (
           <motion.div {...pressable} className="mt-6 print:hidden">
             <Button onClick={() => navigate("/app/checkout")} className="hg-btn h-11 w-full rounded-full" data-testid="order-paynow">{t("order.payNow")}</Button>

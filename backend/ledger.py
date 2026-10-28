@@ -126,7 +126,8 @@ async def post_refund_shares(order: dict, refund: dict) -> int:
     """Post each vendor's share of one customer refund event. The refund that closes the order takes exactly the remainder,
     so the vendor's refunds always add up to the sale to the paisa. Idempotent per (refund event, vendor)."""
     n = 0
-    total_p = paise_of(order, "total_paise", "total")
+    from cod_rules import refundable_total_paise
+    total_p = refundable_total_paise(order, paise_of(order, "total_paise", "total"))     # denominator matches the (scaled) sale
     amt_p = refund["amount_paise"] if isinstance(refund.get("amount_paise"), int) else paise_of(refund, "amount_paise", "amount")
     closes = bool(order.get("financials_reversed")) and refund.get("closes_order", False)
     only = refund.get("vendor_id")        # a refund for ONE vendor's returned goods is theirs entirely; otherwise split by value

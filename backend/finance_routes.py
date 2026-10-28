@@ -7,9 +7,9 @@ activates the settlement policy; nothing here invents a commission, fee, deducti
 import csv
 import io
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from pymongo.errors import DuplicateKeyError
@@ -17,6 +17,7 @@ from pymongo.errors import DuplicateKeyError
 import ledger as L
 from core import db, now_iso, new_id, require_admin, log_audit, create_notification, next_sequence
 from money import to_paise, paise_to_float, paise_of
+from cod_rules import refuse_own_sale, parse_resolution, check_resolution_amount
 from pagination import clamp_page, page_meta
 from vendor_routes import require_approved_vendor
 
@@ -382,32 +383,42 @@ async def admin_reconcile(admin: dict = Depends(require_finance)):
 
 
 # ================================================================== admin: COD discrepancies
-class CodResolveIn(BaseModel):
-    resolution: str                                  # confirm_full | accept_short
-    note: str = Field(min_length=5, max_length=300)
-
-
 @router.post("/admin/finance/cod-discrepancies/{order_id}/resolve")
-async def resolve_cod_discrepancy(order_id: str, body: CodResolveIn, request: Request, admin: dict = Depends(require_finance)):
-    """Close a COD amount mismatch after verification.
-    confirm_full : the full order total WAS received; the order is confirmed and commissions are credited as normal.
-    accept_short : only the reported (lower) amount was received; the order is confirmed, the vendor's sale is recorded
-                   pro rata, and commissions are NOT credited (that policy is undecided) - they stay held for review."""
-    if body.resolution not in ("confirm_full", "accept_short"):
-        raise HTTPException(status_code=400, detail="resolution must be confirm_full or accept_short.")
+async def resolve_cod_discrepancy(order_id: str, request: Request, admin: dict = Depends(require_finance), body: Any = Body(default=None)):
+    """Close a held COD order after independent review. Rules live in `cod_rules`.
+    The role gate (`require_finance`) has already run. Then: the order must be an open discrepancy, the reviewer must not be
+    the reporter or the attributed HomeGenie, and only then is the body validated (reason, collected amount, courier or
+    provider evidence type and reference; a note alone is not evidence). All of that happens before any write.
+    confirm_full : the reviewer records that the full total was collected; commission is distributed once, as for any paid order.
+    accept_short : a lower amount was collected; the order is closed, the vendor sale is recorded pro rata, and commission stays
+                   held (`short_collection_held`) because the owner has not set a policy for short collections."""
     o = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not o or o.get("payment_status") != "cod_discrepancy":
         raise HTTPException(status_code=404, detail="No open COD discrepancy on this order.")
     d = o["cod_discrepancy"]
-    collected_p = d["expected_paise"] if body.resolution == "confirm_full" else d["collected_paise"]
+    if d.get("reported_by") == admin["id"]:
+        # maker and checker must differ: whoever reported the mismatch or exception cannot also close it
+        raise HTTPException(status_code=403, detail="A different finance admin must resolve this COD discrepancy.")
+    refuse_own_sale(admin, o)
+    r = parse_resolution(body)
+    expected_p = d["expected_paise"]
+    collected_p = to_paise(r.collected_amount)
+    check_resolution_amount(r.resolution, collected_p, expected_p)
     now = now_iso()
+    collection = {"type": r.evidence_type, "reference": r.evidence_reference, "note": r.reason, "recorded_by": admin["id"],
+                  "recorded_at": now, "verified_by_system": False,       # recorded at review; no courier or provider integration verifies it
+                  "expected_paise": expected_p, "collected_paise": collected_p}
     claim = await db.orders.update_one(
         {"id": order_id, "payment_status": "cod_discrepancy"},
         {"$set": {"payment_status": "paid", "status": "delivered", "cod_collected_paise": collected_p, "cod_collected_by": admin["id"],
                   "cod_collected_role": "admin", "cod_collected_at": now, "paid_at": now, "updated_at": now,
-                  "cod_discrepancy.status": "resolved", "cod_discrepancy.resolution": body.resolution,
-                  "cod_discrepancy.resolved_by": admin["id"], "cod_discrepancy.resolved_at": now, "cod_discrepancy.note": body.note.strip(),
-                  **({"commission_note": "short_collection_held"} if body.resolution == "accept_short" else {})}})
+                  "cod_collection": collection,
+                  "cod_discrepancy.status": "resolved", "cod_discrepancy.resolution": r.resolution,
+                  "cod_discrepancy.resolved_by": admin["id"], "cod_discrepancy.resolved_at": now, "cod_discrepancy.note": r.reason,
+                  "cod_discrepancy.resolution_evidence": {"type": r.evidence_type, "reference": r.evidence_reference,
+                                                          "collected_paise": collected_p, "reviewer": admin["id"], "reviewed_at": now},
+                  **({"commission_note": "short_collection_held", "cod_short_collected": True,
+                      "cod_shortfall_paise": expected_p - collected_p} if r.resolution == "accept_short" else {})}})
     if claim.modified_count != 1:
         raise HTTPException(status_code=409, detail="This discrepancy was just resolved.")
     o = await db.orders.find_one({"id": order_id}, {"_id": 0})
@@ -415,13 +426,15 @@ async def resolve_cod_discrepancy(order_id: str, body: CodResolveIn, request: Re
         inv = await next_sequence("invoice", "INV", 6)
         await db.orders.update_one({"id": order_id, "invoice_number": None}, {"$set": {"invoice_number": inv}})
     commissions = None
-    if body.resolution == "confirm_full":
+    if r.resolution == "confirm_full":
         buyer = await db.users.find_one({"id": o["user_id"]}, {"_id": 0})
-        from commission import distribute_sale_commissions
+        from commission import distribute_sale_commissions      # itself refuses unless collection_is_proven(order)
         commissions = await distribute_sale_commissions(o, buyer or {}, request)
     await L.post_order_collected(await db.orders.find_one({"id": order_id}, {"_id": 0}))
-    await log_audit(admin, "cod_discrepancy_resolved", "order", order_id, old_value=d, new_value={"resolution": body.resolution, "note": body.note}, request=request)
-    return {"ok": True, "resolution": body.resolution, "commissions": commissions}
+    await log_audit(admin, "cod_discrepancy_resolved", "order", order_id, old_value=d,
+                    new_value={"resolution": r.resolution, "reason": r.reason, "collected_paise": collected_p,
+                               "evidence_type": r.evidence_type, "evidence_reference": r.evidence_reference}, request=request)
+    return {"ok": True, "resolution": r.resolution, "commissions": commissions}
 
 
 @router.get("/admin/finance/cod-discrepancies")

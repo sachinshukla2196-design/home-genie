@@ -239,7 +239,8 @@ async def refund_order(order_id: str, body: RefundBody, request: Request, admin:
         raise HTTPException(status_code=404, detail="Order not found.")
     if o.get("payment_status") not in ("paid", "partially_refunded"):
         raise HTTPException(status_code=400, detail="Only paid orders can be refunded.")
-    remaining_p = paise_of(o, "total_paise", "total") - paise_of(o, "refunded_paise", "refunded_amount")
+    from cod_rules import refundable_total_paise
+    remaining_p = refundable_total_paise(o, paise_of(o, "total_paise", "total")) - paise_of(o, "refunded_paise", "refunded_amount")
     remaining = paise_to_float(remaining_p)
     if body.amount is not None and (to_paise(body.amount) <= 0 or to_paise(body.amount) > remaining_p):
         raise HTTPException(status_code=400, detail=f"Refund amount must be between 0 and ₹{remaining}.")

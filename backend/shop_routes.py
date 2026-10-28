@@ -2,9 +2,9 @@
 import os
 import logging
 from decimal import Decimal, ROUND_HALF_UP
-from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi import APIRouter, Body, HTTPException, Request, Depends
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import Any, List, Optional
 
 try:  # Emergent's private package (preinstalled only in Emergent's image) — unchanged behaviour there
     from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionRequest
@@ -14,6 +14,7 @@ except ImportError:  # other hosts (e.g. Vercel): same interface on the official
     _STRIPE_VIA_EMERGENT = False
 
 from money import to_paise, paise_to_float, mul_pct, mul_ratio, paise_of
+from cod_rules import refundable_total_paise, require_confirmer_role, refuse_own_sale, parse_collection_evidence, hold_reason
 from pymongo.errors import DuplicateKeyError
 from core import (db, now_iso, new_id, get_current_user, get_settings, next_sequence, wallet_apply,
                   add_wallet_transaction, create_notification, log_audit, require_admin, P_PUBLIC)
@@ -198,55 +199,63 @@ async def create_order(body: CreateOrder, request: Request, user: dict = Depends
     return order
 
 
-class CodCollectIn(BaseModel):
-    amount_collected: Optional[float] = Field(default=None, gt=0)   # rupees actually received; omitted = the full order total
-
-
 @router.post("/orders/{order_id}/cod-collected")
-async def cod_collected(order_id: str, request: Request, user: dict = Depends(get_current_user), body: Optional[CodCollectIn] = None):
-    """Confirm that cash was collected for a COD order.
+async def cod_collected(order_id: str, request: Request, user: dict = Depends(get_current_user), body: Any = Body(default=None)):
+    """Confirm that cash was collected for a COD order. The rules live in `cod_rules` (see its docstring).
 
-    Allowed for the attributed HomeGenie (own sale) and for admins. Commission is credited
-    only at this point, never when the COD order is placed. If the reported amount differs from the order total the
-    order is held as a COD DISCREPANCY: no payment confirmation, commission or vendor sale until an admin resolves it.
+    Order of checks, so a refused request changes nothing and reveals nothing:
+      1. role gate (admin or super_admin only; accounts_admin and everyone else are refused),
+      2. the order exists and is a COD order, and the actor is not the HomeGenie attributed to it,
+      3. already-processed orders return unchanged,
+      4. only now is the body read and validated (amount, evidence type, reference),
+      5. a manual exception, or any amount other than the order total, is HELD for independent review and never paid here,
+      6. otherwise the order is claimed once with a conditional update and commission is distributed once.
     """
+    require_confirmer_role(user)
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not order:
         raise HTTPException(status_code=404, detail="Order not found.")
     if order.get("payment_method") != "cod":
         raise HTTPException(status_code=400, detail="This is not a cash-on-delivery order.")
-    is_admin = user.get("role") in ("admin", "super_admin")
-    if not is_admin and order.get("seller_user_id") != user["id"]:
-        raise HTTPException(status_code=403, detail="Only the HomeGenie for this sale or an admin can confirm collection.")
+    refuse_own_sale(user, order)
     if order.get("payment_status") == "paid":
         return {"ok": True, "already": True}
     if order.get("payment_status") == "cod_discrepancy":
         return {"ok": True, "discrepancy": True, "already": True}
     if order.get("status") == "cancelled":
         raise HTTPException(status_code=400, detail="This order is cancelled, so cash cannot be confirmed for it.")
+    entry = parse_collection_evidence(body)
     expected_p = paise_of(order, "total_paise", "total")
-    collected_p = to_paise(body.amount_collected) if body and body.amount_collected is not None else expected_p
-    if collected_p != expected_p:
+    collected_p = to_paise(entry.amount_collected)
+    evidence = {"type": entry.evidence_type, "reference": entry.evidence_reference, "note": entry.note,
+                "recorded_by": user["id"], "recorded_at": now_iso(),
+                "verified_by_system": False}      # no courier or provider integration exists; the reference is recorded, not verified
+    reason = hold_reason(entry.evidence_type, collected_p, expected_p)
+    if reason:
         held = await db.orders.update_one(
             {"id": order_id, "payment_status": "cod_pending"},
             {"$set": {"payment_status": "cod_discrepancy", "updated_at": now_iso(),
                       "cod_discrepancy": {"expected_paise": expected_p, "collected_paise": collected_p, "status": "open",
+                                          "reason": reason, "evidence": evidence,
                                           "reported_by": user["id"], "reported_at": now_iso()}}})
         if held.modified_count == 1:
             await log_audit(user, "cod_discrepancy_reported", "order", order_id,
-                            new_value={"expected_paise": expected_p, "collected_paise": collected_p}, request=request)
+                            new_value={"expected_paise": expected_p, "collected_paise": collected_p, "reason": reason,
+                                       "evidence_type": entry.evidence_type}, request=request)
             for a in await db.users.find({"role": {"$in": ["super_admin", "accounts_admin"]}}, {"_id": 0, "id": 1}).to_list(20):
                 await create_notification(a["id"], "order", "COD discrepancy",
                                           f"Order {order['order_number']}: expected {paise_to_float(expected_p)}, reported {paise_to_float(collected_p)}.",
                                           meta={"order_id": order_id})
-        return {"ok": True, "discrepancy": True, "expected": paise_to_float(expected_p), "collected": paise_to_float(collected_p)}
+        return {"ok": True, "discrepancy": True, "expected": paise_to_float(expected_p), "collected": paise_to_float(collected_p),
+                "reason": reason}
 
     claim = await db.orders.update_one(
         {"id": order_id, "payment_status": "cod_pending"},
         {"$set": {"payment_status": "paid", "status": "delivered",
                   "cod_collected_by": user["id"],
                   "cod_collected_by_id": user.get("distributor_id"),
-                  "cod_collected_role": "admin" if is_admin else "homegenie",
+                  "cod_collected_role": "admin",
+                  "cod_collection": {**evidence, "expected_paise": expected_p, "collected_paise": collected_p},
                   "cod_collected_at": now_iso(), "paid_at": now_iso(), "updated_at": now_iso()}})
     if claim.modified_count != 1:
         return {"ok": True, "already": True}
@@ -460,7 +469,7 @@ async def _reserve_refund(order_id: str, event: dict):
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if event["id"] in order.get("refund_event_ids", []):
         return None
-    total_p = paise_of(order, "total_paise", "total")
+    total_p = refundable_total_paise(order, paise_of(order, "total_paise", "total"))
     already_p = paise_of(order, "refunded_paise", "refunded_amount")
     new_total_p = already_p + int(event["amount_paise"])
     if new_total_p > total_p or (new_total_p >= total_p) != bool(event["closes_order"]):
@@ -499,7 +508,7 @@ async def _reverse_commission(c: dict, event: dict, order: dict) -> int:
         credited_p = paise_of(c, "amount_paise", "amount")
         done_p = paise_of(c, "reversed_paise", "reversed_amount")
         room_p = credited_p - done_p
-        total_p = paise_of(order, "total_paise", "total")
+        total_p = refundable_total_paise(order, paise_of(order, "total_paise", "total"))
         claw_p = min(room_p if event["closes_order"] else mul_ratio(credited_p, int(event["amount_paise"]), total_p), room_p)
         if claw_p <= 0:
             return 0
@@ -537,7 +546,7 @@ async def reverse_order_financials(order_id: str, actor: dict = None, request: R
     event_id = f"{order_id}:refund:{reference or 'full'}"
     event = await db.order_refunds.find_one({"id": event_id}, {"_id": 0})
     if event is None:
-        total_p = paise_of(order, "total_paise", "total")
+        total_p = refundable_total_paise(order, paise_of(order, "total_paise", "total"))
         already_p = paise_of(order, "refunded_paise", "refunded_amount")
         remaining_p = total_p - already_p
         amt_p = remaining_p if refund_amount is None else to_paise(refund_amount)

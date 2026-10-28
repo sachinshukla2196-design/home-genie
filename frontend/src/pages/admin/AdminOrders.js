@@ -54,13 +54,42 @@ export default function AdminOrders() {
 
   const change = async (id, status) => { try { await API.put(`/admin/orders/${id}/status`, { status }); toast.success(t("cta.save")); load(); } catch (e) { toast.error(apiError(e)); } };
 
-  const markCollected = async (o) => {
-    if (!window.confirm(`Confirm cash of ${money(o.total)} collected for ${o.order_number}? This credits the HomeGenie commission.`)) return;
+  // Collection needs the amount actually received, the evidence type and a reference. Nothing is assumed or pre-filled,
+  // and the server repeats every check. A manual exception is held for finance review, not marked paid.
+  const EVIDENCE_TYPES = [
+    ["courier_confirmation", "Courier confirmation"],
+    ["provider_confirmation", "Provider confirmation"],
+    ["manual_exception", "Manual exception (held for review)"],
+  ];
+  const REFERENCE_RE = /^[A-Za-z0-9][A-Za-z0-9 ._/#:-]{2,119}$/;
+  const emptyCod = { evidenceType: "courier_confirmation", reference: "", amount: "", note: "" };
+  const [codFor, setCodFor] = useState(null);
+  const [cod, setCod] = useState(emptyCod);
+  const [codBusy, setCodBusy] = useState(false);
+  const [codError, setCodError] = useState("");
+  const openCod = (o) => { setCod(emptyCod); setCodError(""); setCodFor(o); };
+  const closeCod = () => { if (!codBusy) setCodFor(null); };
+  const codProblem = () => {
+    const amount = Number(cod.amount);
+    if (cod.amount.trim() === "" || !Number.isFinite(amount) || amount <= 0) return "Enter the amount actually collected as a positive number.";
+    if (!/^\d+(\.\d{1,2})?$/.test(cod.amount.trim())) return "The amount can have at most 2 decimal places.";
+    if (!REFERENCE_RE.test(cod.reference.trim())) return "Enter the courier or provider reference (3 to 120 characters: letters, digits, space and . _ / # : -).";
+    return "";
+  };
+  const submitCod = async () => {
+    if (codBusy) return;
+    const problem = codProblem();
+    if (problem) { setCodError(problem); return; }
+    setCodBusy(true); setCodError("");
     try {
-      await API.post(`/orders/${o.id}/cod-collected`);
-      toast.success("Cash collected — commission credited");
+      const { data } = await API.post(`/orders/${codFor.id}/cod-collected`, {
+        amount_collected: Number(cod.amount), evidence_type: cod.evidenceType,
+        evidence_reference: cod.reference.trim(), note: cod.note.trim(),
+      });
+      toast.success(data.discrepancy ? "Recorded as a discrepancy for finance review" : "Cash collection recorded");
+      setCodFor(null);
       load();
-    } catch (err) { toast.error(apiError(err)); }
+    } catch (err) { setCodError(apiError(err)); } finally { setCodBusy(false); }
   };
 
   const refundOrder = async (o) => {
@@ -189,7 +218,7 @@ export default function AdminOrders() {
                 <td className="px-4 py-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className={`whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ${PAY_PILL(o.payment_status)}`}>{o.payment_status}</span>
-                    {o.payment_method === "cod" && o.payment_status === "cod_pending" && <button onClick={() => markCollected(o)} className="whitespace-nowrap rounded-full bg-hg-gold px-3 py-1 text-xs font-semibold text-hg-bg transition-transform hover:-translate-y-0.5" data-testid={`cod-collect-${o.order_number}`}>Cash collected</button>}
+                    {o.payment_method === "cod" && o.payment_status === "cod_pending" && <button onClick={() => openCod(o)} className="whitespace-nowrap rounded-full bg-hg-gold px-3 py-1 text-xs font-semibold text-hg-bg transition-transform hover:-translate-y-0.5" data-testid={`cod-collect-${o.order_number}`}>Cash collected</button>}
                     {o.payment_status === "claimed" && <button onClick={() => { setConfirmFor(o); setReference(o.upi_reference || ""); }} className="hg-btn whitespace-nowrap rounded-full px-3 py-1 text-xs font-semibold text-white transition-transform hover:-translate-y-0.5" data-testid={`upi-confirm-${o.order_number}`}>Confirm UPI</button>}
                   </div>
                 </td>
@@ -249,6 +278,52 @@ export default function AdminOrders() {
                 <Button onClick={submitConfirm} disabled={saving || !reference.trim()} className="hg-btn h-11 flex-1 rounded-full" data-testid="submit-confirm-btn">{saving ? "Confirming…" : "Confirm & Activate"}</Button>
               </div>
             </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {codFor && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" onClick={closeCod} data-testid="cod-collect-modal">
+            <motion.form initial={{ scale: 0.94, y: 12 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.94, y: 12 }} noValidate
+              onClick={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); submitCod(); }}
+              className="hg-glass w-full max-w-md rounded-3xl p-5 sm:p-6">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 className="font-display text-lg font-semibold text-ink">Record cash collection</h3>
+                  <p className="text-xs text-muted2">Order {codFor.order_number} · order total {money(codFor.total)}</p>
+                </div>
+                <button type="button" onClick={closeCod} aria-label="Close" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted2 transition-colors hover:bg-brand-50 hover:text-ink" data-testid="close-cod-modal"><X size={18} /></button>
+              </div>
+              <div className="mt-5 space-y-4">
+                <div>
+                  <Label className="text-sm text-ink">Evidence type <span className="text-danger">*</span></Label>
+                  <Select value={cod.evidenceType} onValueChange={(v) => setCod({ ...cod, evidenceType: v })}>
+                    <SelectTrigger className="mt-1.5" data-testid="cod-evidence-type"><SelectValue /></SelectTrigger>
+                    <SelectContent>{EVIDENCE_TYPES.map(([v, l]) => <SelectItem key={v} value={v}>{l}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-sm text-ink">Courier or provider reference <span className="text-danger">*</span></Label>
+                  <Input autoFocus value={cod.reference} onChange={(e) => setCod({ ...cod, reference: e.target.value })} maxLength={120}
+                    placeholder="e.g. AWB-1234567" className="mt-1.5 font-mono" data-testid="cod-reference-input" />
+                </div>
+                <div>
+                  <Label className="text-sm text-ink">Amount actually collected (₹) <span className="text-danger">*</span></Label>
+                  <Input inputMode="decimal" value={cod.amount} onChange={(e) => setCod({ ...cod, amount: e.target.value })}
+                    placeholder="Enter the amount received" className="mt-1.5" data-testid="cod-amount-input" />
+                </div>
+                <div>
+                  <Label className="text-sm text-ink">Note (optional)</Label>
+                  <Input value={cod.note} onChange={(e) => setCod({ ...cod, note: e.target.value })} maxLength={300} className="mt-1.5" data-testid="cod-note-input" />
+                </div>
+                {codError && <p role="alert" className="text-sm text-danger" data-testid="cod-error">{codError}</p>}
+              </div>
+              <div className="mt-6 flex flex-wrap gap-3">
+                <Button type="button" variant="outline" onClick={closeCod} className="h-11 flex-1 rounded-full border-brand-50 bg-transparent" data-testid="cod-cancel-btn">Cancel</Button>
+                <Button type="submit" disabled={codBusy} className="hg-btn h-11 flex-1 rounded-full" data-testid="cod-submit-btn">{codBusy ? "Recording…" : "Record collection"}</Button>
+              </div>
+            </motion.form>
           </motion.div>
         )}
       </AnimatePresence>

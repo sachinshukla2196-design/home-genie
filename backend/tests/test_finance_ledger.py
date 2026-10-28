@@ -29,6 +29,16 @@ CRON = {"Authorization": "Bearer cron-test-secret"}
 S = {}
 
 
+def _resolve(resolution, amount):
+    return {"resolution": resolution, "reason": "Reviewed courier remittance", "collected_amount": amount,
+            "evidence_type": "courier_confirmation", "evidence_reference": "AWB-REVIEW-0001"}
+
+
+def _cod_ok(order):
+    """Full-amount courier confirmation with a reference (the evidence the route requires)."""
+    return {"amount_collected": order["total"], "evidence_type": "courier_confirmation", "evidence_reference": "AWB-TEST-0001"}
+
+
 def _hdr(uid):
     return {"Authorization": f"Bearer {create_token(uid)}"}
 
@@ -139,9 +149,9 @@ def test_cod_sale_is_recorded_only_when_cash_is_confirmed(c):
     pa = _product(c, "L-A2", 200.0, "va")
     o = _order(c, [(pa, 1)], method="cod")
     assert _entries(c, order_id=o["id"]) == []
-    assert c.post(f"/api/orders/{o['id']}/cod-collected", headers=_hdr(S["fin2"]["id"])).status_code == 200
+    assert c.post(f"/api/orders/{o['id']}/cod-collected", headers=_hdr(S["fin2"]["id"]), json=_cod_ok(o)).status_code == 200
     assert [e["amount_paise"] for e in _entries(c, "va", order_id=o["id"])] == [20000]
-    c.post(f"/api/orders/{o['id']}/cod-collected", headers=_hdr(S["fin2"]["id"]))
+    c.post(f"/api/orders/{o['id']}/cod-collected", headers=_hdr(S["fin2"]["id"]), json=_cod_ok(o))
     assert len(_entries(c, order_id=o["id"])) == 1
 
 
@@ -363,7 +373,7 @@ def test_statement_csv_is_vendor_scoped_exact_and_formula_safe(c):
 def test_cod_short_collection_is_held_until_an_admin_resolves_it(c):
     pa = _product(c, "L-A8", 200.0, "va")
     o = _order(c, [(pa, 1)], method="cod", seller="HGSEL")                                # total 210.00
-    r = c.post(f"/api/orders/{o['id']}/cod-collected", headers=_hdr(S["fin2"]["id"]), json={"amount_collected": 180.0})
+    r = c.post(f"/api/orders/{o['id']}/cod-collected", headers=_hdr(S["fin2"]["id"]), json={"amount_collected": 180.0, "evidence_type": "courier_confirmation", "evidence_reference": "AWB-TEST-0003"})
     assert r.status_code == 200 and r.json()["discrepancy"] is True
     got = c.portal.call(lambda: db.orders.find_one({"id": o["id"]}))
     assert got["payment_status"] == "cod_discrepancy" and got["cod_discrepancy"]["expected_paise"] == 21000 and got["cod_discrepancy"]["collected_paise"] == 18000
@@ -372,21 +382,21 @@ def test_cod_short_collection_is_held_until_an_admin_resolves_it(c):
     states = c.get("/api/vendor/finance/cod", headers=_hdr(S["ua"]["id"])).json()
     assert next(x for x in states["items"] if x["order_id"] == o["id"])["state"] == "discrepancy" and states["summary"]["discrepancy_paise"] >= 20000
     url = f"/api/admin/finance/cod-discrepancies/{o['id']}/resolve"
-    assert c.post(url, headers=_hdr(S["genie"]["id"]), json={"resolution": "confirm_full", "note": "I say so"}).status_code == 403
-    assert c.post(url, headers=_hdr(S["supp"]["id"]), json={"resolution": "confirm_full", "note": "support cannot"}).status_code == 403
-    assert c.post(url, headers=_hdr(S["fin"]["id"]), json={"resolution": "maybe", "note": "invalid choice"}).status_code == 400
-    assert c.post(url, headers=_hdr(S["fin"]["id"]), json={"resolution": "accept_short", "note": "Customer paid 180, balance waived"}).status_code == 200
+    assert c.post(url, headers=_hdr(S["genie"]["id"]), json=_resolve("confirm_full", 210.0)).status_code == 403
+    assert c.post(url, headers=_hdr(S["supp"]["id"]), json=_resolve("confirm_full", 210.0)).status_code == 403
+    assert c.post(url, headers=_hdr(S["fin"]["id"]), json=_resolve("maybe", 210.0)).status_code == 422
+    assert c.post(url, headers=_hdr(S["fin"]["id"]), json=_resolve("accept_short", 180.0)).status_code == 200
     assert [e["amount_paise"] for e in _entries(c, "va", order_id=o["id"])] == [17143]       # 200.00 x 180.00/210.00, half-up
     assert c.portal.call(lambda: db.commissions.count_documents({"order_id": o["id"]})) == 0  # held: no commission on a short collection
-    assert c.post(url, headers=_hdr(S["fin"]["id"]), json={"resolution": "confirm_full", "note": "second attempt"}).status_code == 404   # already resolved
+    assert c.post(url, headers=_hdr(S["fin"]["id"]), json=_resolve("confirm_full", 210.0)).status_code == 404   # already resolved
 
 
 def test_cod_full_confirmation_of_a_discrepancy_credits_commission_and_the_full_sale(c):
     pa = _product(c, "L-A9", 200.0, "va")
     o = _order(c, [(pa, 1)], method="cod", seller="HGSEL")
-    c.post(f"/api/orders/{o['id']}/cod-collected", headers=_hdr(S["fin2"]["id"]), json={"amount_collected": 100.0})
+    c.post(f"/api/orders/{o['id']}/cod-collected", headers=_hdr(S["fin2"]["id"]), json={"amount_collected": 100.0, "evidence_type": "courier_confirmation", "evidence_reference": "AWB-TEST-0004"})
     r = c.post(f"/api/admin/finance/cod-discrepancies/{o['id']}/resolve", headers=_hdr(S["fin"]["id"]),
-               json={"resolution": "confirm_full", "note": "Verified full cash received later"})
+               json=_resolve("confirm_full", 210.0))
     assert r.status_code == 200
     assert [e["amount_paise"] for e in _entries(c, "va", order_id=o["id"])] == [20000]
     assert c.portal.call(lambda: db.commissions.count_documents({"order_id": o["id"]})) >= 1
