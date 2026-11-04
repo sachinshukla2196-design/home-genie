@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from decimal import Decimal
+from pymongo.errors import DuplicateKeyError
 from typing import Optional, List
 from datetime import datetime, timezone
 from pagination import clamp_page, page_meta
@@ -54,7 +55,7 @@ async def admin_dashboard(admin: dict = Depends(require_admin)):
     red_users = await db.users.count_documents({"status": "red", "role": {"$in": ["distributor", "customer", "vendor"]}})
     green_users = await db.users.count_documents({"status": "green", "role": {"$in": ["distributor", "customer", "vendor"]}})
     pending_kyc = await db.kyc_records.count_documents({"status": "pending"})
-    pending_wd = await db.withdrawal_requests.count_documents({"status": {"$in": ["pending", "under_review"]}})
+    pending_wd = await db.withdrawal_requests.count_documents({"status": {"$in": list(REQUESTED_STATES)}})   # requested, awaiting approval
 
     def today_q(field="created_at"):
         return {field: {"$regex": f"^{today}"}}
@@ -455,54 +456,157 @@ async def admin_withdrawals(status: Optional[str] = None, admin: dict = Depends(
     q = {}
     if status:
         q["status"] = status
-    return await db.withdrawal_requests.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    rows = await db.withdrawal_requests.find(q, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    ids = {r.get(k) for r in rows for k in ("approved_by", "paid_by", "rejected_by") if r.get(k)}
+    names = {u["id"]: u.get("full_name") for u in await db.users.find({"id": {"$in": list(ids)}}, {"_id": 0, "id": 1, "full_name": 1}).to_list(len(ids) or 1)}
+    for r in rows:
+        for k in ("approved_by", "paid_by", "rejected_by"):
+            if r.get(k):
+                r[k + "_name"] = names.get(r[k])
+    return rows
 
 
 class WithdrawalReview(BaseModel):
     action: str  # approve / reject / mark_paid
     note: Optional[str] = ""
+    payout_reference: Optional[str] = None   # required for mark_paid: the bank / UTR / processor reference the finance user supplies
+
+
+# The business state REQUESTED is stored as "pending" (what POST /api/withdrawals creates). "under_review" is never created by any
+# route; a legacy record in it is treated exactly as requested everywhere (review, dashboard count, finance report, screens).
+REQUESTED_STATES = ("pending", "under_review")
+PAYOUT_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._/#:\-]{2,63}$")
+
+
+def _finalised():
+    return HTTPException(status_code=400, detail="This withdrawal has already been finalised.")
 
 
 @router.put("/withdrawals/{wd_id}")
-async def review_withdrawal(wd_id: str, body: WithdrawalReview, request: Request, admin: dict = Depends(require_admin)):
+async def review_withdrawal(wd_id: str, body: WithdrawalReview, request: Request, admin: dict = Depends(require_money_admin)):
+    """Withdrawal review: super_admin / accounts_admin only. The workflow is REQUESTED -> APPROVED -> PAID, or -> REJECTED.
+
+    approve   : requested -> approved; the approver and time are recorded (a legacy approval without an approver may be re-recorded).
+    reject    : requested or approved -> rejected; the reservation returns to available.
+    mark_paid : approved -> paid only, by a DIFFERENT finance user from the approver, with a payout reference that has not been
+                used for another withdrawal. The money moves FIRST in one conditional wallet update that re-checks the wallet
+                is still safe (available balance not negative, reservation still in pending) and records the operation key, so
+                pay and reject exclude each other and neither applies twice. Then the status is claimed. A retry finishes it."""
     wr = await db.withdrawal_requests.find_one({"id": wd_id}, {"_id": 0})
     if not wr:
         raise HTTPException(status_code=404, detail="Withdrawal not found.")
-    settings = await get_settings()
-    sym = settings.get("currency_symbol", "₹")
-
-    new_status = None
     if body.action not in ("approve", "mark_paid", "reject"):
         raise HTTPException(status_code=400, detail="Invalid action.")
-    target = {"approve": "approved", "mark_paid": "paid", "reject": "rejected"}[body.action]
-    # Atomically claim the transition from a non-terminal state — makes the review
-    # idempotent so a double approve/pay/reject can never double-modify the wallet.
-    claimed = await db.withdrawal_requests.update_one(
-        {"id": wd_id, "status": {"$in": ["pending", "under_review", "approved"]}},
-        {"$set": {"status": target, "admin_note": body.note, "updated_at": now_iso()}})
-    if claimed.modified_count != 1:
-        raise HTTPException(status_code=400, detail="This withdrawal has already been finalised.")
-    new_status = target
-    if body.action == "mark_paid":
-        # settle: clear the held pending amount and record it as withdrawn
-        wd_p = paise_of(wr, "amount_paise", "amount")
-        await wallet_apply(wr["user_id"], {"pending_balance": -wd_p, "total_withdrawn": wd_p})
-        await add_wallet_transaction(wr["user_id"], "WITHDRAWAL", wr["amount"], "PAID",
-                                     description="Withdrawal paid", direction="debit")
-    elif body.action == "reject":
-        # return the held amount to available balance
-        wd_p = paise_of(wr, "amount_paise", "amount")
-        await wallet_apply(wr["user_id"], {"available_balance": wd_p, "pending_balance": -wd_p})
-        await add_wallet_transaction(wr["user_id"], "WITHDRAWAL", wr["amount"], "REJECTED",
-                                     description="Withdrawal rejected - amount returned", direction="credit")
+    settings = await get_settings()
+    sym = settings.get("currency_symbol", "₹")
+    now = now_iso()
+    note = (body.note or "").strip()[:300]
 
-    await create_notification(wr["user_id"], "withdrawal", f"Withdrawal {new_status}",
-                              f"Your withdrawal of {sym}{int(wr['amount'])} is now {new_status}.",
-                              f"निकासी {new_status}",
-                              f"आपकी {sym}{int(wr['amount'])} की निकासी अब {new_status} है।")
-    await log_audit(admin, "withdrawal_reviewed", "withdrawal", wd_id,
-                    old_value={"status": wr["status"]}, new_value={"status": new_status}, request=request)
-    return {"ok": True, "status": new_status}
+    if body.action == "approve":
+        if wr.get("status") == "approved" and wr.get("approved_by"):
+            if wr["approved_by"] == admin["id"]:
+                return {"ok": True, "status": "approved", "already": True}
+            raise HTTPException(status_code=409, detail="This withdrawal was already approved by another finance user.")
+        flt = {"id": wd_id, "$or": [{"status": {"$in": list(REQUESTED_STATES)}}, {"status": "approved", "approved_by": None}]}
+        claimed = await db.withdrawal_requests.update_one(
+            flt, {"$set": {"status": "approved", "approved_by": admin["id"], "approved_at": now, "admin_note": note, "updated_at": now}})
+        if claimed.modified_count != 1:
+            current = await db.withdrawal_requests.find_one({"id": wd_id}, {"_id": 0}) or {}
+            if current.get("status") == "approved" and current.get("approved_by") == admin["id"]:
+                return {"ok": True, "status": "approved", "already": True}
+            if current.get("status") == "approved":
+                raise HTTPException(status_code=409, detail="This withdrawal was already approved by another finance user.")
+            raise _finalised()
+        await log_audit(admin, "withdrawal_approved", "withdrawal", wd_id, old_value={"status": wr["status"]},
+                        new_value={"status": "approved", "approved_by": admin["id"]}, request=request)
+        await create_notification(wr["user_id"], "withdrawal", "Withdrawal approved",
+                                  f"Your withdrawal of {sym}{int(wr['amount'])} is approved and will be paid.",
+                                  "निकासी स्वीकृत", f"आपकी {sym}{int(wr['amount'])} की निकासी स्वीकृत हुई।")
+        return {"ok": True, "status": "approved"}
+
+    wd_p = paise_of(wr, "amount_paise", "amount")
+    pay_op, reject_op = f"withdrawal_paid:{wd_id}", f"withdrawal_rejected:{wd_id}"
+    my_op = pay_op if body.action == "mark_paid" else reject_op
+    target = "paid" if body.action == "mark_paid" else "rejected"
+    wallet = await db.wallets.find_one({"user_id": wr["user_id"]}, {"_id": 0, "applied_ops": 1}) or {}
+    done = set(wallet.get("applied_ops") or [])
+    if (pay_op in done or reject_op in done) and my_op not in done:
+        raise _finalised()
+    ref = None
+    if my_op not in done:                                   # first attempt: every precondition is checked before money moves
+        if body.action == "mark_paid":
+            if wr.get("status") != "approved":
+                raise HTTPException(status_code=409, detail="A withdrawal must be approved before it can be paid."
+                                    if wr.get("status") in REQUESTED_STATES else "This withdrawal has already been finalised.")
+            if not wr.get("approved_by"):
+                raise HTTPException(status_code=409, detail="This approval predates approver records. Approve it again before paying.")
+            if wr["approved_by"] == admin["id"]:
+                raise HTTPException(status_code=403, detail="The finance user who approved this withdrawal cannot also pay it.")
+            ref = (body.payout_reference or "").strip()
+            if not PAYOUT_REF_RE.match(ref):
+                raise HTTPException(status_code=422, detail="A payout reference (UTR / bank or processor reference, 3-64 characters: "
+                                                            "letters, digits, space and . _ / # : -) is required to mark a withdrawal paid.")
+            try:                                            # one reference, one withdrawal (the _id makes this race-safe)
+                await db.withdrawal_payout_refs.insert_one({"_id": ref.upper(), "withdrawal_id": wd_id, "by": admin["id"], "at": now})
+            except DuplicateKeyError:
+                owner = await db.withdrawal_payout_refs.find_one({"_id": ref.upper()}) or {}
+                if owner.get("withdrawal_id") != wd_id:
+                    raise HTTPException(status_code=409, detail="This payout reference is already recorded for another withdrawal.")
+            flt = {"available_balance_paise": {"$gte": 0}, "pending_balance_paise": {"$gte": wd_p}}
+            inc = {"pending_balance_paise": -wd_p, "pending_balance": paise_to_float(-wd_p),
+                   "total_withdrawn_paise": wd_p, "total_withdrawn": paise_to_float(wd_p)}
+        else:
+            if wr.get("status") not in REQUESTED_STATES + ("approved",):
+                raise _finalised()
+            flt = {"pending_balance_paise": {"$gte": wd_p}}
+            inc = {"pending_balance_paise": -wd_p, "pending_balance": paise_to_float(-wd_p),
+                   "available_balance_paise": wd_p, "available_balance": paise_to_float(wd_p)}
+        moved = await db.wallets.update_one(
+            {"user_id": wr["user_id"], "applied_ops": {"$nin": [pay_op, reject_op]}, **flt},
+            {"$inc": inc, "$push": {"applied_ops": my_op}, "$set": {"updated_at": now}})
+        if moved.modified_count != 1:
+            wallet = await db.wallets.find_one({"user_id": wr["user_id"]}, {"_id": 0}) or {}
+            ops = wallet.get("applied_ops") or []
+            if my_op not in ops:
+                if ref:
+                    await db.withdrawal_payout_refs.delete_one({"_id": ref.upper(), "withdrawal_id": wd_id})   # nothing was paid
+                if pay_op in ops or reject_op in ops:
+                    raise _finalised()
+                if body.action == "mark_paid":
+                    raise HTTPException(status_code=409, detail=(
+                        "This withdrawal cannot be paid: the HomeGenie's earnings were reversed after it was requested, so the "
+                        f"wallet is not in a safe state (available {sym}{wallet.get('available_balance', 0)}). Reject it, or wait "
+                        "until future earnings cover the shortfall."))
+                raise HTTPException(status_code=409, detail="The withdrawal reservation is no longer in the wallet; finance must review it.")
+    else:                                                   # a retry after the money already moved: just finish the record
+        ref = (await db.withdrawal_payout_refs.find_one({"withdrawal_id": wd_id}) or {}).get("_id") if body.action == "mark_paid" else None
+    from financial_ops import ensure_ledger
+    await ensure_ledger({"id": new_id(), "user_id": wr["user_id"], "type": "WITHDRAWAL", "status": "PAID" if target == "paid" else "REJECTED",
+                         "direction": "debit" if target == "paid" else "credit", "amount": paise_to_float(wd_p), "amount_paise": wd_p,
+                         "reference": wd_id, "op_key": my_op, "created_by": admin["id"], "created_at": now,
+                         "description": f"Withdrawal paid (ref {ref})" if target == "paid" else "Withdrawal rejected - amount returned"})
+    sets = {"status": target, "admin_note": note, "updated_at": now}
+    if target == "paid":
+        stored_ref = (await db.withdrawal_payout_refs.find_one({"withdrawal_id": wd_id}) or {}).get("_id") or ref
+        sets.update({"paid_by": admin["id"], "paid_at": now, "payout_reference": stored_ref})
+        from_states = ["approved"]
+    else:
+        sets.update({"rejected_by": admin["id"], "rejected_at": now})
+        from_states = list(REQUESTED_STATES) + ["approved"]
+    claimed = await db.withdrawal_requests.update_one({"id": wd_id, "status": {"$in": from_states}}, {"$set": sets})
+    if claimed.modified_count != 1:
+        current = await db.withdrawal_requests.find_one({"id": wd_id}, {"_id": 0, "status": 1})
+        if (current or {}).get("status") == target:
+            return {"ok": True, "status": target, "already": True}          # a retry of a finished pay / reject
+        raise _finalised()
+    await create_notification(wr["user_id"], "withdrawal", f"Withdrawal {target}",
+                              f"Your withdrawal of {sym}{int(wr['amount'])} is now {target}.",
+                              f"निकासी {target}",
+                              f"आपकी {sym}{int(wr['amount'])} की निकासी अब {target} है।")
+    await log_audit(admin, f"withdrawal_{target}", "withdrawal", wd_id, old_value={"status": wr["status"]},
+                    new_value={"status": target, **({"payout_reference": sets.get("payout_reference"), "approved_by": wr.get("approved_by")}
+                                                     if target == "paid" else {})}, request=request)
+    return {"ok": True, "status": target, **({"payout_reference": sets["payout_reference"]} if target == "paid" else {})}
 
 
 # ---------------- Settings ----------------
@@ -532,10 +636,44 @@ class SettingsBody(BaseModel):
     company_address: Optional[str] = None
 
 
+# Settings that change who is paid how much, when, or under which checks. Any admin may still edit the others.
+MONEY_POLICY_SETTINGS = ("commission_direct_pct", "commission_referral_pct", "commission_team_pct", "return_window_days", "point_value",
+                         "points_withdrawal_enabled", "cod_enabled", "cod_fee", "require_kyc_for_withdrawal", "gst_percent")
+_PCT = ("commission_direct_pct", "commission_referral_pct", "commission_team_pct")
+
+
+def _settings_problems(new: dict) -> list:
+    """Technical validity only (no policy): finite, non-negative, percentages within 0-100 and the three commission rates
+    together at most 100% of the base, whole days, a positive point value."""
+    out = []
+    for k, v in new.items():
+        if isinstance(v, float) and not math.isfinite(v):
+            out.append(f"{k} must be a finite number")
+    for k in _PCT + ("gst_percent",):
+        if new.get(k) is not None and not 0 <= new[k] <= 100:
+            out.append(f"{k} must be between 0 and 100")
+    if sum(float(new.get(k) or 0) for k in _PCT) > 100:
+        out.append("the three commission percentages together cannot exceed 100")
+    if new.get("return_window_days") is not None and not 0 <= new["return_window_days"] <= 365:
+        out.append("return_window_days must be between 0 and 365")
+    if new.get("point_value") is not None and not new["point_value"] > 0:
+        out.append("point_value must be greater than 0")
+    for k in ("cod_fee", "badge_t1_sales", "badge_t2_sales", "badge_t3_sales", "badge_t4_sales"):
+        if new.get(k) is not None and new[k] < 0:
+            out.append(f"{k} cannot be negative")
+    return out
+
+
 @router.put("/settings")
 async def admin_update_settings(body: SettingsBody, request: Request, admin: dict = Depends(require_admin)):
     old = await get_settings()
     upd = {k: v for k, v in body.model_dump().items() if v is not None}
+    changed_money = [k for k in MONEY_POLICY_SETTINGS if k in upd and upd[k] != old.get(k)]
+    if changed_money and admin.get("role") not in MONEY_ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="Only a finance administrator can change: " + ", ".join(changed_money) + ".")
+    problems = _settings_problems({**{k: old.get(k) for k in _PCT}, **upd})
+    if problems:
+        raise HTTPException(status_code=422, detail="; ".join(problems))
     await db.business_settings.update_one({"id": "business_settings"}, {"$set": upd})
     await log_audit(admin, "settings_updated", "business_settings", "business_settings",
                     old_value=old, new_value=upd, request=request)

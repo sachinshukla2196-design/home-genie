@@ -46,6 +46,7 @@ def c():
             people = (("member", "9100009001", "member@example.com", "distributor", False),
                       ("blocked", "9100009002", "blocked@example.com", "distributor", True),
                       ("admin", "9100009003", "admin@example.com", "super_admin", False),
+                      ("finance", "9100009006", "finance@example.com", "accounts_admin", False),
                       ("ledger", "9100009004", "ledger@example.com", "distributor", False),
                       ("drift", "9100009005", "drift@example.com", "distributor", False))
             for key, mobile, email, role, blocked in people:
@@ -256,7 +257,13 @@ def _ledger_flows(c):
         assert r.status_code == 200, r.text
         wd = r.json()
         wd_id = wd.get("id") or wd.get("request", {}).get("id")
-        review = c.put(f"/api/admin/withdrawals/{wd_id}", json={"action": action}, headers=_h(S["admin"]["id"]))
+        if action == "mark_paid":      # approved by one finance user, paid by another, with a payout reference
+            ok = c.put(f"/api/admin/withdrawals/{wd_id}", json={"action": "approve"}, headers=_h(S["admin"]["id"]))
+            assert ok.status_code == 200, ok.text
+            review = c.put(f"/api/admin/withdrawals/{wd_id}", json={"action": action, "payout_reference": "UTR-LEDGER-" + wd_id[:8]},
+                           headers=_h(S["finance"]["id"]))
+        else:
+            review = c.put(f"/api/admin/withdrawals/{wd_id}", json={"action": action}, headers=_h(S["admin"]["id"]))
         assert review.status_code == 200, review.text
 
 

@@ -437,6 +437,69 @@ async def resolve_cod_discrepancy(order_id: str, request: Request, admin: dict =
     return {"ok": True, "resolution": r.resolution, "commissions": commissions}
 
 
+@router.get("/admin/finance/commission-funding")
+async def commission_funding_report(only_insufficient: bool = True, page: int = 1, page_size: int = 25, admin: dict = Depends(require_finance)):
+    """Read-only: commission plans whose commission exceeds the platform revenue recorded at freeze time (see
+    commission.funding_snapshot). Plans frozen before the snapshot existed are counted as `unassessed`, never guessed."""
+    page, page_size = clamp_page(page, page_size)
+    q = {"funding.sufficient": False} if only_insufficient else {"funding": {"$exists": True}}
+    total = await db.commission_plans.count_documents(q)
+    rows = await db.commission_plans.find(q, {"_id": 0, "order_id": 1, "order_number": 1, "funding": 1, "created_at": 1}) \
+        .sort("created_at", -1).skip((page - 1) * page_size).limit(page_size).to_list(page_size)
+    unassessed = await db.commission_plans.count_documents({"funding": {"$exists": False}})
+    return {"items": rows, "unassessed_plans": unassessed, **page_meta(total, page, page_size)}
+
+
+@router.get("/admin/finance/non-distributor-commissions")
+async def non_distributor_commissions(page: int = 1, page_size: int = 50, admin: dict = Depends(require_finance)):
+    """Read-only: commissions credited to accounts that are NOT currently distributors (vendors, vendor staff, admins, or a
+    distributor later converted). They are honoured as frozen (Phase 3B.4, option 2a); this list is for review only.
+    `created_before_enforcement` = the plan was frozen before the distributor-and-green rule was recorded on plans."""
+    from commission import ELIGIBILITY_RULE
+    page, page_size = clamp_page(page, page_size)
+    others = await db.users.find({"role": {"$ne": "distributor"}}, {"_id": 0, "id": 1, "role": 1, "status": 1,
+                                                                     "distributor_id": 1, "full_name": 1}).to_list(100000)
+    by_id = {u["id"]: u for u in others}
+    q = {"user_id": {"$in": list(by_id)}}
+    total = await db.commissions.count_documents(q)
+    rows = await db.commissions.find(q, {"_id": 0, "id": 1, "user_id": 1, "order_id": 1, "order_number": 1, "type": 1, "status": 1,
+                                         "amount_paise": 1, "amount": 1, "reversed_paise": 1, "released_at": 1, "created_at": 1}) \
+        .sort("created_at", -1).skip((page - 1) * page_size).limit(page_size).to_list(page_size)
+    plans = {pl["_id"]: pl.get("eligibility_rule") for pl in await db.commission_plans.find(
+        {"_id": {"$in": list({r["order_id"] for r in rows})}}, {"_id": 1, "eligibility_rule": 1}).to_list(len(rows) or 1)}
+    items = []
+    for r in rows:
+        u = by_id.get(r["user_id"], {})
+        items.append({**r, "recipient_role": u.get("role"), "recipient_status": u.get("status"), "recipient_distributor_id": u.get("distributor_id"),
+                      "recipient_name": u.get("full_name"), "frozen": True,
+                      "created_before_enforcement": plans.get(r["order_id"]) != ELIGIBILITY_RULE})
+    return {"items": items, **page_meta(total, page, page_size)}
+
+
+@router.get("/admin/finance/negative-wallets")
+async def negative_wallets(page: int = 1, page_size: int = 50, admin: dict = Depends(require_finance)):
+    """Read-only: wallets whose available balance is below zero (a refund clawed back points that were already released).
+    The deficit is netted automatically by future earnings; new withdrawals are refused and reserved ones cannot be paid
+    while it lasts. Nothing here changes a balance."""
+    page, page_size = clamp_page(page, page_size)
+    q = {"available_balance_paise": {"$lt": 0}}
+    total = await db.wallets.count_documents(q)
+    rows = await db.wallets.find(q, {"_id": 0, "user_id": 1, "available_balance_paise": 1, "pending_balance_paise": 1,
+                                     "total_earned_paise": 1, "total_withdrawn_paise": 1, "updated_at": 1}) \
+        .sort("available_balance_paise", 1).skip((page - 1) * page_size).limit(page_size).to_list(page_size)
+    items = []
+    for w in rows:
+        u = await db.users.find_one({"id": w["user_id"]}, {"_id": 0, "distributor_id": 1, "full_name": 1, "role": 1, "status": 1}) or {}
+        claws = await db.wallet_transactions.find({"user_id": w["user_id"], "type": "COMMISSION_CLAWBACK"},
+                                                   {"_id": 0, "amount_paise": 1, "reference": 1, "status": 1, "created_at": 1}) \
+            .sort("created_at", -1).limit(5).to_list(5)
+        open_wd = await db.withdrawal_requests.find({"user_id": w["user_id"], "status": {"$in": ["pending", "under_review", "approved"]}},
+                                                    {"_id": 0, "id": 1, "request_number": 1, "amount_paise": 1, "status": 1}).to_list(20)
+        items.append({**w, **{"user": u}, "deficit_paise": -w["available_balance_paise"], "recent_clawbacks": claws,
+                      "open_withdrawals": open_wd})
+    return {"items": items, **page_meta(total, page, page_size)}
+
+
 @router.get("/admin/finance/cod-discrepancies")
 async def list_cod_discrepancies(page: int = 1, page_size: int = 25, admin: dict = Depends(require_admin)):
     page, page_size = clamp_page(page, page_size)

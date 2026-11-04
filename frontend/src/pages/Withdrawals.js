@@ -110,7 +110,7 @@ export default function Withdrawals() {
                       <div className="truncate font-medium text-ink">{r.request_number}</div>
                       <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted2">
                         <span>{(r.created_at || "").slice(0, 10)}</span>
-                        <span className={`rounded-full px-2.5 py-0.5 font-semibold capitalize ring-1 ${PILL[r.status] || PILL.pending}`}>{r.status}</span>
+                        <span className={`rounded-full px-2.5 py-0.5 font-semibold capitalize ring-1 ${PILL[r.status] || PILL.pending}`}>{["pending", "under_review"].includes(r.status) ? "requested" : r.status}</span>
                       </div>
                     </div>
                   </div>

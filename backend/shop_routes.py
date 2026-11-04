@@ -135,7 +135,8 @@ async def create_order(body: CreateOrder, request: Request, user: dict = Depends
     seller_user_id, seller_did = None, None
     ref = (body.seller_ref or "").strip().upper()
     if ref:
-        seller = await db.users.find_one({"distributor_id": ref, "status": "green"}, {"_id": 0})
+        # only an active HomeGenie (distributor, green) can be a commission-earning seller; other share codes attribute nothing
+        seller = await db.users.find_one({"distributor_id": ref, "role": "distributor", "status": "green"}, {"_id": 0})
         if seller and seller["id"] != user["id"]:
             seller_user_id, seller_did = seller["id"], seller.get("distributor_id")
 

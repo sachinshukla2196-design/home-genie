@@ -66,13 +66,58 @@ def snapshot_filter(c: dict) -> dict:
     return f
 
 
+ELIGIBILITY_RULE = "distributor_green_v1"     # recorded on every plan frozen under this rule (Phase 3B.4)
+
+
+def is_commission_eligible(u: dict) -> bool:
+    """OWNER-APPROVED (Phase 3B.4): only an active HomeGenie earns NEW commission: role distributor AND status green.
+    Vendors, vendor staff and every admin role earn nothing new, even when green, linked as sponsor or holding a share code."""
+    return bool(u) and u.get("role") == "distributor" and u.get("status") == "green"
+
+
+async def _green(user_id: str):
+    """The pre-3B.4 chain test: any green account. Used only to find who occupies a position, never to pay."""
+    if not user_id:
+        return None
+    u = await db.users.find_one({"id": user_id}, {"_id": 0})
+    return u if u and u.get("status") == "green" else None
+
+
 async def _approved(user_id: str):
     if not user_id:
         return None
     u = await db.users.find_one({"id": user_id}, {"_id": 0})
-    if u and u.get("status") == "green":
-        return u
-    return None
+    return u if is_commission_eligible(u) else None
+
+
+async def funding_snapshot(order: dict, commission_paise: int) -> dict:
+    """What the platform actually earns on this order's merchandise, next to the commission it would pay. Detection only:
+    nothing here changes, clips or delays a commission (whether to do that is an owner decision).
+
+    platform revenue = company-owned lines (full line value; cost of goods is NOT modelled, so this is an upper bound)
+                     + for each vendor, the platform commission of the approved agreement in force on the order date
+                       (no approved agreement = zero, as ledger.post_commission charges nothing then).
+    GST and the COD fee are excluded, as from the commission base."""
+    from commercial_terms import effective_agreement, commission_for
+    from ledger import vendor_lines_paise
+    merch_p = paise_of(order, "subtotal_paise", "subtotal")
+    on = (order.get("paid_at") or order.get("created_at") or "")[:10]
+    vendor_lines_p = fee_p = 0
+    missing = []
+    for vid in sorted({li.get("vendor_id") for li in order.get("items", []) if li.get("vendor_id")}):
+        line_p = vendor_lines_paise(order, vid)
+        vendor_lines_p += line_p
+        agreement = await effective_agreement(vid, on) if on else None
+        if agreement:
+            fee_p += commission_for(agreement, line_p)
+        else:
+            missing.append(vid)
+    company_p = max(merch_p - vendor_lines_p, 0)
+    platform_p = company_p + fee_p
+    return {"merchandise_paise": merch_p, "company_lines_paise": company_p, "vendor_lines_paise": vendor_lines_p,
+            "vendor_platform_fee_paise": fee_p, "platform_revenue_paise": platform_p, "commission_paise": commission_paise,
+            "residual_paise": platform_p - commission_paise, "sufficient": commission_paise <= platform_p,
+            "vendors_without_agreement": missing, "cost_of_goods": "not_modelled", "agreement_date": on}
 
 
 async def _freeze_plan(order: dict, seller_id: str):
@@ -92,8 +137,12 @@ async def _freeze_plan(order: dict, seller_id: str):
     if not seller:
         note = "seller_not_approved"
     else:
-        referrer = await _approved(seller.get("sponsor_user_id"))
-        team = await _approved((referrer or {}).get("sponsor_user_id"))
+        # The chain is walked exactly as before Phase 3B.4 (through green accounts), so who sits in the team position is
+        # unchanged; eligibility to be PAID is then checked separately. A non-distributor referrer is skipped without
+        # also costing the team upline its share (no new skip, no redirect).
+        referrer_link = await _green(seller.get("sponsor_user_id"))
+        referrer = referrer_link if is_commission_eligible(referrer_link) else None
+        team = await _approved((referrer_link or {}).get("sponsor_user_id"))
         plan = [
             (seller, float(settings.get(DIRECT_PCT_KEY, 30.0)), TXN_DIRECT, "Direct sales commission"),
             (referrer, float(settings.get(REFERRAL_PCT_KEY, 10.0)), TXN_REFERRAL, "Referral commission"),
@@ -111,7 +160,12 @@ async def _freeze_plan(order: dict, seller_id: str):
             items.append({"type": txn_type, "label": label, "user_id": person["id"], "distributor_id": person.get("distributor_id"),
                           "percent": pct, "amount_paise": amount_p, "seller_user_id": seller["id"],
                           "seller_distributor_id": seller.get("distributor_id")})
-    doc = {"_id": order["id"], "order_id": order["id"], "order_number": order["order_number"], "items": items,
+    funding = await funding_snapshot(order, sum(i["amount_paise"] for i in items))
+    if not funding["sufficient"]:
+        logger.warning("order %s: commission %s paise exceeds platform revenue %s paise (flagged, not changed)",
+                       order.get("id"), funding["commission_paise"], funding["platform_revenue_paise"])
+    doc = {"_id": order["id"], "order_id": order["id"], "order_number": order["order_number"], "items": items, "funding": funding,
+           "eligibility_rule": ELIGIBILITY_RULE,
            "base_paise": base_p, "base": paise_to_float(base_p), "currency_symbol": sym, "window": window,
            "created_at": now_iso(), "completed_at": None}
     try:
@@ -260,6 +314,9 @@ async def release_due_points(now: datetime = None) -> dict:
         order = await db.orders.find_one({"id": c["order_id"]}, {"_id": 0})
         if not order or order.get("payment_status") not in ("paid", "partially_refunded"):
             skipped += 1
+            continue
+        if order.get("payment_method") == "cod" and not collection_is_proven(order):
+            skipped += 1        # same rule as distribution and manual release: unproven, short or legacy COD never releases
             continue
         if await has_open_case(c["order_id"]):
             held += 1           # the remainder waits until the return or refund case is resolved
