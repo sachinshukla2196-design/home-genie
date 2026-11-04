@@ -82,6 +82,8 @@ import vendor_invitations
 app.include_router(vendor_invitations.router)
 import governance_routes
 app.include_router(governance_routes.router)
+import activation_routes
+app.include_router(activation_routes.router)
 
 _cors_raw = os.environ.get("CORS_ALLOWED_ORIGINS") or os.environ.get("CORS_ORIGINS", "")
 _cors = [o.strip() for o in _cors_raw.split(",") if o.strip() and o.strip() != "*"]

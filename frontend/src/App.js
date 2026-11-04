@@ -35,6 +35,7 @@ import AdminDashboard from "@/pages/admin/AdminDashboard";
 import AdminUsers from "@/pages/admin/AdminUsers";
 import AdminProducts from "@/pages/admin/AdminProducts";
 import AdminOrders from "@/pages/admin/AdminOrders";
+import AdminActivations from "@/pages/admin/AdminActivations";
 import AdminReports from "@/pages/admin/AdminReports";
 import AdminSettings from "@/pages/admin/AdminSettings";
 import AdminAuditLogs from "@/pages/admin/AdminAuditLogs";
@@ -143,6 +144,7 @@ function AppRoutes() {
                   <Route path="users" element={<AdminUsers />} />
                   <Route path="products" element={<AdminProducts />} />
                   <Route path="orders" element={<AdminOrders />} />
+                  <Route path="activations" element={<AdminActivations />} />
                   <Route path="withdrawals" element={<AdminWithdrawals />} />
                   <Route path="vendors" element={<AdminVendors />} />
                   <Route path="vendors/new" element={<AdminVendorCreate />} />

@@ -3,7 +3,7 @@ import { Link, useLocation, Outlet } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
   LayoutDashboard, Users, Package, ShoppingCart, Banknote,
-  FileBarChart, Settings, ScrollText, LogOut, ShieldCheck, Store, Handshake, Award,
+  FileBarChart, Settings, ScrollText, LogOut, ShieldCheck, Store, Handshake, Award, UserCheck,
 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
@@ -17,6 +17,7 @@ const NAV = [
   { to: "/admin/users", icon: Users, key: "nav.users" },
   { to: "/admin/products", icon: Package, key: "nav.products" },
   { to: "/admin/orders", icon: ShoppingCart, key: "nav.orders" },
+  { to: "/admin/activations", icon: UserCheck, key: "nav.activations", roles: ["admin", "super_admin"] },   // the server enforces this too
   { to: "/admin/withdrawals", icon: Banknote, key: "nav.withdrawals" },
   { to: "/admin/vendors", icon: Store, key: "av.title" },
   { to: "/admin/agreements", icon: Handshake, key: "aa.nav" },
@@ -30,6 +31,7 @@ export function AdminLayout() {
   const { t } = useI18n();
   const { user, logout } = useAuth();
   const loc = useLocation();
+  const items = NAV.filter((i) => !i.roles || i.roles.includes(user?.role));      // convenience only; the API is the authority
   const active = (to) => to === "/admin" ? loc.pathname === "/admin" : loc.pathname.startsWith(to);
   const initials = (user?.full_name || "AD").split(" ").filter(Boolean).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
 
@@ -48,7 +50,7 @@ export function AdminLayout() {
           </span>
         </div>
         <nav className="flex-1 space-y-1 overflow-y-auto px-3 no-scrollbar" aria-label="Admin">
-          {NAV.map((i) => {
+          {items.map((i) => {
             const Icon = i.icon;
             const on = active(i.to);
             return (
@@ -87,7 +89,7 @@ export function AdminLayout() {
           </div>
           {/* Mobile admin nav */}
           <nav className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 pb-3 lg:hidden" aria-label="Admin">
-            {NAV.map((i) => {
+            {items.map((i) => {
               const on = active(i.to);
               return (
                 <Link key={i.to} to={i.to} aria-current={on ? "page" : undefined}

@@ -99,9 +99,12 @@ async def _freeze_plan(order: dict, seller_id: str):
             (referrer, float(settings.get(REFERRAL_PCT_KEY, 10.0)), TXN_REFERRAL, "Referral commission"),
             (team, float(settings.get(TEAM_PCT_KEY, 5.0)), TXN_TEAM, "Team sales commission"),
         ]
+        buyer_id = order.get("user_id")
         for person, pct, txn_type, label in plan:
             if not person or pct <= 0:
                 continue
+            if buyer_id and person["id"] == buyer_id:
+                continue          # nobody earns on their own purchase, in any role; the skipped amount stays unpaid and is not redirected
             amount_p = mul_pct(base_p, pct)          # exact, rounded half-up to the paisa
             if amount_p <= 0:
                 continue
@@ -239,7 +242,7 @@ async def release_due_points(now: datetime = None) -> dict:
     for c in await db.commissions.find({"release.applied": False}, {"_id": 0}).to_list(5000):
         if await finish_release(c):
             finished += 1
-    cursor = db.commissions.find({"status": {"$in": ["PENDING", "PARTIALLY_REVERSED"]}, "released_at": None,
+    cursor = db.commissions.find({"status": {"$in": ["PENDING", "PARTIALLY_REVERSED"]}, "released_at": None, "manual_hold": {"$ne": True},
                                   "distribution.applied": {"$ne": False}}, {"_id": 0})
     for c in await cursor.to_list(5000):
         days = release_days(c.get("release_after_days"))
@@ -278,3 +281,55 @@ async def release_due_points(now: datetime = None) -> dict:
     logger.info("points release: %s released, %s finished, %s skipped, %s held, %s invalid",
                 released, finished, skipped, held, invalid)
     return {"released": released, "finished_interrupted": finished, "skipped": skipped, "held": held, "invalid": invalid}
+
+
+async def release_commission_now(commission_id: str, now: datetime = None) -> dict:
+    """Administrative "release now": the same release as the points cron, applied to ONE commission, with the same conditions.
+
+    It is not an override. It never releases inside the return window, for an order that is not paid, for COD whose full
+    collection is unproven, while a return or refund case is open, for a distribution that is incomplete, or beyond what is
+    still owed after clawbacks. The money moves only through the recorded release intent (finish_release): ledger row,
+    one-time wallet move, applied marker. Repeats and races cannot move it twice. Returns {"ok": True, ...} or
+    {"ok": False, "code": <http status>, "detail": <reason>}."""
+    from financial_ops import finish_release
+    now = now or datetime.now(timezone.utc)
+    c = await db.commissions.find_one({"id": commission_id}, {"_id": 0})
+    if not c:
+        return {"ok": False, "code": 404, "detail": "Commission not found."}
+    if (c.get("release") or {}).get("applied") is False:
+        await finish_release(c)                              # finish an interrupted release; nothing new is decided
+        c = await db.commissions.find_one({"id": commission_id}, {"_id": 0})
+    if c.get("released_at") or c.get("status") == "RELEASED":
+        return {"ok": True, "already": True, "status": c.get("status")}
+    if c.get("status") not in ("PENDING", "PARTIALLY_REVERSED", "HELD"):
+        return {"ok": False, "code": 409, "detail": f"A {c.get('status')} commission cannot be released."}
+    if (c.get("distribution") or {}).get("applied") is False:
+        return {"ok": False, "code": 409, "detail": "This commission's distribution is not complete."}
+    days = release_days(c.get("release_after_days"))
+    if days is None:
+        return {"ok": False, "code": 409, "detail": "This commission has an invalid release period."}
+    try:
+        created = datetime.fromisoformat(str(c["created_at"]).replace("Z", "+00:00"))
+    except Exception:
+        return {"ok": False, "code": 409, "detail": "This commission has no valid creation date."}
+    if now < created + timedelta(days=days):
+        return {"ok": False, "code": 409, "detail": "The return window has not ended, so this commission cannot be released yet."}
+    order = await db.orders.find_one({"id": c["order_id"]}, {"_id": 0})
+    if not order or order.get("payment_status") not in ("paid", "partially_refunded") or order.get("needs_refund") or order.get("status") == "cancelled":
+        return {"ok": False, "code": 409, "detail": "The order is not in a paid, active state."}
+    if order.get("payment_method") == "cod" and not collection_is_proven(order):
+        return {"ok": False, "code": 409, "detail": "COD collection for this order is not proven."}
+    from financial_ops import has_open_case as _open
+    if await _open(c["order_id"]):
+        return {"ok": False, "code": 409, "detail": "A return or refund case is open on this order."}
+    amount_p = remaining_paise(c)
+    if amount_p <= 0:
+        return {"ok": False, "code": 409, "detail": "Nothing remains to release on this commission."}
+    intent = await db.commissions.update_one(
+        {"id": c["id"], **snapshot_filter(c)},
+        {"$set": {"status": "RELEASED", "released_at": now_iso(), "released_paise": amount_p, "released_amount": paise_to_float(amount_p),
+                  "manual_hold": False, "release": {"op_key": f"release:{c['id']}", "amount_paise": amount_p, "applied": False}}})
+    if intent.modified_count != 1:
+        return {"ok": True, "already": True, "status": "RELEASED"}      # the cron or another admin changed it first
+    await finish_release(await db.commissions.find_one({"id": c["id"]}, {"_id": 0}))
+    return {"ok": True, "released_paise": amount_p, "status": "RELEASED"}

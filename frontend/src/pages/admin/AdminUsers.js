@@ -61,13 +61,17 @@ export default function AdminUsers() {
     } catch (e) { toast.error(apiError(e)); } finally { setBusyId(null); }
   };
 
-  const openCredit = (u) => { setCreditForm({ amount: "", reason: "" }); setCreditUser(u); };
+  // one request_id per opened dialog: a retry or double click re-sends the same key, so the server credits once
+  const [creditKey, setCreditKey] = useState("");
+  const openCredit = (u) => { setCreditForm({ amount: "", reason: "" }); setCreditKey(`cr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`); setCreditUser(u); };
   const submitCredit = async () => {
-    const amt = parseFloat(creditForm.amount);
-    if (!amt || amt <= 0) { toast.error("Enter a valid amount greater than 0"); return; }
+    const amt = Number(creditForm.amount);
+    if (!creditForm.amount.trim() || !Number.isFinite(amt) || amt <= 0 || !/^\d+(\.\d{1,2})?$/.test(creditForm.amount.trim())) { toast.error("Enter a valid amount greater than 0 (at most 2 decimal places)"); return; }
+    if (creditForm.reason.trim().length < 5) { toast.error("A reason of at least 5 characters is required"); return; }
+    if (busyId === creditUser.id) return;
     setBusyId(creditUser.id);
     try {
-      const { data } = await API.post("/admin/wallet/credit", { distributor_id: creditUser.distributor_id, amount: amt, reason: creditForm.reason || "Manual admin credit" });
+      const { data } = await API.post("/admin/wallet/credit", { distributor_id: creditUser.distributor_id, amount: amt, reason: creditForm.reason.trim(), request_id: creditKey });
       toast.success(`${data.message} New balance ₹${data.available_balance}`);
       setCreditUser(null);
     } catch (e) { toast.error(apiError(e)); } finally { setBusyId(null); }
@@ -332,7 +336,7 @@ export default function AdminUsers() {
               <Input type="number" min="1" value={creditForm.amount} onChange={(e) => setCreditForm((f) => ({ ...f, amount: e.target.value }))} className="mt-1.5" data-testid="credit-amount" />
             </label>
             <label className="mt-4 block text-sm text-ink">Reason (optional)
-              <Input value={creditForm.reason} onChange={(e) => setCreditForm((f) => ({ ...f, reason: e.target.value }))} placeholder="Manual admin credit" className="mt-1.5" data-testid="credit-reason" />
+              <Input value={creditForm.reason} onChange={(e) => setCreditForm((f) => ({ ...f, reason: e.target.value }))} placeholder="Why is this credit being made? (required)" className="mt-1.5" data-testid="credit-reason" />
             </label>
             <div className="mt-6 flex flex-wrap justify-end gap-2">
               <Button variant="outline" onClick={() => setCreditUser(null)} className="h-11 rounded-full border-brand-50 bg-transparent px-5" data-testid="credit-cancel">Cancel</Button>

@@ -7,7 +7,7 @@ export const translations = {
     "brand.tagline": "Establish Yourself.",
 
     "nav.home": "Home", "nav.dashboard": "Dashboard", "nav.products": "Products",
-    "nav.orders": "Orders", "nav.wallet": "Points", "nav.income": "Earnings",
+    "nav.orders": "Orders", "nav.activations": "Activations", "nav.wallet": "Points", "nav.income": "Earnings",
     "nav.referral": "Share & Sell", "nav.notifications": "Notifications",
     "nav.reports": "Reports", "nav.profile": "Profile", "nav.support": "Support",
     "nav.more": "More", "nav.admin": "Admin", "nav.logout": "Log out",
@@ -683,7 +683,7 @@ export const translations = {
     "brand.tagline": "स्वयं को स्थापित करें।",
 
     "nav.home": "होम", "nav.dashboard": "डैशबोर्ड", "nav.products": "उत्पाद",
-    "nav.orders": "ऑर्डर", "nav.wallet": "पॉइंट्स", "nav.income": "कमाई",
+    "nav.orders": "ऑर्डर", "nav.activations": "सक्रियण", "nav.wallet": "पॉइंट्स", "nav.income": "कमाई",
     "nav.referral": "शेयर करें और बेचें", "nav.notifications": "सूचनाएँ",
     "nav.reports": "रिपोर्ट", "nav.profile": "प्रोफ़ाइल", "nav.support": "सहायता",
     "nav.more": "और", "nav.admin": "एडमिन", "nav.logout": "लॉग आउट",

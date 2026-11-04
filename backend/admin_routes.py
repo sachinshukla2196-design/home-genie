@@ -8,7 +8,8 @@ import secrets
 from core import hash_password, next_distributor_id, get_or_create_wallet
 from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
+from decimal import Decimal
 from typing import Optional, List
 from datetime import datetime, timezone
 from pagination import clamp_page, page_meta
@@ -321,27 +322,47 @@ async def admin_commissions(admin: dict = Depends(require_admin)):
 
 class CommissionActionBody(BaseModel):
     action: str  # release / hold
+    reason: str = ""
+
+
+MONEY_ADMIN_ROLES = ("super_admin", "accounts_admin")      # roles that may move money by hand (same set as the finance controls)
+
+
+def require_money_admin(admin: dict = Depends(require_admin)) -> dict:
+    if admin.get("role") not in MONEY_ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="Only a finance administrator can do this.")
+    return admin
 
 
 @router.put("/commissions/{commission_id}/status")
-async def commission_status(commission_id: str, body: CommissionActionBody, request: Request, admin: dict = Depends(require_admin)):
+async def commission_status(commission_id: str, body: CommissionActionBody, request: Request, admin: dict = Depends(require_money_admin)):
+    """`release` is "release now" through the normal release path (same conditions, no override). `hold` sets a flag that keeps a
+    commission out of the cron without changing its status, so refunds still claw it back. A hold is not a bypass: releasing a
+    held commission needs every normal condition, exactly as for any other."""
+    reason = (body.reason or "").strip()
+    if len(reason) < 5 or len(reason) > 300:
+        raise HTTPException(status_code=422, detail="A reason of 5 to 300 characters is required.")
     c = await db.commissions.find_one({"id": commission_id})
     if not c:
         raise HTTPException(status_code=404, detail="Commission not found.")
     if body.action == "release":
-        if c.get("status") == "RELEASED":
-            raise HTTPException(status_code=400, detail="This commission is already released.")
-        await db.commissions.update_one({"id": commission_id},
-            {"$set": {"status": "RELEASED", "released_at": now_iso(), "released_by": admin["id"]}})
-        await log_audit(admin, "commission_released", "commission", commission_id,
-                        old_value={"status": c.get("status")}, new_value={"status": "RELEASED"}, request=request)
-        return {"ok": True, "status": "RELEASED"}
+        from commission import release_commission_now
+        res = await release_commission_now(commission_id)
+        if not res["ok"]:
+            raise HTTPException(status_code=res["code"], detail=res["detail"])
+        if not res.get("already"):
+            await log_audit(admin, "commission_released", "commission", commission_id,
+                            old_value={"status": c.get("status")}, new_value={"status": "RELEASED", "released_paise": res.get("released_paise"), "reason": reason}, request=request)
+        return {"ok": True, **{k: v for k, v in res.items() if k != "ok"}}
     if body.action == "hold":
-        await db.commissions.update_one({"id": commission_id},
-            {"$set": {"status": "HELD", "held_at": now_iso(), "held_by": admin["id"]}})
+        held = await db.commissions.update_one({"id": commission_id, "status": {"$in": ["PENDING", "PARTIALLY_REVERSED"]}, "released_at": None,
+                                                 "manual_hold": {"$ne": True}},
+                                               {"$set": {"manual_hold": True, "held_at": now_iso(), "held_by": admin["id"], "hold_reason": reason}})
+        if held.modified_count != 1:
+            raise HTTPException(status_code=409, detail="Only a pending, unreleased, not already held commission can be held.")
         await log_audit(admin, "commission_held", "commission", commission_id,
-                        old_value={"status": c.get("status")}, new_value={"status": "HELD"}, request=request)
-        return {"ok": True, "status": "HELD"}
+                        old_value={"status": c.get("status")}, new_value={"manual_hold": True, "reason": reason}, request=request)
+        return {"ok": True, "status": c.get("status"), "manual_hold": True}
     raise HTTPException(status_code=400, detail="Invalid action.")
 
 
@@ -729,31 +750,64 @@ async def admin_update_user(user_id: str, body: AdminUserUpdate, request: Reques
 
 class WalletCreditBody(BaseModel):
     distributor_id: str
-    amount: float
-    reason: Optional[str] = None
+    amount: float = Field(gt=0, le=10_000_000, allow_inf_nan=False)       # technical bound against typing errors, not a policy limit
+    reason: str
+    request_id: str                                                         # idempotency key: a retry or double click credits once
+
+    @field_validator("amount")
+    @classmethod
+    def _amount(cls, v: float) -> float:
+        exponent = Decimal(str(v)).as_tuple().exponent
+        if isinstance(exponent, int) and exponent < -2:
+            raise ValueError("amount can have at most 2 decimal places")
+        return v
+
+    @field_validator("reason")
+    @classmethod
+    def _reason(cls, v: str) -> str:
+        v = v.strip()
+        if not 5 <= len(v) <= 300:
+            raise ValueError("reason must be 5 to 300 characters")
+        return v
+
+    @field_validator("request_id")
+    @classmethod
+    def _request_id(cls, v: str) -> str:
+        v = v.strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{8,64}", v):
+            raise ValueError("request_id must be 8-64 characters: letters, digits, _ and -")
+        return v
 
 
 @router.post("/wallet/credit")
-async def admin_wallet_credit(body: WalletCreditBody, request: Request, admin: dict = Depends(require_admin)):
+async def admin_wallet_credit(body: WalletCreditBody, request: Request, admin: dict = Depends(require_money_admin)):
+    """Manual points credit. Finance administrators only; exact amount, mandatory reason and idempotency key; one ledger row and
+    one wallet move per key (the same pattern as commission release); audited. A repeated key returns the original credit."""
     did = (body.distributor_id or "").strip().upper()
     u = await db.users.find_one({"distributor_id": did})
     if not u:
         raise HTTPException(status_code=404, detail=f"Distributor {did} not found.")
-    amt = round(float(body.amount or 0), 2)
-    if amt <= 0:
-        raise HTTPException(status_code=400, detail="Amount must be greater than 0.")
-    reason = (body.reason or "").strip() or "Manual admin credit"
-    await add_wallet_transaction(u["id"], "MANUAL_ADMIN_CREDIT", amt, "CREDITED",
-                                 reference=f"admin:{admin.get('distributor_id', '')}",
-                                 direction="credit", description=reason)
-    await create_notification(u["id"], "wallet", f"₹{int(amt)} credited",
-                              f"{reason} — ₹{amt} added to your wallet.",
-                              f"₹{int(amt)} क्रेडिट हुआ", f"{reason} — ₹{amt} आपके वॉलेट में जोड़े गए।")
-    await log_audit(admin, "admin_wallet_credit", "user", u["id"],
-                    new_value={"distributor_id": did, "amount": amt, "reason": reason}, request=request)
+    paise = to_paise(body.amount)
+    op = f"admin_credit:{body.request_id}"
+    existing = await db.wallet_transactions.find_one({"op_key": op}, {"_id": 0})
+    if existing:
+        if existing.get("user_id") != u["id"] or existing.get("amount_paise") != paise:
+            raise HTTPException(status_code=409, detail="This request_id was already used for a different credit.")
+        return {"message": "This credit was already applied.", "already": True, "distributor_id": did, "amount": paise_to_float(paise)}
+    from financial_ops import ensure_ledger, move_wallet_once
+    await ensure_ledger({"id": new_id(), "user_id": u["id"], "type": "MANUAL_ADMIN_CREDIT", "direction": "credit", "status": "CREDITED",
+                         "amount": paise_to_float(paise), "amount_paise": paise, "reference": f"admin:{admin.get('distributor_id', '')}",
+                         "description": body.reason, "op_key": op, "created_by": admin["id"], "created_at": now_iso()})
+    moved = await move_wallet_once(u["id"], {"available_balance": paise, "total_earned": paise}, op)
+    if moved:
+        await create_notification(u["id"], "wallet", f"₹{int(paise // 100)} credited",
+                                  f"{body.reason} — ₹{paise_to_float(paise)} added to your wallet.",
+                                  f"₹{int(paise // 100)} क्रेडिट हुआ", f"{body.reason} — ₹{paise_to_float(paise)} आपके वॉलेट में जोड़े गए।")
+        await log_audit(admin, "admin_wallet_credit", "user", u["id"],
+                        new_value={"distributor_id": did, "amount_paise": paise, "reason": body.reason, "request_id": body.request_id}, request=request)
     from core import get_or_create_wallet
     w = await get_or_create_wallet(u["id"])
-    return {"message": f"₹{amt} credited to {did}.", "distributor_id": did, "amount": amt,
+    return {"message": f"₹{paise_to_float(paise)} credited to {did}.", "distributor_id": did, "amount": paise_to_float(paise),
             "available_balance": round(float((w or {}).get("available_balance", 0)), 2)}
 
 

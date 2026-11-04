@@ -523,7 +523,7 @@ async def _reverse_commission(c: dict, event: dict, order: dict) -> int:
             await finish_reversal(c, rec)
             return 1
         c = await db.commissions.find_one({"id": c["id"]}, {"_id": 0})
-        if not c or c.get("status") not in ("PENDING", "RELEASED", "PARTIALLY_REVERSED", "REVERSED"):
+        if not c or c.get("status") not in ("PENDING", "RELEASED", "PARTIALLY_REVERSED", "REVERSED", "HELD"):
             return 0
     logger.error("commission %s kept changing during refund %s; not completed", c.get("id"), event_id)
     raise RuntimeError("commission changed repeatedly during the refund; retry the refund")
@@ -577,7 +577,7 @@ async def reverse_order_financials(order_id: str, actor: dict = None, request: R
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
     n = 0
     comms = await db.commissions.find({"order_id": order_id, "$or": [
-        {"status": {"$in": ["PENDING", "RELEASED", "PARTIALLY_REVERSED"]}},
+        {"status": {"$in": ["PENDING", "RELEASED", "PARTIALLY_REVERSED", "HELD"]}},     # HELD: legacy manual holds changed the status
         {"reversal_records.event_id": event_id}]}, {"_id": 0}).to_list(1000)
     for c in comms:
         n += await _reverse_commission(c, event, order)
