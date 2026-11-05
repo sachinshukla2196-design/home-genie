@@ -318,6 +318,9 @@ async def release_due_points(now: datetime = None) -> dict:
         if order.get("payment_method") == "cod" and not collection_is_proven(order):
             skipped += 1        # same rule as distribution and manual release: unproven, short or legacy COD never releases
             continue
+        if order.get("status") == "cancelled" or order.get("needs_refund"):
+            skipped += 1        # same rule as manual release: a cancelled order's commission waits for the refund decision
+            continue
         if await has_open_case(c["order_id"]):
             held += 1           # the remainder waits until the return or refund case is resolved
             continue

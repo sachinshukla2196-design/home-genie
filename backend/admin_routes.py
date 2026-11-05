@@ -204,11 +204,23 @@ async def update_order_status(order_id: str, body: OrderStatusBody, request: Req
     if o.get("needs_refund") and o.get("payment_status") in ("paid", "partially_refunded") and body.status != "cancelled":
         raise HTTPException(status_code=400, detail="This order was paid after it expired and cannot be fulfilled. "
                                                     "Refund it from the Needs refund queue.")
+    current = o.get("status")
+    if body.status != current:
+        if body.status in ("pending", "payment_pending", "paid"):
+            raise HTTPException(status_code=400, detail="Payment states are set by the payment flow, not by a status change.")
+        if current in ("cancelled", "refunded"):
+            # its stock has been returned (and its money may have been): re-opening it here would sell stock it no longer holds
+            raise HTTPException(status_code=409, detail=f"A {current} order cannot be re-opened. Place a new order instead.")
+        unpaid_online = o.get("payment_method") != "cod" and o.get("payment_status") not in ("paid", "partially_refunded")
+        if unpaid_online and body.status in ("processing", "packed", "shipped", "delivered"):
+            raise HTTPException(status_code=409, detail="This order is not paid yet, so it cannot move into fulfilment.")
     upd = {"$set": {"status": body.status, "updated_at": now_iso()}}
     cancelling = body.status == "cancelled" and o.get("status") != "cancelled"
     if cancelling:   # the restock decision is stored atomically with the status change; recovery replays it if interrupted
         upd["$push"] = {"restock_intents": intent("admin_cancel", admin["id"], prev_status=o.get("status", ""))}
-    await db.orders.update_one({"id": order_id}, upd)
+    changed = await db.orders.update_one({"id": order_id, "status": current}, upd)    # conditional: a concurrent expiry/payment wins cleanly
+    if changed.matched_count != 1:
+        raise HTTPException(status_code=409, detail="This order was just updated. Refresh and try again.")
     restock = None
     if cancelling:
         # Confirmed cancellation: return stock for goods that have not left, stop pre-dispatch fulfilment.

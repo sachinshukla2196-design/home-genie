@@ -595,28 +595,49 @@ async def reverse_order_financials(order_id: str, actor: dict = None, request: R
     return {"reversed": n, "refund_amount": event["amount"], "refund_event": event_id}
 
 
+# The only payment states an online / UPI / admin-recorded payment may turn into "paid". A refunded or partially refunded
+# order must never be re-marked paid by a late or repeated payment call, and a COD order is paid only through the COD
+# collection route (Phase 3A evidence rules), never by a UPI or manual payment.
+PAYABLE_PAYMENT_STATES = ("pending", "claimed")
+
+
+def is_payable_online(order: dict) -> bool:
+    return order.get("payment_method") != "cod" and order.get("payment_status") in PAYABLE_PAYMENT_STATES
+
+
 async def _process_paid_order(session_id: str, request: Request = None):
     """Idempotent: mark order paid, generate the invoice and credit pending sale commissions."""
     tx = await db.payment_transactions.find_one({"session_id": session_id})
     if not tx:
         return
-    order = await db.orders.find_one({"id": tx["order_id"]})
-    if not order:
-        return
-    if order.get("payment_status") == "paid":
-        return  # already processed
-
     settings = await get_settings()
-    # A payment for an already-cancelled order must never silently re-open it (its stock may have been returned).
-    cancelled = order.get("status") == "cancelled"
-    revivable = cancelled and order.get("cancel_reason") == EXPIRY_REASON   # expired by the 15-minute rule
-    invoice_number = None if cancelled else await next_sequence("invoice", "INV", 6)
-    paid_set = {"payment_status": "paid", "paid_at": now_iso(), "updated_at": now_iso()}
-    if not cancelled:
-        paid_set.update({"status": "processing", "invoice_number": invoice_number})
-    claim = await db.orders.update_one({"id": order["id"], "payment_status": {"$ne": "paid"}}, {"$set": paid_set})
-    if claim.modified_count != 1:
-        return  # concurrent webhook/verify already claimed this order
+    # The claim is conditional on BOTH the payment state and the cancellation state this call decided on. A cancellation
+    # or expiry landing between the read and the claim makes the claim miss; the order is then read again and handled as
+    # a late payment, instead of being overwritten to "processing" after its stock was already returned.
+    for _attempt in range(3):
+        order = await db.orders.find_one({"id": tx["order_id"]})
+        if not order:
+            return
+        if order.get("payment_status") == "paid":
+            return  # already processed
+        if not is_payable_online(order):
+            logger.warning("payment for order %s ignored: payment_status=%s method=%s is not payable", order["id"],
+                           order.get("payment_status"), order.get("payment_method"))
+            return  # refunded / partially refunded / COD: a payment call can never re-open or bypass it
+        # A payment for an already-cancelled order must never silently re-open it (its stock may have been returned).
+        cancelled = order.get("status") == "cancelled"
+        revivable = cancelled and order.get("cancel_reason") == EXPIRY_REASON   # expired by the 15-minute rule
+        paid_set = {"payment_status": "paid", "paid_at": now_iso(), "updated_at": now_iso()}
+        if not cancelled:      # the invoice is written atomically with the claim (a lost claim only leaves a numbering gap)
+            paid_set.update({"status": "processing", "invoice_number": await next_sequence("invoice", "INV", 6)})
+        claim = await db.orders.update_one({"id": order["id"], "payment_status": {"$in": list(PAYABLE_PAYMENT_STATES)},
+                                            "payment_method": {"$ne": "cod"},
+                                            "status": "cancelled" if cancelled else {"$ne": "cancelled"}}, {"$set": paid_set})
+        if claim.modified_count == 1:
+            break
+    else:
+        return  # the order kept changing; a later webhook / verify / status poll finishes it
+    invoice_number = paid_set.get("invoice_number")
     await db.payment_transactions.update_one(
         {"session_id": session_id},
         {"$set": {"status": "completed", "payment_status": "paid", "updated_at": now_iso()}},
@@ -697,9 +718,14 @@ async def upi_claim(body: UpiClaim, request: Request, user: dict = Depends(get_c
         raise HTTPException(status_code=404, detail="Order not found.")
     if order["payment_status"] == "paid":
         raise HTTPException(status_code=400, detail="This order is already paid.")
-    await db.orders.update_one({"id": order["id"]}, {"$set": {
+    if not is_payable_online(order):
+        raise HTTPException(status_code=409, detail="This order cannot take a UPI payment (cash on delivery, or already refunded).")
+    claimed = await db.orders.update_one({"id": order["id"], "payment_status": {"$in": list(PAYABLE_PAYMENT_STATES)},
+                                          "payment_method": {"$ne": "cod"}}, {"$set": {
         "payment_method": "upi_manual", "payment_status": "claimed",
         "upi_reference": body.reference, "updated_at": now_iso()}})
+    if claimed.modified_count != 1:
+        raise HTTPException(status_code=409, detail="This order changed just now. Please refresh.")
     await log_audit(user, "upi_payment_claimed", "order", order["id"],
                     new_value={"reference": body.reference}, request=request)
     return {"message": "Payment submitted. Our team will verify it shortly.", "order_id": order["id"]}
@@ -723,8 +749,8 @@ async def manual_payment_by_distributor(body: ManualPayBody, request: Request, a
     user = await db.users.find_one({"distributor_id": did})
     if not user:
         raise HTTPException(status_code=404, detail=f"No HomeGenie found with ID {did}.")
-    order = await db.orders.find_one({"user_id": user["id"], "payment_status": {"$ne": "paid"}},
-                                     sort=[("created_at", -1)])
+    order = await db.orders.find_one({"user_id": user["id"], "payment_status": {"$in": list(PAYABLE_PAYMENT_STATES)},
+                                      "payment_method": {"$ne": "cod"}}, sort=[("created_at", -1)])
     if not order:
         raise HTTPException(status_code=404, detail="This member has no pending order to mark as paid.")
     if order.get("payment_status") == "paid":
@@ -763,6 +789,8 @@ async def upi_confirm(order_id: str, body: UpiConfirm, request: Request, admin: 
         raise HTTPException(status_code=404, detail="Order not found.")
     if order.get("payment_status") == "paid":
         return {"message": "Order already paid."}
+    if not is_payable_online(order):
+        raise HTTPException(status_code=409, detail="This order cannot be confirmed as paid here (cash on delivery, or already refunded).")
     await db.orders.update_one({"id": order_id}, {"$set": {
         "payment_reference": ref, "upi_reference": ref, "updated_at": now_iso()}})
     sid = f"manual_{order_id}"
