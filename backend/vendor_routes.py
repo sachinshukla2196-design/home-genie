@@ -728,6 +728,8 @@ async def vendor_update_fulfilment(order_id: str, body: FulfilIn, request: Reque
     push = {"fulfilments.$.events": event}
     if nxt in RESTOCK_ON:   # the restock decision is recorded atomically with the transition, so a crash cannot lose it
         push["restock_intents"] = intent("vendor_release", user["id"], vendor_id=vid, reason=f"order_{nxt}")
+        if o.get("payment_status") in ("paid", "partially_refunded"):
+            sets["fulfilments.$.refund_due"] = True       # G2: the customer must be refunded for this vendor's lines
     res = await db.orders.update_one({"id": order_id, "fulfilments": {"$elemMatch": {"vendor_id": vid, "status": cur}}},
                                      {"$set": sets, "$push": push})
     if res.modified_count != 1:
@@ -737,6 +739,8 @@ async def vendor_update_fulfilment(order_id: str, body: FulfilIn, request: Reque
         await run_intents(order_id)
         from ledger import post_sale_reversal       # a paid order the vendor did not fulfil: take the recorded sale back
         await post_sale_reversal(o, vid)
+        from returns_routes import settle_vendor_rejection   # paid: one refund case for this vendor's lines (+ GST share)
+        await settle_vendor_rejection(order_id, vid)
 
     # Roll the overall order status forward when every vendor group has delivered.
     fresh = await db.orders.find_one({"id": order_id}, {"_id": 0, "fulfilments": 1})

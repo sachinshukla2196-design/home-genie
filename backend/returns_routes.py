@@ -114,11 +114,82 @@ async def refundable_paise(order: dict) -> int:
     return refundable_total_paise(order, paise_of(order, "total_paise", "total")) - paise_of(order, "refunded_paise", "refunded_amount")
 
 
+OPEN_CASE_STATES = ["awaiting_review", "initiated", "failed"]
+PAID_STATES = ("paid", "partially_refunded")
+
+
+async def _open_case_total(order_id: str) -> int:
+    """Refund already promised by cases that are still open (not yet paid out or closed)."""
+    return sum(c["amount_paise"] for c in await db.refund_cases.find({"order_id": order_id, "status": {"$in": OPEN_CASE_STATES}},
+                                                                    {"_id": 0, "amount_paise": 1}).to_list(100))
+
+
+def _lines_refund_paise(order: dict, vendor_id: str) -> int:
+    """One vendor's lines plus their share of the order's GST: the same basis as a return refund (_suggested_refund)."""
+    sub = paise_of(order, "subtotal_paise", "subtotal") or 1
+    gst = paise_of(order, "gst_paise", "gst_amount")
+    value = sum(paise_of(li, "total_paise", "total") for li in order.get("items", []) if li.get("vendor_id") == vendor_id)
+    return value + mul_ratio(gst, value, sub)
+
+
+async def settle_paid_cancellation(order_id: str):
+    """G1 (owner-approved): a PAID order that was cancelled gets ONE refund case (`cancel:<order>`, the same key the customer
+    cancellation uses) for what is still refundable and not already promised by another open case, and the sales of the
+    vendors whose fulfilment was cancelled are reversed once. No money moves: finance confirms the case as usual.
+    Idempotent and re-run by the repair sweep from the `refund_due_cancel` marker written with the cancellation."""
+    o = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not o or o.get("status") != "cancelled" or o.get("needs_refund") or o.get("payment_status") not in PAID_STATES:
+        return None
+    for f in o.get("fulfilments", []):
+        if f.get("status") in ("cancelled", "rejected"):
+            await L.post_sale_reversal(o, f["vendor_id"])
+    amount = await refundable_paise(o) - await _open_case_total(order_id)
+    case = None
+    if amount > 0:
+        case, _ = await open_refund_case(o, "cancellation", amount, "A paid order was cancelled", f"cancel:{order_id}")
+    await db.orders.update_one({"id": order_id}, {"$unset": {"refund_due_cancel": ""}})
+    return case
+
+
+async def settle_vendor_rejection(order_id: str, vendor_id: str):
+    """G2 (owner-approved): a vendor rejected or cancelled its part of a PAID order. ONE refund case for that vendor's lines
+    plus their GST share (`vreject:<order>:<vendor>`), capped by what is still refundable and not already promised; the
+    vendor's sale is reversed once (by the fulfilment route). Unaffected vendors' lines are untouched. When every vendor
+    group has been rejected or cancelled, the order itself becomes cancelled. Idempotent; re-run from `refund_due`."""
+    o = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not o or o.get("needs_refund") or o.get("payment_status") not in PAID_STATES:
+        return None
+    case = None
+    already = await db.refund_cases.find_one({"source_key": f"vreject:{order_id}:{vendor_id}"}, {"_id": 0})
+    if already:
+        case = already
+    else:
+        amount = min(_lines_refund_paise(o, vendor_id), await refundable_paise(o) - await _open_case_total(order_id))
+        if amount > 0:
+            case, _ = await open_refund_case(o, "vendor_rejection", amount, "The vendor could not fulfil a paid order",
+                                             f"vreject:{order_id}:{vendor_id}", vendor_id=vendor_id)
+    states = [f.get("status") for f in o.get("fulfilments", [])]
+    if states and all(st in ("rejected", "cancelled") for st in states):
+        await db.orders.update_one({"id": order_id, "status": {"$nin": ["cancelled", "delivered", "refunded"]}},
+                                   {"$set": {"status": "cancelled", "cancel_reason": "vendor_rejected", "cancelled_at": now_iso(), "updated_at": now_iso()}})
+    await db.orders.update_one({"id": order_id, "fulfilments.vendor_id": vendor_id}, {"$unset": {"fulfilments.$.refund_due": ""}})
+    return case
+
+
 async def ensure_cases_for_flagged_orders(limit: int = 200):
-    """Legacy/late-payment orders flagged `needs_refund` always have a refund case (created once, lazily)."""
+    """Every refund obligation has its case (created once, lazily; also run by the cron):
+    late payments flagged `needs_refund`, paid orders cancelled by an admin (`refund_due_cancel`), and vendor rejections of
+    paid orders (`fulfilments.refund_due`). The markers are written atomically with the state change, so a crash between
+    the change and the case creation is repaired here."""
     async for o in db.orders.find({"needs_refund": True, "payment_status": {"$in": ["paid", "partially_refunded"]}}, {"_id": 0}).limit(limit):
         if not await db.refund_cases.find_one({"source_key": f"late:{o['id']}"}, {"_id": 1}):
             await open_refund_case(o, "late_payment", await refundable_paise(o), o.get("needs_refund_reason") or "paid_after_cancellation", f"late:{o['id']}")
+    async for o in db.orders.find({"fulfilments.refund_due": True}, {"_id": 0, "id": 1, "fulfilments": 1}).limit(limit):
+        for f in o.get("fulfilments", []):
+            if f.get("refund_due"):
+                await settle_vendor_rejection(o["id"], f["vendor_id"])
+    async for o in db.orders.find({"refund_due_cancel": True}, {"_id": 0, "id": 1}).limit(limit):
+        await settle_paid_cancellation(o["id"])
 
 
 async def confirm_open_cases_for_order(order_id: str, refund: dict, admin_id: str):
@@ -195,6 +266,8 @@ async def refund_case_action(case_id: str, body: RefundAction, request: Request,
         if len(note) < 5:
             raise HTTPException(status_code=400, detail="A reason is required.")
     elif target == "resolved":
+        if admin.get("role") not in FINANCE_ROLES:      # closing a refund decision is a finance decision (owner-approved G3)
+            raise HTTPException(status_code=403, detail="Finance access required to close a refund case.")
         if len(note) < 5:
             raise HTTPException(status_code=400, detail="A closing note is required.")
         sets.update({"resolved_by": admin["id"], "outcome": "refunded" if case["status"] == "confirmed" else "no_refund"})
@@ -214,6 +287,15 @@ async def refund_case_action(case_id: str, body: RefundAction, request: Request,
                 raise HTTPException(status_code=400, detail="Manual reconciliation needs a note (10+ characters) explaining how the payment return was verified.")
         else:
             raise HTTPException(status_code=400, detail="confirmation_type must be 'provider' or 'manual_reconciliation'.")
+        # D1: claim the case for ONE reference before any money moves. Only the claimant runs the refund engine; a retry
+        # with the same reference continues an interrupted confirmation; any other reference is refused.
+        claimed = await db.refund_cases.update_one(
+            {"id": case_id, "status": "initiated", "$or": [{"confirming_reference": {"$exists": False}}, {"confirming_reference": ref}]},
+            {"$set": {"confirming_reference": ref, "confirming_by": admin["id"], "confirming_at": now}})
+        if claimed.matched_count != 1:
+            current = await db.refund_cases.find_one({"id": case_id}, {"_id": 0}) or {}
+            raise HTTPException(status_code=409, detail="This refund case is already being confirmed with another reference."
+                                if current.get("confirming_reference") else "This refund case was just updated. Refresh and try again.")
         import shop_routes
         res = await shop_routes.reverse_order_financials(case["order_id"], admin, request, refund_amount=paise_to_float(case["amount_paise"]),
                                                          reference=ref, reason=f"{case['number']}: {note or case['kind']}",
@@ -224,8 +306,18 @@ async def refund_case_action(case_id: str, body: RefundAction, request: Request,
             raise HTTPException(status_code=409, detail="The order was just updated. Try again.")
         sets.update({"reference": ref, "confirmation_type": body.confirmation_type, "confirmed_by": admin["id"],
                      "refund_event": f"{case['order_id']}:refund:{ref}", "amount_refunded_paise": to_paise(res["refund_amount"]) if not res.get("duplicate") else case["amount_paise"]})
-    claim = await db.refund_cases.update_one({"id": case_id, "status": case["status"]},
-                                             {"$set": sets, "$push": {"events": {"status": target, "at": now, "by": admin["id"], "note": note or body.reference}}})
+    if target in ("failed", "resolved") and case["status"] == "initiated" and case.get("confirming_reference"):
+        # a confirmation was started; if its refund was recorded it must be finished, not abandoned
+        if await db.order_refunds.find_one({"id": f"{case['order_id']}:refund:{case['confirming_reference']}"}, {"_id": 1}):
+            raise HTTPException(status_code=409, detail=f"A refund was already recorded with reference {case['confirming_reference']}. "
+                                                        "Finish the confirmation with that reference.")
+        unset_claim = True
+    else:
+        unset_claim = False
+    update = {"$set": sets, "$push": {"events": {"status": target, "at": now, "by": admin["id"], "note": note or body.reference}}}
+    if unset_claim:
+        update["$unset"] = {"confirming_reference": "", "confirming_by": "", "confirming_at": ""}
+    claim = await db.refund_cases.update_one({"id": case_id, "status": case["status"]}, update)
     if claim.modified_count != 1:
         raise HTTPException(status_code=409, detail="This refund case was just updated. Refresh and try again.")
     if target == "confirmed":
@@ -360,13 +452,10 @@ async def request_return(order_id: str, body: ReturnIn, request: Request, user: 
         prod = await db.products.find_one({"id": li["product_id"]}, {"_id": 0, "returnable": 1, "category": 1})
         if prod and (prod.get("returnable") is False or prod.get("category") in policy.get("excluded_categories", [])):
             raise HTTPException(status_code=400, detail=f"'{li['name']}' is not eligible for return.")
-        used = 0
-        async for rc in db.return_cases.find({"order_id": order_id, "status": {"$in": list(ACTIVE_RETURN_STATES) + ["refunded", "closed"]}}, {"_id": 0, "lines": 1}):
-            used += sum(x["quantity"] for x in rc["lines"] if x["order_line"] == idx)
-        if it.quantity > li["quantity"] - used:
-            raise HTTPException(status_code=400, detail=f"You can return at most {li['quantity'] - used} of '{li['name']}'.")
         by_vendor.setdefault(vid, []).append({"order_line": idx, "product_id": li["product_id"], "variant_sku": li.get("variant_sku"), "name": li["name"],
                                               "sku": li.get("sku"), "quantity": it.quantity, "price_paise": paise_of(li, "price_paise", "price")})
+    await _ensure_return_counters(order_id)
+    await _claim_return_quantities(order, [ln for lines in by_vendor.values() for ln in lines])
     cases = []
     for vid, lines in by_vendor.items():
         vname = next(f.get("vendor_name") for f in order["fulfilments"] if f["vendor_id"] == vid)
@@ -374,7 +463,7 @@ async def request_return(order_id: str, body: ReturnIn, request: Request, user: 
         rc = {"id": new_id(), "number": await next_sequence("return", "RTN", 6), "order_id": order_id, "order_number": order.get("order_number"),
               "user_id": user["id"], "vendor_id": vid, "vendor_name": vname, "kind": body.kind, "status": "requested", "lines": lines,
               "reason": body.reason.strip(), "photos": body.photos, "policy_version": policy.get("version", 0),
-              "suggested_refund_paise": _suggested_refund(order, lines) if body.kind == "return" else 0,
+              "suggested_refund_paise": _suggested_refund(order, lines) if body.kind == "return" else 0, "quantity_claimed": True,
               "events": [{"status": "requested", "at": ts, "by": user["id"], "note": body.reason.strip()}], "created_at": ts, "updated_at": ts}
         await db.return_cases.insert_one(dict(rc))
         await _notify_vendor(vid, "Return requested", f"{body.kind.title()} requested for order {order.get('order_number')}: {body.reason.strip()}", {"return_case": rc["id"]})
@@ -382,6 +471,55 @@ async def request_return(order_id: str, body: ReturnIn, request: Request, user: 
         rc.pop("_id", None)
         cases.append(_view(rc))
     return {"cases": cases}
+
+
+COUNTED_RETURN_STATES = list(ACTIVE_RETURN_STATES) + ["refunded", "closed"]
+
+
+async def _ensure_return_counters(order_id: str):
+    """Orders whose return quantities predate the counter get it once, computed from their still-counted return cases."""
+    if await db.orders.find_one({"id": order_id, "return_claims_init": True}, {"_id": 1}):
+        return
+    counts = {}
+    async for rc in db.return_cases.find({"order_id": order_id, "status": {"$in": COUNTED_RETURN_STATES}}, {"_id": 0, "lines": 1}):
+        for x in rc["lines"]:
+            counts[str(x["order_line"])] = counts.get(str(x["order_line"]), 0) + x["quantity"]
+    await db.orders.update_one({"id": order_id, "return_claims_init": {"$ne": True}}, {"$set": {"return_claims_init": True, "return_claimed": counts}})
+
+
+async def _claim_return_quantities(order: dict, lines: list) -> list:
+    """D2: claim the requested quantity of every line ATOMICALLY against what was ordered (one conditional $inc per line), so
+    concurrent requests can never claim more units than were bought. All or nothing: an over-claim undoes the claims this
+    request already made. Returns [(order_line, quantity)] claimed."""
+    done = []
+    for ln in lines:
+        idx, q = ln["order_line"], ln["quantity"]
+        ordered = order["items"][idx]["quantity"]
+        key = f"return_claimed.{idx}"
+        res = await db.orders.update_one(
+            {"id": order["id"], "return_claims_init": True,
+             "$expr": {"$lte": [{"$add": [{"$ifNull": [f"${key}", 0]}, q]}, ordered]}},
+            {"$inc": {key: q}})
+        if res.modified_count != 1:
+            for d_idx, d_q in done:
+                await db.orders.update_one({"id": order["id"]}, {"$inc": {f"return_claimed.{d_idx}": -d_q}})
+            fresh = await db.orders.find_one({"id": order["id"]}, {"_id": 0, "return_claimed": 1}) or {}
+            left = ordered - int((fresh.get("return_claimed") or {}).get(str(idx), 0))
+            raise HTTPException(status_code=400, detail=f"You can return at most {max(left, 0)} of '{order['items'][idx]['name']}'.")
+        done.append((idx, q))
+    return done
+
+
+async def _release_return_claim(rc: dict):
+    """A withdrawn or rejected return gives its claimed units back, exactly once (marker first, then the counter; a crash in
+    between only keeps units reserved, never over-releases). Cases from before the counter are covered by its initialisation."""
+    marked = await db.return_cases.update_one({"id": rc["id"], "claim_released": {"$ne": True}}, {"$set": {"claim_released": True}})
+    if marked.modified_count != 1:
+        return
+    inc = {}
+    for x in rc["lines"]:
+        inc[f"return_claimed.{x['order_line']}"] = inc.get(f"return_claimed.{x['order_line']}", 0) - x["quantity"]
+    await db.orders.update_one({"id": rc["order_id"], "return_claims_init": True}, {"$inc": inc})
 
 
 @router.get("/returns")
@@ -425,7 +563,9 @@ async def customer_ship_back(rid: str, body: ShipBackIn, user: dict = Depends(ge
 @router.post("/returns/{rid}/cancel")
 async def customer_cancel_return(rid: str, user: dict = Depends(get_current_user)):
     await _own_return(user, rid)
-    return _view(await _transition(rid, {"requested", "contested", "approved"}, "cancelled", user["id"], "Customer withdrew the request"))
+    out = await _transition(rid, {"requested", "contested", "approved"}, "cancelled", user["id"], "Customer withdrew the request")
+    await _release_return_claim(out)
+    return _view(out)
 
 
 # ----------------------------------------------------------- vendor side
@@ -578,6 +718,7 @@ async def admin_return_decision(rid: str, body: AdminReturnDecision, request: Re
         await _notify_vendor(rc["vendor_id"], "Return approved by admin", f"Return {rc['number']} was approved by HOME GENIES.")
     elif body.decision == "reject":
         out = await _transition(rid, {"requested", "contested"}, "rejected", admin["id"], body.note.strip())
+        await _release_return_claim(out)
         await create_notification(rc["user_id"], "order", "Return declined", f"Your return {rc['number']} was declined: {body.note.strip()}")
     else:
         raise HTTPException(status_code=400, detail="decision must be approve or reject.")

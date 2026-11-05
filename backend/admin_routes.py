@@ -191,6 +191,15 @@ class OrderStatusBody(BaseModel):
     status: str
 
 
+MONEY_ADMIN_ROLES = ("super_admin", "accounts_admin")      # roles that may move money by hand (same set as the finance controls)
+
+
+def require_money_admin(admin: dict = Depends(require_admin)) -> dict:
+    if admin.get("role") not in MONEY_ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="Only a finance administrator can do this.")
+    return admin
+
+
 @router.put("/orders/{order_id}/status")
 async def update_order_status(order_id: str, body: OrderStatusBody, request: Request, admin: dict = Depends(require_admin)):
     allowed = ["pending", "payment_pending", "paid", "processing", "packed", "shipped", "delivered", "cancelled", "refunded"]
@@ -218,13 +227,19 @@ async def update_order_status(order_id: str, body: OrderStatusBody, request: Req
     cancelling = body.status == "cancelled" and o.get("status") != "cancelled"
     if cancelling:   # the restock decision is stored atomically with the status change; recovery replays it if interrupted
         upd["$push"] = {"restock_intents": intent("admin_cancel", admin["id"], prev_status=o.get("status", ""))}
+        if o.get("payment_status") in ("paid", "partially_refunded") and not o.get("needs_refund"):
+            upd["$set"]["refund_due_cancel"] = True      # G1: the refund obligation is recorded with the cancellation itself
     changed = await db.orders.update_one({"id": order_id, "status": current}, upd)    # conditional: a concurrent expiry/payment wins cleanly
     if changed.matched_count != 1:
         raise HTTPException(status_code=409, detail="This order was just updated. Refresh and try again.")
     restock = None
+    refund_case = None
     if cancelling:
         # Confirmed cancellation: return stock for goods that have not left, stop pre-dispatch fulfilment.
         restock = {"restocked_lines": await run_intents(order_id)}
+        from returns_routes import settle_paid_cancellation
+        case = await settle_paid_cancellation(order_id)          # paid order: one refund case, cancelled vendors' sales reversed
+        refund_case = (case or {}).get("number")
     # NOTE: 'cancelled' on a PAID order does NOT reverse commissions by itself — only a confirmed
     # payment return (Refund action) does. Unpaid cancelled orders never generated commissions.
     await create_notification(o["user_id"], "order", "Order update",
@@ -232,7 +247,7 @@ async def update_order_status(order_id: str, body: OrderStatusBody, request: Req
                               "ऑर्डर अपडेट", f"आपका ऑर्डर {o['order_number']} अब {body.status} है।")
     await log_audit(admin, "order_status_changed", "order", order_id,
                     old_value={"status": o["status"]}, new_value={"status": body.status, "restock": restock}, request=request)
-    return {"ok": True, "restock": restock}
+    return {"ok": True, "restock": restock, "refund_case": refund_case}
 
 
 class RefundBody(BaseModel):
@@ -243,7 +258,7 @@ class RefundBody(BaseModel):
 
 
 @router.post("/orders/{order_id}/refund")
-async def refund_order(order_id: str, body: RefundBody, request: Request, admin: dict = Depends(require_admin)):
+async def refund_order(order_id: str, body: RefundBody, request: Request, admin: dict = Depends(require_money_admin)):
     """Record a confirmed payment return (full or partial) and claw back order-dependent credits proportionally."""
     ref = (body.reference or "").strip()
     if not ref:
@@ -267,9 +282,12 @@ async def refund_order(order_id: str, body: RefundBody, request: Request, admin:
     cancelling = new_status == "cancelled" and o.get("status") != "cancelled"
     if cancelling:
         upd["$push"] = {"restock_intents": intent("admin_cancel", admin["id"], prev_status=o.get("status", ""))}
+        upd["$set"]["refund_due_cancel"] = True          # any amount still refundable after this refund gets its case (G1)
     await db.orders.update_one({"id": order_id}, upd)
     if cancelling:
         await run_intents(order_id)
+        from returns_routes import settle_paid_cancellation
+        await settle_paid_cancellation(order_id)
     await create_notification(o["user_id"], "order", "Refund processed",
                               f"₹{res['refund_amount']:g} refunded on order {o['order_number']} (ref {ref}).",
                               "रिफंड हो गया", f"ऑर्डर {o['order_number']} पर ₹{res['refund_amount']:g} रिफंड हुआ।")
@@ -336,15 +354,6 @@ async def admin_commissions(admin: dict = Depends(require_admin)):
 class CommissionActionBody(BaseModel):
     action: str  # release / hold
     reason: str = ""
-
-
-MONEY_ADMIN_ROLES = ("super_admin", "accounts_admin")      # roles that may move money by hand (same set as the finance controls)
-
-
-def require_money_admin(admin: dict = Depends(require_admin)) -> dict:
-    if admin.get("role") not in MONEY_ADMIN_ROLES:
-        raise HTTPException(status_code=403, detail="Only a finance administrator can do this.")
-    return admin
 
 
 @router.put("/commissions/{commission_id}/status")

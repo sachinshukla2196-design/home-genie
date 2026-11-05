@@ -77,7 +77,8 @@ async def expire_pending_orders(request: Request):
     expired = await expire_pending_online_orders(limit=500)          # also runs crash recovery
     from ledger import reconcile_ledger
     from finance_routes import reconcile_settlements
-    from returns_routes import reconcile_returns
+    from returns_routes import reconcile_returns, ensure_cases_for_flagged_orders
+    await ensure_cases_for_flagged_orders()          # every refund obligation (late payment, paid cancellation, vendor rejection) has its case
     from vendor_routes import sweep_dispatch_deadlines
     return {"ok": True, "expired": expired, "markers_pruned": await prune_stock_markers(), "returns_repaired": await reconcile_returns(), "deadline_alerts": await sweep_dispatch_deadlines(),
             "ledger": await reconcile_ledger(), "settlements_repaired": await reconcile_settlements()}
