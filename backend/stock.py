@@ -166,21 +166,35 @@ async def _finalize(txn: dict):
     sign = _sign(txn["kind"])
     for ln in txn["lines"]:
         _fault("before_finalize_line", txn=txn, line=ln)
-        await db.stock_movements.update_one(
-            {"txn_id": txn["id"], "line": ln["i"]},
-            {"$setOnInsert": {"id": new_id(), "product_id": ln["product_id"], "variant_sku": ln.get("variant_sku"),
-                              "delta": sign * ln["quantity"], "reason": txn["reason"], "order_id": txn["order_id"],
-                              "actor_id": txn["actor_id"], "created_at": now_iso()}}, upsert=True)
+        await _log_movement(txn, ln, sign)
         if txn["kind"] == "reserve":
             await _low_stock_alert(txn, ln)
         if txn["kind"] == "release":
-            await db.orders.update_one({"id": txn["order_id"]}, {"$set": {f"items.{ln['i']}.stock_released": True,
-                                                                         f"items.{ln['i']}.release_gen": ln.get("gen", 0) + 1}})
+            # Only while the line is still at the generation this release was created for: a stale finalizer of an old
+            # release must not mark a line released after a later revival re-reserved it (the counter would disagree).
+            gen, key = ln.get("gen", 0), f"items.{ln['i']}.release_gen"
+            at_gen = {key: gen} if gen else {"$or": [{key: 0}, {key: {"$exists": False}}]}
+            await db.orders.update_one({"id": txn["order_id"], **at_gen}, {"$set": {f"items.{ln['i']}.stock_released": True, key: gen + 1}})
         elif txn["kind"] == "revive":
             await db.orders.update_one({"id": txn["order_id"]}, {"$set": {f"items.{ln['i']}.stock_released": False}})
     _fault("before_finalized_flag", txn=txn)
     set_bound = {"bound": True} if txn["kind"] in ("release", "restock_return") else {}
     await db.stock_txns.update_one({"id": txn["id"]}, {"$set": {"finalized": True, "updated_at": now_iso(), **set_bound}})
+
+
+async def _log_movement(txn: dict, ln: dict, sign: int):
+    """One movement row per (transaction, line), even when several runners finalize the same transaction at once.
+    The row's _id is derived from the transaction and line, so a concurrent second insert is refused by MongoDB itself
+    (an upsert on a non-unique filter could insert twice). A row written before this change (random _id) is found first."""
+    if await db.stock_movements.find_one({"txn_id": txn["id"], "line": ln["i"]}, {"_id": 1}):
+        return
+    try:
+        await db.stock_movements.insert_one({
+            "_id": f"mv:{txn['id']}:{ln['i']}", "id": new_id(), "txn_id": txn["id"], "line": ln["i"], "product_id": ln["product_id"],
+            "variant_sku": ln.get("variant_sku"), "delta": sign * ln["quantity"], "reason": txn["reason"], "order_id": txn["order_id"],
+            "actor_id": txn["actor_id"], "created_at": now_iso()})
+    except DuplicateKeyError:
+        pass                                          # another runner logged this line first
 
 
 async def _low_stock_alert(txn: dict, ln: dict):
@@ -359,6 +373,11 @@ async def handle_late_payment(order: dict, allow_revive: bool = True) -> bool:
     """
     oid = order["id"]
     if allow_revive:
+        # Settle the expiry's stock return FIRST. An expiry that is still in flight (or was interrupted after its claim)
+        # would otherwise return the stock after the revival below had re-reserved only the lines already marked
+        # released, leaving an active order with no stock behind it. release_stock uses the expiry's own transaction
+        # keys, so this finishes that same return exactly once; then every line is released and is re-reserved together.
+        await release_stock(oid, "order_payment_timeout", "system")
         n = (await db.orders.find_one({"id": oid}, {"_id": 0, "revive_count": 1}) or {}).get("revive_count", 0)
         if await reserve_again(oid, "order_revived_late_payment"):
             _fault("before_finish_revival", order=order)
