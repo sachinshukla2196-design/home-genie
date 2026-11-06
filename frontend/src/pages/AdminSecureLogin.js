@@ -71,7 +71,7 @@ export default function AdminSecureLogin() {
       <span aria-hidden="true" className="pointer-events-none absolute -left-24 top-10 -z-10 h-80 w-80 rounded-full bg-hg-violet/35 blur-3xl" />
       <span aria-hidden="true" className="pointer-events-none absolute -bottom-24 -right-16 -z-10 h-80 w-80 rounded-full bg-hg-pink/20 blur-3xl" />
       <motion.div initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-        className="relative w-full max-w-md rounded-[1.75rem] border border-white/15 bg-white/[0.06] p-5 text-white shadow-[0_24px_60px_-20px_rgba(0,0,0,0.6),0_0_80px_-30px_rgba(139,61,255,0.7)] backdrop-blur-xl sm:p-8">
+        className="relative w-full max-w-md rounded-[1.75rem] border border-white/15 bg-white/[0.06] p-5 text-white shadow-[0_24px_60px_-20px_rgba(0,0,0,0.6),0_0_80px_-30px_rgba(92,58,38,0.7)] backdrop-blur-xl sm:p-8">
         <Stagger>
           <StaggerItem className="flex items-center justify-between gap-3">
             <Logo size="sm" dark />
@@ -94,7 +94,7 @@ export default function AdminSecureLogin() {
                 <Input type="text" required value={username} onChange={(e) => setUsername(e.target.value)} placeholder="admin username" className="mt-1.5 h-12 rounded-2xl border-white/20 bg-white/[0.08] text-white placeholder:text-white/45 focus-visible:ring-hg-lavender" data-testid="admin-email" />
               </div>
               <SecretField label="Password" value={password} onChange={(e) => setPassword(e.target.value)} testid="admin-password" placeholder="Your password" />
-              <Button type="submit" disabled={loading} className="hg-btn h-12 w-full rounded-2xl text-base font-semibold shadow-[0_12px_28px_-12px_rgba(168,85,247,0.8)] transition-transform hover:-translate-y-0.5 active:scale-[0.98]" data-testid="admin-login-submit">
+              <Button type="submit" disabled={loading} className="hg-btn h-12 w-full rounded-2xl text-base font-semibold shadow-[0_12px_28px_-12px_rgba(138,90,58,0.8)] transition-transform hover:-translate-y-0.5 active:scale-[0.98]" data-testid="admin-login-submit">
                 {loading ? <span className="inline-flex items-center gap-2"><span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />Verifying…</span> : "Unlock Admin Panel"}
               </Button>
             </form>

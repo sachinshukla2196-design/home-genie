@@ -9,14 +9,14 @@ import { Money, Pill, RangeBar, StateBlock, fmtDate, inrP, inrV } from "@/compon
 
 export const FULFIL_TONE = {
   new: "bg-hg-gold/15 text-hg-gold ring-hg-gold/30", accepted: "bg-hg-violet/15 text-hg-lavender ring-hg-lavender/30",
-  packed: "bg-hg-violet/15 text-hg-lavender ring-hg-lavender/30", dispatched: "bg-[#5B7CFF]/15 text-[#8FA6FF] ring-[#8FA6FF]/30",
+  packed: "bg-hg-violet/15 text-hg-lavender ring-hg-lavender/30", dispatched: "bg-[#3D6B8F]/15 text-[#6E93B5] ring-[#6E93B5]/30",
   delivered: "bg-hg-success/15 text-hg-success ring-hg-success/30", delivery_failed: "bg-danger/10 text-danger ring-danger/30",
   rejected: "bg-danger/10 text-danger ring-danger/30", cancelled: "bg-danger/10 text-danger ring-danger/30",
   returned_to_origin: "bg-white/10 text-muted2 ring-white/15",
 };
 export const inr = inrV;   // kept for the other vendor pages
 
-const VIOLET = "#8B3DFF";
+const VIOLET = "#5C3A26";
 const GOLD = "#E0A92E";
 const PRIORITY_TONE = { high: "bad", medium: "warn", low: "info" };
 

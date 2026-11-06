@@ -3,7 +3,6 @@ import { Link, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 import { Check, Eye, EyeOff, UserPlus } from "lucide-react";
-import { ThemeToggle } from "@/components/ThemeToggle";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -49,7 +48,6 @@ export default function Login() {
   return (
     <div className="min-h-screen px-4 pb-10" style={{ paddingTop: "env(safe-area-inset-top, 0px)" }}>
       <div className="mx-auto w-full max-w-md">
-        <div className="flex justify-end pt-4"><span className="hg-icon-btn"><ThemeToggle /></span></div>
 
         <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="text-center">
           <Link to="/" className="relative mx-auto block w-fit">
@@ -57,7 +55,7 @@ export default function Login() {
             <motion.img src="/brand/logo-icon.png" alt="HOME GENIES" className="hg-float h-36 w-36 rounded-[2rem] object-cover ring-1 ring-hg-violet/40 shadow-2xl"
               initial={{ scale: 0.7, opacity: 0, rotate: -8 }} animate={{ scale: 1, opacity: 1, rotate: 0 }} transition={{ type: "spring", stiffness: 200, damping: 16 }} />
           </Link>
-          <div className="mt-5 font-display text-4xl font-bold tracking-tight"><span className="text-[#1B1024] dark:text-white">HOME </span><span className="bg-gradient-to-b from-[#E9A8F7] via-hg-lavender to-[#9333EA] bg-clip-text text-transparent">GENIES</span></div>
+          <div className="mt-5 font-display text-4xl font-bold tracking-tight"><span className="text-[#2B1A10] dark:text-white">HOME </span><span className="bg-gradient-to-b from-[#E7C877] via-hg-lavender to-[#86671E] bg-clip-text text-transparent">GENIES</span></div>
           <div className="mt-1 text-lg text-muted2">{t("brand.tagline")}</div>
 
           <div className="mt-8 text-sm font-medium uppercase tracking-[0.18em] text-muted2">{t("login.chooseLang")}</div>
@@ -65,7 +63,7 @@ export default function Login() {
             {[["en", "English", "EN"], ["hi", "हिन्दी", "Hindi"]].map(([code, label, sub]) => (
               <motion.button key={code} type="button" onClick={() => setLang(code)} data-testid={`lang-${code}-btn`}
                 whileHover={{ y: -2 }} whileTap={{ scale: 0.96 }} animate={lang === code ? { scale: [1, 1.04, 1] } : { scale: 1 }} transition={{ duration: 0.35 }}
-                className={`relative rounded-3xl border px-4 py-5 transition-colors ${lang === code ? "hg-chip-on border-transparent shadow-[0_14px_30px_-12px_rgba(168,85,247,0.7)]" : "hg-card"}`}>
+                className={`relative rounded-3xl border px-4 py-5 transition-colors ${lang === code ? "hg-chip-on border-transparent shadow-[0_14px_30px_-12px_rgba(138,90,58,0.7)]" : "hg-card"}`}>
                 <AnimatePresence>
                   {lang === code && (
                     <motion.span initial={{ scale: 0, rotate: -90 }} animate={{ scale: 1, rotate: 0 }} exit={{ scale: 0 }} transition={{ type: "spring", stiffness: 500, damping: 20 }}
@@ -102,7 +100,7 @@ export default function Login() {
                 </button>
               </div>
             </div>
-            <Button type="submit" disabled={loading} className="hg-btn h-12 w-full rounded-2xl text-base font-semibold shadow-[0_12px_28px_-12px_rgba(168,85,247,0.8)] transition-transform hover:-translate-y-0.5 active:scale-[0.98]" data-testid="login-submit">
+            <Button type="submit" disabled={loading} className="hg-btn h-12 w-full rounded-2xl text-base font-semibold shadow-[0_12px_28px_-12px_rgba(138,90,58,0.8)] transition-transform hover:-translate-y-0.5 active:scale-[0.98]" data-testid="login-submit">
               {loading ? <span className="inline-flex items-center gap-2"><span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />{t("common.loading")}</span> : t("cta.login")}
             </Button>
           </form>

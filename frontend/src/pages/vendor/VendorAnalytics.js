@@ -8,7 +8,7 @@ import { useI18n } from "@/context/I18nContext";
 import { API, apiError } from "@/lib/api";
 import { Money, RangeBar, StateBlock, fmtDate, inrP } from "@/components/vendor/kit";
 
-const COLORS = ["#8B3DFF", "#E0A92E", "#D946EF", "#5B7CFF", "#2BB98A"];
+const COLORS = ["#5C3A26", "#E0A92E", "#D946EF", "#3D6B8F", "#2BB98A"];
 const axis = { fontSize: 11, fill: "#9A8FB0" };
 
 export function Chart({ title, summary, rows, empty, children, testid }) {
@@ -65,7 +65,7 @@ export default function VendorAnalytics() {
         {metric("return", t("vx.an.returnRate"), pct(d.cancellation_return.returned_or_failed), t("vx.an.returnHint"))}
       </div>
       <Chart title={t("vx.dash.trend")} testid="an-trend" empty={n === 0 ? t("vx.dash.noData") : null} summary={t("vx.dash.trendSummary", { n, v: inrP(s.order_value_paise) })} rows={trend.map((x) => [x.date, `${x.orders} / ${inrP(x.value_paise)}`])}>
-        <ResponsiveContainer width="100%" height="100%"><AreaChart data={trend}><CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" /><XAxis dataKey="label" tick={axis} interval="preserveStartEnd" /><YAxis tick={axis} width={64} tickFormatter={(v) => `₹${Math.round(v / 100).toLocaleString("en-IN")}`} /><Tooltip formatter={(v) => inrP(v)} /><Area dataKey="value_paise" stroke="#8B3DFF" fill="#8B3DFF33" strokeWidth={2} name={t("vp.k.orderValue")} /></AreaChart></ResponsiveContainer>
+        <ResponsiveContainer width="100%" height="100%"><AreaChart data={trend}><CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" /><XAxis dataKey="label" tick={axis} interval="preserveStartEnd" /><YAxis tick={axis} width={64} tickFormatter={(v) => `₹${Math.round(v / 100).toLocaleString("en-IN")}`} /><Tooltip formatter={(v) => inrP(v)} /><Area dataKey="value_paise" stroke="#5C3A26" fill="#5C3A2633" strokeWidth={2} name={t("vp.k.orderValue")} /></AreaChart></ResponsiveContainer>
       </Chart>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Chart title={t("vx.an.byPillar")} testid="an-pillar" empty={cats.length === 0 ? t("vx.dash.noData") : null} summary={t("vx.an.byPillarSummary", { n: cats.length })} rows={cats.map((c) => [c.name, inrP(c.value_paise)])}>
@@ -75,7 +75,7 @@ export default function VendorAnalytics() {
           <ResponsiveContainer width="100%" height="100%"><PieChart><Pie data={methods} dataKey="n" nameKey="name" innerRadius={50} outerRadius={80} label>{methods.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}</Pie><Tooltip /></PieChart></ResponsiveContainer>
         </Chart>
         <Chart title={t("vx.dash.byStatus")} testid="an-status" empty={status.length === 0 ? t("vx.dash.noData") : null} summary={t("vx.dash.byStatusSummary", { n })} rows={status.map((r) => [r.name, r.n])}>
-          <ResponsiveContainer width="100%" height="100%"><BarChart data={status} layout="vertical" margin={{ left: 8, right: 16 }}><CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" horizontal={false} /><XAxis type="number" allowDecimals={false} tick={axis} /><YAxis type="category" dataKey="name" width={110} tick={axis} /><Tooltip /><Bar dataKey="n" maxBarSize={28} fill="#8B3DFF" radius={[0, 6, 6, 0]} /></BarChart></ResponsiveContainer>
+          <ResponsiveContainer width="100%" height="100%"><BarChart data={status} layout="vertical" margin={{ left: 8, right: 16 }}><CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" horizontal={false} /><XAxis type="number" allowDecimals={false} tick={axis} /><YAxis type="category" dataKey="name" width={110} tick={axis} /><Tooltip /><Bar dataKey="n" maxBarSize={28} fill="#5C3A26" radius={[0, 6, 6, 0]} /></BarChart></ResponsiveContainer>
         </Chart>
         <SectionCard title={t("vx.dash.bestSellers")} testid="an-best">
           {d.best_sellers.length === 0 ? <p className="hg-tile p-5 text-center text-sm text-muted2">{t("vx.dash.noData")}</p> : <ol className="space-y-2">{d.best_sellers.map((b, i) => <li key={b.product_id} className="hg-tile flex items-center justify-between gap-3 p-3 text-sm"><span className="min-w-0 truncate text-ink">{i + 1}. {b.name}</span><span className="text-xs text-muted2">{t("vx.dash.units", { n: b.quantity })}</span><Money paise={b.value_paise} className="font-semibold text-ink" /></li>)}</ol>}

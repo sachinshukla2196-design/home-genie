@@ -86,8 +86,8 @@ export function JourneyCard({ d, t }) {
               <motion.span initial={{ scale: reduce ? 1 : 0.5 }} animate={{ scale: 1 }}
                 transition={{ type: "spring", stiffness: 380, damping: 15, delay: at(0.4 + i * 0.16) }}
                 className={`relative z-10 flex h-[3.25rem] w-[3.25rem] shrink-0 items-center justify-center rounded-full ring-4 ring-hg-bg2 ${
-                  s.done ? "bg-gradient-to-br from-hg-violet to-hg-pink text-white shadow-[0_0_24px_-4px_rgba(139,61,255,0.8)]"
-                    : isNow ? "bg-gradient-to-br from-hg-violet to-[#6B2BD0] text-white" : "bg-white/[0.06] text-muted2"}`}>
+                  s.done ? "bg-gradient-to-br from-hg-violet to-hg-pink text-white shadow-[0_0_24px_-4px_rgba(92,58,38,0.8)]"
+                    : isNow ? "bg-gradient-to-br from-hg-violet to-[#5C3A26] text-white" : "bg-white/[0.06] text-muted2"}`}>
                 <Icon size={22} />
                 {isNow && !reduce && <span className="absolute inset-0 animate-ping rounded-full bg-hg-violet/30 [animation-duration:2s]" />}
                 {s.done && (

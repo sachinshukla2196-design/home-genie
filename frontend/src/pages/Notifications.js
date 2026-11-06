@@ -35,7 +35,7 @@ export default function Notifications() {
                 <div className="break-words text-sm text-muted2">{lang === "hi" ? n.message_hi : n.message}</div>
                 <div className="mt-1 text-xs text-muted2">{(n.created_at || "").slice(0, 16).replace("T", " ")}</div>
               </div>
-              {!n.read && <span className="relative mt-1.5 flex h-2.5 w-2.5 shrink-0"><span className="h-2.5 w-2.5 rounded-full bg-hg-pink shadow-[0_0_8px_rgba(237,155,234,0.8)]" /></span>}
+              {!n.read && <span className="relative mt-1.5 flex h-2.5 w-2.5 shrink-0"><span className="h-2.5 w-2.5 rounded-full bg-hg-pink shadow-[0_0_8px_rgba(217,160,107,0.8)]" /></span>}
             </StaggerItem>
           ))}
         </Stagger>

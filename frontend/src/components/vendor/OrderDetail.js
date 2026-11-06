@@ -109,8 +109,8 @@ export function OrderDetail({ orderId, onChanged }) {
       )}
 
       {(o.shipment.tracking_number || ["packed", "accepted"].includes(f.status)) && (
-        <div className="rounded-xl bg-[#5B7CFF]/10 p-3 text-sm ring-1 ring-[#8FA6FF]/25" data-testid="od-shipment">
-          <div className="flex items-center gap-2"><Truck size={16} className="text-[#8FA6FF]" aria-hidden />
+        <div className="rounded-xl bg-[#3D6B8F]/10 p-3 text-sm ring-1 ring-[#6E93B5]/25" data-testid="od-shipment">
+          <div className="flex items-center gap-2"><Truck size={16} className="text-[#6E93B5]" aria-hidden />
             {o.shipment.tracking_number ? <span>{o.shipment.carrier} · <b className="text-ink">{o.shipment.tracking_number}</b>{o.shipment.tracking_url && <> · <a href={o.shipment.tracking_url} target="_blank" rel="noopener noreferrer" className="text-hg-lavender underline">{t("vx.ord.track")}</a></>}</span> : <span className="text-muted2">{t("vx.ord.noTracking")}</span>}</div>
           <p className="mt-1 text-[11px] text-muted2">{t("vx.ord.manualTracking")}</p>
         </div>

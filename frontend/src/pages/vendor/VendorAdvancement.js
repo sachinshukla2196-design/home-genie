@@ -93,7 +93,7 @@ export default function VendorAdvancement() {
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={trend}><CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.08)" /><XAxis dataKey="label" tick={axis} interval="preserveStartEnd" />
             <YAxis tick={axis} width={64} tickFormatter={(v) => `₹${Math.round(v / 100).toLocaleString("en-IN")}`} /><Tooltip formatter={(v) => inrP(v)} />
-            <Area dataKey="value_paise" stroke="#8B3DFF" fill="#8B3DFF33" strokeWidth={2} name={t("vp.k.orderValue")} /></AreaChart>
+            <Area dataKey="value_paise" stroke="#5C3A26" fill="#5C3A2633" strokeWidth={2} name={t("vp.k.orderValue")} /></AreaChart>
         </ResponsiveContainer>
       </Chart>
 

@@ -20,7 +20,7 @@ export default function Referral() {
 
   useEffect(() => { API.get("/referral").then(({ data }) => setInfo(data)).catch(() => {}); }, []);
   useEffect(() => {
-    QRCode.toDataURL(link, { margin: 1, width: 240, color: { dark: "#2E1065", light: "#ffffff" } })
+    QRCode.toDataURL(link, { margin: 1, width: 240, color: { dark: "#3B2417", light: "#ffffff" } })
       .then(setQr).catch(() => {});
   }, [link]);
 

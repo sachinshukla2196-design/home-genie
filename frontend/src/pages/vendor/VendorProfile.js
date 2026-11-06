@@ -128,7 +128,7 @@ export default function VendorProfile() {
           {!underReview && (
             <label className="hg-card flex cursor-pointer items-start gap-3 p-5 text-sm text-ink">
               <input type="checkbox" checked={f.agree_terms} onChange={(e) => setF({ ...f, agree_terms: e.target.checked })}
-                className="mt-0.5 h-4 w-4 accent-[#8B3DFF]" data-testid="vp-terms" />
+                className="mt-0.5 h-4 w-4 accent-[#5C3A26]" data-testid="vp-terms" />
               <span>{t("vp.f.terms")}</span>
             </label>
           )}

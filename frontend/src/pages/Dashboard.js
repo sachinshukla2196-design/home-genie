@@ -212,16 +212,16 @@ export default function Dashboard() {
             <ResponsiveContainer width="100%" height={256} minWidth={0} debounce={1}>
               <LineChart data={d.income_series} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(145,133,164,0.25)" vertical={false} />
-                <XAxis dataKey="date" tick={{ fill: "#9185A4", fontSize: 12 }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fill: "#9185A4", fontSize: 12 }} axisLine={false} tickLine={false} width={30} />
+                <XAxis dataKey="date" tick={{ fill: "#A08C74", fontSize: 12 }} axisLine={false} tickLine={false} />
+                <YAxis tick={{ fill: "#A08C74", fontSize: 12 }} axisLine={false} tickLine={false} width={30} />
                 <Tooltip
-                  contentStyle={{ background: "rgba(25,14,43,.92)", border: "1px solid rgba(255,255,255,.14)", color: "#fff", borderRadius: 12 }}
-                  labelStyle={{ color: "#C9BED9" }} itemStyle={{ color: "#fff" }}
-                  cursor={{ stroke: "rgba(198,155,255,0.35)" }}
+                  contentStyle={{ background: "rgba(59,36,23,.92)", border: "1px solid rgba(255,255,255,.14)", color: "#fff", borderRadius: 12 }}
+                  labelStyle={{ color: "#E9D9BC" }} itemStyle={{ color: "#fff" }}
+                  cursor={{ stroke: "rgba(201,161,59,0.35)" }}
                   formatter={(v) => money(v)} />
-                <Line type="monotone" dataKey="income" stroke="#8B3DFF" strokeWidth={2.5}
-                  dot={{ r: 3.5, fill: "#C69BFF", stroke: "#8B3DFF", strokeWidth: 1.5 }}
-                  activeDot={{ r: 5.5, fill: "#C69BFF", stroke: "#fff", strokeWidth: 2 }} />
+                <Line type="monotone" dataKey="income" stroke="#5C3A26" strokeWidth={2.5}
+                  dot={{ r: 3.5, fill: "#C9A13B", stroke: "#5C3A26", strokeWidth: 1.5 }}
+                  activeDot={{ r: 5.5, fill: "#C9A13B", stroke: "#fff", strokeWidth: 2 }} />
               </LineChart>
             </ResponsiveContainer>
           </div>

@@ -6,7 +6,6 @@ import {
 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
-import { ThemeToggle } from "@/components/ThemeToggle";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
@@ -53,16 +52,16 @@ export const useVendor = () => useContext(VendorCtx);
 export const VENDOR_STATUS_TONE = {
   draft: "bg-white/10 text-muted2 ring-white/15",
   submitted: "bg-hg-gold/15 text-hg-gold ring-hg-gold/30",
-  under_review: "bg-[#5B7CFF]/15 text-[#8FA6FF] ring-[#8FA6FF]/30",
+  under_review: "bg-[#3D6B8F]/15 text-[#6E93B5] ring-[#6E93B5]/30",
   approved: "bg-hg-success/15 text-hg-success ring-hg-success/30",
   rejected: "bg-danger/10 text-danger ring-danger/30",
   suspended: "bg-danger/10 text-danger ring-danger/30",
-  invited: "bg-[#5B7CFF]/15 text-[#8FA6FF] ring-[#8FA6FF]/30",
+  invited: "bg-[#3D6B8F]/15 text-[#6E93B5] ring-[#6E93B5]/30",
   pending_documents: "bg-hg-gold/15 text-hg-gold ring-hg-gold/30",
   changes_requested: "bg-hg-gold/15 text-hg-gold ring-hg-gold/30",
   active: "bg-hg-success/15 text-hg-success ring-hg-success/30",
   onboarding: "bg-hg-gold/15 text-hg-gold ring-hg-gold/30",
-  ready_for_review: "bg-[#5B7CFF]/15 text-[#8FA6FF] ring-[#8FA6FF]/30",
+  ready_for_review: "bg-[#3D6B8F]/15 text-[#6E93B5] ring-[#6E93B5]/30",
 };
 
 export function VendorLayout() {
@@ -148,7 +147,6 @@ export function VendorLayout() {
                       {unread > 0 && <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-hg-violet px-1 text-[11px] font-bold text-white">{unread}</span>}
                     </Link>
                   )}
-                  <span className="hg-icon-btn !hidden sm:!inline-flex"><ThemeToggle /></span>
                   <LanguageSwitcher />
                 </div>
               </div>
@@ -183,7 +181,7 @@ export function VendorLayout() {
                   </div>
                 ))}
                 <div className="flex items-center justify-between gap-3 border-t border-brand-50 pt-3">
-                  <ThemeToggle />
+                  <span />
                   <button onClick={logout} className="flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-danger" data-testid="vendor-logout-mobile"><LogOut size={16} aria-hidden /> {t("nav.logout")}</button>
                 </div>
               </div>

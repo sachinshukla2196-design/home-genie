@@ -36,7 +36,7 @@ export const TONES = {
   ok: ["bg-hg-success/15 text-hg-success ring-hg-success/30", "●"],
   warn: ["bg-hg-gold/15 text-hg-gold ring-hg-gold/30", "▲"],
   bad: ["bg-danger/10 text-danger ring-danger/30", "■"],
-  info: ["bg-[#5B7CFF]/15 text-[#8FA6FF] ring-[#8FA6FF]/30", "◆"],
+  info: ["bg-[#3D6B8F]/15 text-[#6E93B5] ring-[#6E93B5]/30", "◆"],
   violet: ["bg-hg-violet/15 text-hg-lavender ring-hg-lavender/30", "●"],
   muted: ["bg-white/10 text-muted2 ring-white/15", "○"],
 };

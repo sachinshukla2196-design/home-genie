@@ -221,7 +221,7 @@ export default function Register() {
                   </div>
                 </Section>
 
-                <Button type="submit" disabled={loading} className="hg-btn h-12 w-full rounded-2xl text-base font-semibold shadow-[0_12px_28px_-12px_rgba(168,85,247,0.8)] transition-transform hover:-translate-y-0.5 active:scale-[0.98]" data-testid="reg-submit">
+                <Button type="submit" disabled={loading} className="hg-btn h-12 w-full rounded-2xl text-base font-semibold shadow-[0_12px_28px_-12px_rgba(138,90,58,0.8)] transition-transform hover:-translate-y-0.5 active:scale-[0.98]" data-testid="reg-submit">
                   {loading ? <span className="inline-flex items-center gap-2">{spinner}{t("common.loading")}</span> : "Submit Registration Request"}
                 </Button>
               </form>

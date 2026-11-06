@@ -15,7 +15,7 @@ import { homeRouteFor } from "@/lib/homeRoute";
 import { API, apiError } from "@/lib/api";
 
 const spinner = <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />;
-const primaryBtn = "hg-btn h-12 w-full rounded-2xl text-base font-semibold shadow-[0_12px_28px_-12px_rgba(168,85,247,0.8)] transition-transform hover:-translate-y-0.5 active:scale-[0.98]";
+const primaryBtn = "hg-btn h-12 w-full rounded-2xl text-base font-semibold shadow-[0_12px_28px_-12px_rgba(138,90,58,0.8)] transition-transform hover:-translate-y-0.5 active:scale-[0.98]";
 
 function Shell({ title, sub, children }) {
   return (

@@ -3,13 +3,12 @@ import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 import {
-  MapPin, Camera, Loader2, Trash2, Package, Coins, Banknote, Share2, Bell, Globe, Palette,
+  MapPin, Camera, Loader2, Trash2, Package, Coins, Banknote, Share2, Bell, Globe,
   Shield, FileText, Mail, ChevronRight, LogOut,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
-import { useTheme } from "@/context/ThemeContext";
 import { API, apiError } from "@/lib/api";
 import { CountUp, listVariants, itemVariants } from "@/components/motion";
 
@@ -38,7 +37,6 @@ function resizeImage(file, max = 400) {
 export default function Profile() {
   const { t, lang, setLang } = useI18n();
   const { user, logout, refresh } = useAuth();
-  const { theme, toggle } = useTheme();
   const navigate = useNavigate();
   const [d, setD] = useState(null);
   useEffect(() => { API.get("/dashboard").then(({ data }) => setD(data)).catch(() => {}); }, []);
@@ -80,7 +78,6 @@ export default function Profile() {
     { icon: Share2, title: t("profile.menu.share"), sub: t("profile.menu.shareSub"), go: "/app/referral", id: "share" },
     { icon: Bell, title: t("profile.menu.notifications"), sub: t("profile.menu.notificationsSub"), go: "/app/notifications", id: "notifications" },
     { icon: Globe, title: t("profile.menu.language"), sub: lang === "hi" ? "हिन्दी" : "English", act: () => setLang(lang === "hi" ? "en" : "hi"), id: "language" },
-    { icon: Palette, title: t("profile.menu.theme"), sub: theme === "dark" ? t("theme.dark") : t("theme.light"), act: toggle, id: "theme" },
     { icon: Shield, title: t("profile.menu.privacy"), go: "/legal/privacy", id: "privacy" },
     { icon: FileText, title: t("profile.menu.terms"), go: "/legal/terms", id: "terms" },
     { icon: Mail, title: t("profile.menu.support"), sub: t("profile.menu.supportSub"), go: "/legal/support", id: "support" },
@@ -99,7 +96,7 @@ export default function Profile() {
           <button onClick={onPick} className="group relative block h-28 w-28 overflow-hidden rounded-full border-4 border-white dark:border-hg-bg2" data-testid="profile-photo-btn" title="Change photo">
             {user?.photo
               ? <img src={user.photo} alt="" className="h-full w-full object-cover" />
-              : <span className="flex h-full w-full items-center justify-center bg-[#F5F0FF] font-display text-4xl font-semibold text-ink dark:bg-hg-deep">{initials}</span>}
+              : <span className="flex h-full w-full items-center justify-center bg-[#FBF1DA] font-display text-4xl font-semibold text-ink dark:bg-hg-deep">{initials}</span>}
             <span className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
               {uploading ? <Loader2 size={22} className="animate-spin text-white" /> : <Camera size={22} className="text-white" />}
             </span>

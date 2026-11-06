@@ -3,16 +3,16 @@ import React, { createContext, useContext, useEffect, useState } from "react";
 const ThemeContext = createContext(null);
 
 export function ThemeProvider({ children }) {
-  const [theme, setTheme] = useState(() => localStorage.getItem("anj_theme") || "dark");
+  // OWNER DECISION: one theme for every portal (warm cream + chocolate + gold). Dark mode is retired; a stored "dark" preference
+  // from the old violet design is ignored so no one is left on the old look.
+  const [theme] = useState("light");
 
   useEffect(() => {
-    const root = document.documentElement;
-    if (theme === "dark") root.classList.add("dark");
-    else root.classList.remove("dark");
-    localStorage.setItem("anj_theme", theme);
-  }, [theme]);
+    document.documentElement.classList.remove("dark");
+    try { localStorage.setItem("anj_theme", "light"); } catch (e) { /* storage may be unavailable */ }
+  }, []);
 
-  const toggle = () => setTheme((t) => (t === "dark" ? "light" : "dark"));
+  const toggle = () => {};
 
   return <ThemeContext.Provider value={{ theme, toggle }}>{children}</ThemeContext.Provider>;
 }

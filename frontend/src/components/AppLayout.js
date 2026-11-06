@@ -3,7 +3,7 @@ import { Link, useLocation, Outlet } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
   LayoutDashboard, ShoppingBag, Package, Coins, Share2, Banknote, Gift, Home,
-  Bell, User, LogOut, ChevronLeft, ShoppingCart, Sun, Moon,
+  Bell, User, LogOut, ChevronLeft, ShoppingCart,
 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { useI18n } from "@/context/I18nContext";
@@ -45,7 +45,7 @@ export function AppLayout() {
   const { t, lang, setLang } = useI18n();
   const { user, logout } = useAuth();
   const { count } = useCart();
-  const { theme, toggle } = useTheme();
+  const { theme } = useTheme();
   const loc = useLocation();
   const [collapsed, setCollapsed] = useState(false);
   const [unread, setUnread] = useState(0);
@@ -142,9 +142,6 @@ export function AppLayout() {
             <div className="flex shrink-0 items-center gap-2">
               <button onClick={() => setLang(lang === "en" ? "hi" : "en")} className="hg-icon-btn font-hindi text-base font-semibold active:scale-90 transition-transform" aria-label="Switch language" data-testid="language-switcher">
                 {lang === "en" ? "हि" : "EN"}
-              </button>
-              <button onClick={toggle} className="hg-icon-btn !hidden sm:!inline-flex" aria-label="Toggle theme" data-testid="theme-toggle">
-                {theme === "dark" ? <Sun size={20} /> : <Moon size={20} />}
               </button>
               <Link to="/app/cart" className="hg-icon-btn relative active:scale-90 transition-transform" aria-label={t("nav.cart")} data-testid="header-cart">
                 <ShoppingCart size={20} />
