@@ -42,7 +42,7 @@ async def referral_info(user: dict = Depends(get_current_user)):
     return {
         "distributor_id": user.get("distributor_id"),
         "referral_code": user.get("distributor_id"),
-        "eligible": user.get("status") == "green",
+        "eligible": user.get("role") == "distributor" and user.get("status") == "green",
         "direct_pct": settings.get("commission_direct_pct", 30.0),
         "total_referrals": count,
         "active_referrals": active,
@@ -123,7 +123,7 @@ async def my_withdrawals(user: dict = Depends(get_current_user)):
 
 @router.post("/withdrawals")
 async def request_withdrawal(body: WithdrawBody, request: Request, user: dict = Depends(get_current_user)):
-    if user.get("status") != "green":
+    if user.get("role") != "distributor" or user.get("status") != "green":
         raise HTTPException(status_code=403, detail="Your HomeGenie selling role must be approved before you can withdraw points.")
     settings = await get_settings()
     if not settings.get("points_withdrawal_enabled", True):

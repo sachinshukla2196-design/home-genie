@@ -323,15 +323,16 @@ def test_no_other_admin_route_can_set_a_distributor_green(c):
         assert _user(c, uid)["status"] == "red" and _user(c, uid)["role"] == "distributor"
 
 
-def test_vendor_role_conversion_is_separate_from_distributor_activation(c):
-    """Inviting an account as a vendor changes its role (an intentional vendor grant). It is not an activation: the account
-    leaves the distributor activation workflow, which then neither lists nor approves it."""
+def test_vendor_role_conversion_is_refused_and_activation_is_unaffected(c):
+    """Vendor Pillar (owner-locked): an existing account is never converted into a vendor. The RED customer keeps its role and
+    status, gets no activation record, and stays in the normal activation workflow."""
     uid = _red(c, "r-vendor-conv")
     did = _user(c, uid)["distributor_id"]
     oid = _order(c, uid)
+    before = _user(c, uid)
     r = c.post("/api/admin/vendors/invite", headers=_hdr(S["admin"]), json={"identifier": did})
-    assert r.status_code == 200, r.text
-    u = _user(c, uid)
-    assert u["role"] == "vendor" and "activation" not in u                    # no activation record was created
-    assert _approve(c, "admin", uid, oid).status_code == 404                   # no longer a distributor
-    assert all(i["user"]["id"] != uid for i in c.get("/api/admin/activations", headers=_hdr(S["admin"])).json()["items"])
+    assert r.status_code == 410, r.text
+    assert _user(c, uid) == before and before["role"] == "distributor" and before["status"] == "red"
+    assert "activation" not in _user(c, uid)
+    assert any(i["user"]["id"] == uid for i in c.get("/api/admin/activations", headers=_hdr(S["admin"])).json()["items"])
+    assert oid

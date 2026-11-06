@@ -46,10 +46,18 @@ def c():
 
 
 def _create(c, mobile, name="Invite Store"):
+    """Vendor Pillar: creation starts onboarding (no invitation); the owner invitation is issued once a super admin has approved.
+    The onboarding checklist and the final review are covered in tests/test_vendor_onboarding.py; here the vendor is moved to
+    `approved` directly so these tests can focus on the invitation mechanics."""
     r = c.post("/api/admin/vendors/create", headers=_hdr(S["adm"]["id"]),
                json={"business_name": name, "full_name": "Owner Person", "mobile": mobile, "email": f"{mobile}@example.test"})
     assert r.status_code == 200, r.text
-    return r.json()
+    made = r.json()
+    assert "invitation" not in made and made["status"] == "onboarding"
+    c.portal.call(lambda: db.vendors.update_one({"id": made["vendor_id"]}, {"$set": {"status": "approved", "owner_activation": "pending"}}))
+    inv = c.post(f"/api/admin/vendors/{made['vendor_id']}/owner-invitation", headers=_hdr(S["adm"]["id"]))
+    assert inv.status_code == 200, inv.text
+    return {**made, "invitation": inv.json()}
 
 
 def test_a_new_vendor_account_cannot_sign_in_until_the_owner_accepts(c):

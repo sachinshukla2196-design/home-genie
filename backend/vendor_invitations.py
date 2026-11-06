@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from core import db, hash_password, new_id, now_iso, log_audit, rate_limit, client_ip, require_admin, send_email, EMAIL_KEY
+from core import db, hash_password, new_id, now_iso, log_audit, rate_limit, client_ip, require_admin, require_vendor_admin, send_email, EMAIL_KEY
 from vendor_staff import hash_token
 
 router = APIRouter(prefix="/api", tags=["vendor"])
@@ -60,22 +60,29 @@ class AcceptIn(BaseModel):
 
 
 @router.post("/admin/vendors/{vendor_id}/owner-invitation")
-async def admin_issue_invitation(vendor_id: str, request: Request, admin: dict = Depends(require_admin)):
+async def admin_issue_invitation(vendor_id: str, request: Request, admin: dict = Depends(require_vendor_admin)):
+    """(Re)issue the owner invitation. The invitation activates operational access, so it is super_admin only and exists only
+    for a vendor that has passed final approval. Issuing again replaces the pending link (the old one stops working)."""
+    if admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Only a super admin can issue the vendor owner invitation.")
     vendor = await db.vendors.find_one({"id": vendor_id}, {"_id": 0})
     if not vendor:
         raise HTTPException(status_code=404, detail="Vendor not found.")
-    if vendor["status"] in ("rejected", "suspended"):
-        raise HTTPException(status_code=400, detail=f"A {vendor['status']} vendor cannot receive a new owner invitation.")
+    from vendor_lifecycle import SELLING
+    if vendor["status"] not in SELLING:
+        raise HTTPException(status_code=400, detail="The owner invitation is issued only after final approval.")
     user = await db.users.find_one({"id": vendor["user_id"]}, {"_id": 0})
     if not user or user.get("role") != "vendor":
         raise HTTPException(status_code=400, detail="This vendor has no owner account.")
-    if user.get("account_status") == "active" and user.get("invite_accepted_at"):
+    if user.get("account_status") == "active":
         raise HTTPException(status_code=409, detail="The owner has already set up their account.")
-    return await issue(user, vendor, admin, request)
+    from vendor_onboarding import ensure_owner_invitation
+    out = await ensure_owner_invitation(vendor_id, admin, request, resend=True)
+    return {k: out.get(k) for k in ("token", "expires_at", "delivered", "status")}
 
 
 @router.post("/admin/vendors/{vendor_id}/owner-invitation/revoke")
-async def admin_revoke_invitation(vendor_id: str, request: Request, admin: dict = Depends(require_admin)):
+async def admin_revoke_invitation(vendor_id: str, request: Request, admin: dict = Depends(require_vendor_admin)):
     res = await db.account_invitations.update_many({"vendor_id": vendor_id, "kind": "vendor_owner", "status": "pending"},
                                                    {"$set": {"status": "revoked", "revoked_at": now_iso(), "revoked_by": admin["id"]}})
     await log_audit(admin, "vendor_owner_invitation_revoked", "vendor", vendor_id, new_value={"revoked": res.modified_count}, request=request)
@@ -115,6 +122,7 @@ async def owner_invitation_accept(body: AcceptIn, request: Request):
         raise HTTPException(status_code=400, detail=GENERIC)
     await db.users.update_one({"id": inv["user_id"]}, {"$set": {"password_hash": hash_password(body.password), "account_status": "active",
                                                                 "invite_accepted_at": now_iso(), "updated_at": now_iso()}})
+    await db.vendors.update_one({"id": inv["vendor_id"]}, {"$set": {"owner_activation": "active", "owner_activated_at": now_iso()}})
     user = await db.users.find_one({"id": inv["user_id"]}, {"_id": 0})
     await log_audit(user, "vendor_owner_invitation_accepted", "vendor", inv["vendor_id"], request=request)
     return {"ok": True}

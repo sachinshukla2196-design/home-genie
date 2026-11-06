@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
-from core import (db, now_iso, new_id, get_current_user, require_admin, log_audit, create_notification, next_sequence, rate_limit,
+from core import (db, now_iso, new_id, get_current_user, require_admin, require_vendor_admin, log_audit, create_notification, next_sequence, rate_limit,
                   client_ip, verify_password, password_update, create_token, clean_user)
 from pagination import clamp_page, page_meta
 from validators import safe_image_refs
@@ -22,7 +22,7 @@ from vendor_history import record_vendor_status
 
 router = APIRouter(prefix="/api", tags=["governance"])
 
-DOC_TYPES = ("pan", "gst", "bank_proof", "address_proof", "identity", "business_registration", "other")
+DOC_TYPES = ("pan", "gst", "bank_proof", "address_proof", "identity", "business_registration", "authorisation_letter", "other")
 VENDOR_POLICY_ID = "vendor_policy"
 TERMS_VERSION = os.environ.get("VENDOR_TERMS_VERSION", "1.0")
 
@@ -71,9 +71,7 @@ class PolicyIn(BaseModel):
 
 
 @router.put("/admin/vendor-policy")
-async def set_vendor_policy(body: PolicyIn, request: Request, admin: dict = Depends(require_admin)):
-    if admin.get("role") not in ("super_admin", "admin"):
-        raise HTTPException(status_code=403, detail="Only a super admin can change vendor requirements.")
+async def set_vendor_policy(body: PolicyIn, request: Request, admin: dict = Depends(require_vendor_admin)):
     bad = [d for d in body.required_documents if d not in DOC_TYPES]
     if bad:
         raise HTTPException(status_code=400, detail=f"Unknown document type(s): {', '.join(bad)}.")
@@ -153,8 +151,15 @@ class DocReview(BaseModel):
     note: str = Field(default="", max_length=300)
 
 
+# Vendor V1.1: accounts_admin is limited to finance, so it cannot verify KYC documents. support_admin keeps document review
+# (existing, tested behaviour; the owner's V1.1 list does not withdraw it) pending an explicit owner decision.
+DOC_REVIEW_ROLES = ("super_admin", "admin", "support_admin")
+
+
 @router.post("/admin/vendor-documents/{doc_id}/review")
 async def review_document(doc_id: str, body: DocReview, request: Request, admin: dict = Depends(require_admin)):
+    if admin.get("role") not in DOC_REVIEW_ROLES:
+        raise HTTPException(status_code=403, detail="Your role cannot review vendor documents.")
     if body.status not in ("verified", "rejected"):
         raise HTTPException(status_code=400, detail="status must be verified or rejected.")
     if body.status == "rejected" and len(body.note.strip()) < 5:

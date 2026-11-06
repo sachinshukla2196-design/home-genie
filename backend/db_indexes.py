@@ -65,6 +65,17 @@ SPECS = [
     {"coll": "account_invitations", "keys": [("token_hash", 1)], "name": "account_invitations_token_unique", "unique": True},
     {"coll": "account_invitations", "keys": [("user_id", 1), ("status", 1)], "name": "account_invitations_user_status"},
     {"coll": "product_categories", "keys": [("name", 1)], "name": "product_categories_name_unique", "unique": True},
+    # Vendor Pillar: public "Apply to sell" applications. One OPEN application per mobile (open_mobile is unset when closed),
+    # and at most one vendor / one owner account per application (conversion is idempotent through these).
+    {"coll": "vendor_applications", "keys": [("id", 1)], "name": "vendor_applications_id_unique", "unique": True},
+    {"coll": "vendor_applications", "keys": [("number", 1)], "name": "vendor_applications_number_unique", "unique": True},
+    {"coll": "vendor_applications", "keys": [("open_mobile", 1)], "name": "vendor_applications_open_mobile_unique", "unique": True,
+     "partialFilterExpression": PARTIAL_STR("open_mobile")},
+    {"coll": "vendor_applications", "keys": [("status", 1), ("created_at", -1)], "name": "vendor_applications_status_created"},
+    {"coll": "vendors", "keys": [("application_id", 1)], "name": "vendors_application_unique", "unique": True,
+     "partialFilterExpression": PARTIAL_STR("application_id")},
+    {"coll": "users", "keys": [("vendor_application_id", 1)], "name": "users_vendor_application_unique", "unique": True,
+     "partialFilterExpression": PARTIAL_STR("vendor_application_id")},
 ]
 
 # Indexes that a spec replaces. Dropped only after the replacement is confirmed safe to create (no duplicates). A legacy index with

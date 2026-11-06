@@ -72,14 +72,21 @@ def _restore_limits():
 
 # ====================================================================== status history & onboarding
 def _register(c, mobile):
-    """Vendor accounts are created by an admin only. The vendor then signs in through the normal login, like everyone else."""
-    core.RATE_LIMITS["staff_accept"] = (1000, 3600)
-    made = c.post("/api/admin/vendors/create", headers=_hdr(S["adm"]["id"]),
-                  json={"business_name": "Hist Store", "full_name": "Hist Owner", "mobile": mobile, "email": ""})
-    if made.status_code != 200:
-        return made
-    acc = c.post("/api/vendor/invitation/owner/accept", json={"token": made.json()["invitation"]["token"], "password": PW})
-    assert acc.status_code == 200, acc.text
+    """A LEGACY self-onboarding vendor (draft, owner already active), as created before the Vendor Pillar onboarding flow. New vendors
+    are prepared by an admin and approved by a super admin (tests/test_vendor_onboarding.py); these tests cover the legacy path
+    that existing draft vendors still use. The vendor then signs in through the normal login, like everyone else."""
+    from vendor_history import record_vendor_status
+
+    async def seed():
+        code = f"VDG{mobile[-5:]}"
+        u = {"id": new_id(), "distributor_id": code, "full_name": "Hist Owner", "mobile": mobile, "email": None, "password_hash": hash_password(PW),
+             "role": "vendor", "status": "not_applicable", "account_status": "active", "created_at": now_iso(), "updated_at": now_iso()}
+        await db.users.insert_one(dict(u))
+        v = {"id": new_id(), "user_id": u["id"], "vendor_code": code, "business_name": "Hist Store", "status": "draft", "categories": [],
+             "created_at": now_iso(), "updated_at": now_iso()}
+        await db.vendors.insert_one(dict(v))
+        await record_vendor_status(v["id"], None, "draft", S["adm"]["id"], "Vendor account created by admin")
+    c.portal.call(seed)
     return c.post("/api/auth/login", json={"email": mobile, "password": PW})
 
 
@@ -391,11 +398,10 @@ def test_only_an_admin_can_create_a_vendor_account(c):
     assert c.post("/api/admin/vendors/create", headers=_hdr(S["ua"]["id"]), json=body).status_code in (401, 403)
     assert c.post("/api/admin/vendors/create", json=body).status_code in (401, 403)
     made = c.post("/api/admin/vendors/create", headers=_hdr(S["adm"]["id"]), json=body)
-    assert made.status_code == 200 and made.json()["status"] == "draft" and made.json()["invitation"]["token"]
-    assert c.post("/api/admin/vendors/create", headers=_hdr(S["adm"]["id"]), json=body).status_code == 400          # duplicate mobile
+    # Vendor Pillar: creation starts ONBOARDING. No invitation and no sign-in until a super admin approves the completed registration.
+    assert made.status_code == 200 and made.json()["status"] == "onboarding" and "invitation" not in made.json()
+    assert c.post("/api/admin/vendors/create", headers=_hdr(S["adm"]["id"]), json=body).status_code == 409          # duplicate mobile
     assert c.post("/api/auth/login", json={"email": "owner555@example.test", "password": PW}).status_code in (400, 401, 403)   # not active yet
-    assert c.post("/api/vendor/invitation/owner/accept", json={"token": made.json()["invitation"]["token"], "password": PW}).status_code == 200
-    login = c.post("/api/auth/login", json={"email": "owner555@example.test", "password": PW})
-    assert login.status_code == 200 and login.json()["user"]["role"] == "vendor"
-    assert c.get("/api/vendor/me", headers={"Authorization": f"Bearer {login.json()['token']}"}).json()["vendor"]["status"] == "draft"
+    owner = c.portal.call(lambda: db.users.find_one({"mobile": "9876500555"}, {"_id": 0}))
+    assert owner["account_status"] == "pending_approval" and owner["status"] != "green"
     assert c.post("/api/admin/vendors/create", headers=_hdr(S["adm"]["id"]), json={**body, "mobile": "1234567890", "email": ""}).status_code == 400

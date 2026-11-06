@@ -102,6 +102,17 @@ def clean_user(user: dict) -> dict:
     return user
 
 
+# Accounts that exist but must not be usable yet: a vendor owner prepared during onboarding ("pending_approval") or approved but
+# not yet through the invitation ("invited"). The ONLY way out is accepting the owner invitation (vendor_invitations.py), which
+# sets "active". Every sign-in path and every session check refuses these states.
+NOT_ACTIVATED = ("pending_approval", "invited")
+NOT_ACTIVATED_MSG = "This account is not activated yet. Use the invitation link from HOME GENIES to set your password."
+
+
+def not_activated(user: Optional[dict]) -> bool:
+    return bool(user) and user.get("account_status") in NOT_ACTIVATED
+
+
 async def get_current_user(request: Request) -> dict:
     auth = request.headers.get("Authorization", "")
     token = auth[7:] if auth.startswith("Bearer ") else None
@@ -121,6 +132,8 @@ async def get_current_user(request: Request) -> dict:
     if user.get("blocked") or user.get("account_status") in ("blocked", "suspended", "deleted"):
         # an existing token stops working as soon as the account is blocked or deactivated
         raise HTTPException(status_code=401, detail="This account is no longer active. Please contact the admin.")
+    if not_activated(user):          # a token obtained by any route before activation is useless
+        raise HTTPException(status_code=401, detail=NOT_ACTIVATED_MSG)
     user.pop("password_hash", None)
     return user
 
@@ -155,6 +168,17 @@ def require_roles(*roles):
 async def require_admin(user: dict = Depends(get_current_user)):
     if user.get("role") not in ADMIN_ROLES:
         raise HTTPException(status_code=403, detail="Admin access required.")
+    return user
+
+
+# OWNER-APPROVED (Vendor V1.1): only these roles run the vendor lifecycle (create, invite, approve, reject, suspend, reinstate,
+# product decisions, document review). support_admin and accounts_admin keep read access and their own areas only.
+VENDOR_ADMIN_ROLES = ("super_admin", "admin")
+
+
+async def require_vendor_admin(user: dict = Depends(require_admin)):
+    if user.get("role") not in VENDOR_ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="Only a super admin or admin can manage vendors.")
     return user
 
 
@@ -402,7 +426,7 @@ from datetime import datetime as _dt, timedelta as _td, timezone as _tz
 
 RATE_LIMIT_SCALE = float(_os.environ.get("RATE_LIMIT_SCALE", "1"))
 RATE_LIMITS = {   # name -> (max requests, window seconds); keys are per client IP (or per vendor for authenticated actions)
-    "vendor_register": (10, 3600), "staff_accept": (10, 3600), "customer_register": (20, 3600), "forgot_password": (10, 3600),
+    "vendor_register": (10, 3600), "vendor_apply": (8, 3600), "staff_accept": (10, 3600), "customer_register": (20, 3600), "forgot_password": (10, 3600),
     "login_ip": (60, 600), "admin_login_ip": (20, 600), "support_ticket": (20, 86400), "upload_sign": (60, 3600),
     "change_password": (10, 3600), "csv_import": (30, 3600), "forgot_reset": (20, 3600), "login_otp_send": (20, 3600), "login_otp_verify": (60, 3600),
 }

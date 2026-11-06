@@ -143,7 +143,12 @@ def test_conversion_stops_new_earnings_and_leaves_earlier_commissions_untouched(
     assert len(earlier) == 2 and ("COMMISSION_DIRECT", S["conv"]) in _comms(c, before_direct["id"])
     assert ("COMMISSION_REFERRAL", S["conv"]) in _comms(c, before_ref["id"])
     wallet_before = _run(c, lambda: db.wallets.find_one({"user_id": S["conv"]}, {"_id": 0, "pending_balance_paise": 1}))
-    assert c.post("/api/admin/vendors/invite", headers=_hdr(S["adm"]), json={"identifier": _did(c, "conv")}).status_code == 200
+    # Vendor Pillar (owner-locked): the API no longer converts an existing HomeGenie into a vendor. Nothing about the account changes.
+    before_user = _run(c, lambda: db.users.find_one({"id": S["conv"]}, {"_id": 0}))
+    assert c.post("/api/admin/vendors/invite", headers=_hdr(S["adm"]), json={"identifier": _did(c, "conv")}).status_code == 410
+    assert _run(c, lambda: db.users.find_one({"id": S["conv"]}, {"_id": 0})) == before_user
+    # Accounts converted BEFORE that rule (historical data) must still earn nothing new and keep their history: simulate one.
+    _run(c, lambda: db.users.update_one({"id": S["conv"]}, {"$set": {"role": "vendor"}}))
     after_direct = _shop(c, "conv")
     after_ref = _shop(c, "conv_d1")
     assert after_direct.get("seller_user_id") is None and _comms(c, after_direct["id"]) == {}

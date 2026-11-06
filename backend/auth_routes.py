@@ -13,7 +13,8 @@ from typing import Optional
 
 from core import (db, now_iso, new_id, hash_password, verify_password, create_token,
                   clean_user, get_current_user, next_distributor_id, get_or_create_wallet,
-                  create_notification, log_audit, send_email, email_shell, password_update)
+                  create_notification, log_audit, send_email, email_shell, password_update,
+                  not_activated, NOT_ACTIVATED_MSG)
 from providers import otp_create, otp_verify, send_account_id_sms
 from pymongo import ReturnDocument
 
@@ -295,6 +296,8 @@ async def login(body: LoginBody, request: Request):
         raise HTTPException(status_code=401, detail="Invalid credentials. Use your HomeGenie ID / email / mobile and password.")
     if user.get("blocked"):
         raise HTTPException(status_code=403, detail="Your account has been blocked. Please contact the admin.")
+    if not_activated(user):
+        raise HTTPException(status_code=403, detail=NOT_ACTIVATED_MSG)
 
     await db.login_attempts.delete_one({"identifier": ident})
     await log_audit(clean_user(user), "login", "user", user["id"], request=request)
@@ -341,6 +344,8 @@ async def google_session(body: GoogleSessionBody, request: Request):
         return {"mode": "register", "email": email, "name": (data.get("name") or "").strip()}
     if user.get("blocked"):
         raise HTTPException(status_code=403, detail="Your account has been blocked. Please contact the admin.")
+    if not_activated(user):
+        raise HTTPException(status_code=403, detail=NOT_ACTIVATED_MSG)
 
     await db.users.update_one({"id": user["id"]},
                               {"$set": {"google_linked": True, "email_verified": True, "updated_at": now_iso()}})
@@ -381,7 +386,7 @@ async def forgot_google(body: GoogleRecoveryBody, request: Request):
     if not email:
         return {"message": GENERIC_RECOVERY_MESSAGE}
     user = await db.users.find_one({"email": email})
-    if not user or user.get("blocked") or user.get("role") in ADMIN_ROLES:
+    if not user or user.get("blocked") or user.get("role") in ADMIN_ROLES or not_activated(user):
         return {"message": GENERIC_RECOVERY_MESSAGE}
     now = datetime.now(timezone.utc)
     await db.password_reset_tokens.update_many({"user_id": user["id"], "used": False}, {"$set": {"used": True}})
@@ -409,7 +414,7 @@ async def forgot_google_reset(body: GoogleResetBody, request: Request):
     if not row:
         raise invalid
     user = await db.users.find_one({"id": row["user_id"]})
-    if not user or user.get("blocked") or user.get("role") in ADMIN_ROLES:
+    if not user or user.get("blocked") or user.get("role") in ADMIN_ROLES or not_activated(user):
         raise invalid
     await db.users.update_one({"id": user["id"]}, {"$set": {**password_update(body.password), "updated_at": now_iso()}})
     await db.password_reset_requests.update_many({"user_id": user["id"], "status": "pending"},
@@ -527,7 +532,7 @@ LOGIN_OTP_INVALID = "The OTP is invalid or has expired. Please request a new one
 def _eligible_for_login_otp(user: Optional[dict]) -> bool:
     """Only ordinary, unblocked accounts can sign in with a mobile OTP. Admins use the secure admin login."""
     return bool(user) and user.get("role") not in ADMIN_ROLES and not user.get("blocked") \
-        and user.get("account_status") != "blocked"
+        and user.get("account_status") != "blocked" and not not_activated(user)
 
 
 @router.post("/login-otp/send")
@@ -586,7 +591,7 @@ async def forgot_request(body: ForgotRequestBody, request: Request):
         raise HTTPException(status_code=400, detail="Enter your HomeGenie ID or registered mobile number.")
     user = await db.users.find_one({"$or": [{"distributor_id": ident.upper()}, {"mobile": ident}]})
     # Same answer whether or not the account exists, so the endpoint cannot be used to find registered members.
-    if user and not await db.password_reset_requests.find_one({"user_id": user["id"], "status": "pending"}):
+    if user and not not_activated(user) and not await db.password_reset_requests.find_one({"user_id": user["id"], "status": "pending"}):
         await db.password_reset_requests.insert_one({
             "id": new_id(), "user_id": user["id"], "distributor_id": user.get("distributor_id"),
             "full_name": user.get("full_name"), "mobile": user.get("mobile"),

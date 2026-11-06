@@ -80,9 +80,10 @@ def c():
 
 # ====================================================================== transition table
 def test_transition_table_is_closed_and_only_an_admin_can_activate_or_approve():
-    assert all(f in VL.STATUSES and t in VL.STATUSES and a in ("vendor", "admin") for (f, t), a in VL.TRANSITIONS.items())
+    assert all(f in VL.STATUSES and t in VL.STATUSES and a in ("vendor", "admin", "super_admin") for (f, t), a in VL.TRANSITIONS.items())
     assert set(VL.SELLING) <= set(VL.STATUSES) and set(VL.CONTACT_ONLY) <= set(VL.STATUSES)
-    assert {(f, a) for (f, t), a in VL.TRANSITIONS.items() if t == "active"} == {("approved", "admin")}
+    assert {(f, a) for (f, t), a in VL.TRANSITIONS.items() if t == "active"} == {("approved", "super_admin")}    # owner-locked: super_admin only
+    assert all(a == "super_admin" for (f, t), a in VL.TRANSITIONS.items() if t in ("approved", "active"))          # final approval / reinstatement
     assert not any(a == "vendor" and t in ("approved", "active", "suspended", "rejected") for (f, t), a in VL.TRANSITIONS.items())
     assert not VL.transition_allowed("draft", "approved", "admin") and not VL.transition_allowed("draft", "active", "admin")
     assert not VL.transition_allowed("submitted", "active", "admin")                       # review cannot be skipped
@@ -100,7 +101,7 @@ def test_invalid_moves_are_refused_before_anything_is_written(c):
 def test_a_stale_snapshot_cannot_overwrite_a_newer_status(c):
     stale = {"id": S["draft"]["id"], "status": "submitted"}                             # the database says draft
     with pytest.raises(HTTPException) as e:
-        c.portal.call(lambda: VL.move(stale, "approved", "admin", "tester"))
+        c.portal.call(lambda: VL.move(stale, "approved", "super_admin", "tester"))
     assert e.value.status_code == 409
     assert _status(c, S["draft"]["id"]) == "draft"
 

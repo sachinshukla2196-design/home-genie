@@ -14,6 +14,7 @@ from pymongo.errors import DuplicateKeyError
 from core import db, get_current_user, hash_password, new_id, now_iso, next_sequence, log_audit, create_notification, rate_limit, client_ip
 from vendor_routes import _mask
 from vendor_staff import PERMISSIONS, PRESETS, VENDOR_STAFF_ROLE, validate_role, new_invite_token, hash_token
+from vendor_lifecycle import VENDOR_ACCOUNT_STATUS
 
 router = APIRouter(prefix="/api", tags=["vendor"])
 INVALID_INVITE = "This invitation is not valid or has expired."
@@ -183,7 +184,7 @@ async def accept_invitation(body: AcceptIn, request: Request):
     now = now_iso()
     uid = new_id()
     user = {"id": uid, "distributor_id": await next_sequence("staff", "VS", 6), "full_name": body.full_name.strip(), "mobile": m["mobile"],
-            "email": None, "password_hash": hash_password(body.password), "role": VENDOR_STAFF_ROLE, "status": "green",
+            "email": None, "password_hash": hash_password(body.password), "role": VENDOR_STAFF_ROLE, "status": VENDOR_ACCOUNT_STATUS,
             "account_status": "active", "created_at": now, "updated_at": now}
     try:
         await db.users.insert_one(dict(user))

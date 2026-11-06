@@ -76,41 +76,56 @@ def _paid_order(vid, pid, paise):
 def test_full_vendor_lifecycle(c):
     fin2, fin1 = _hdr(S["fin2"]["id"]), _hdr(S["fin1"]["id"])
 
-    # 1. admin creates the vendor account; a non-admin cannot
+    # 1. Vendor Pillar: admin starts onboarding (no login, no invitation); a non-admin cannot
     core.RATE_LIMITS["staff_accept"] = (1000, 3600)
     body = {"business_name": "E2E Store", "full_name": "Owner Name", "mobile": "9199001101", "email": "owner.e2e@example.test"}
     assert c.post("/api/admin/vendors/create", json=body).status_code in (401, 403)
     made = c.post("/api/admin/vendors/create", headers=fin2, json=body)
-    assert made.status_code == 200 and made.json()["status"] == "draft"
+    assert made.status_code == 200 and made.json()["status"] == "onboarding" and "invitation" not in made.json()
     vid = made.json()["vendor_id"]
     S["vid"] = vid
-    assert c.post("/api/vendor/invitation/owner/accept", json={"token": made.json()["invitation"]["token"], "password": OWNER_PW}).status_code == 200
+    assert c.post("/api/auth/login", json={"email": "owner.e2e@example.test", "password": OWNER_PW}).status_code in (401, 403)
+
+    # 2. the admin completes the registration section by section; it cannot be submitted while incomplete
+    sections = {
+        "business": {"legal_name": "E2E Store Private Limited", "display_name": "E2E Store", "business_type": "private_limited",
+                     "supplier_roles": ["manufacturer"], "description": "Handloom sarees woven in Jaipur since 2001.", "categories": ["Sarees"]},
+        "person": {"full_name": "Owner Name", "designation": "Director", "mobile": "9199001101", "email": "owner.e2e@example.test",
+                   "relationship": "director", "is_authorised_signatory": True},
+        "legal": {"pan": "ABCDE1234F", "gst_registered": True, "gstin": "08ABCDE1234F1Z5", "cin": "U17110RJ2001PTC012345"},
+        "addresses": {"registered": {"line1": "12 Market Road", "city": "Jaipur", "state": "Rajasthan", "pincode": "302001"},
+                      "pickup_same_as": "registered", "return_same_as": "pickup", "pickup_contact_name": "Owner Name", "pickup_contact_phone": "9199001101"},
+        "operations": {"handling_days": 2, "support_phone": "9199001101", "support_hours": "Mon-Sat 10am-6pm", "packaging_by": "vendor", "shipping_by": "vendor"},
+        "bank": {"account_holder": "E2E Store Private Limited", "bank_name": "State Bank of India", "account_number": "111122223333",
+                 "account_number_confirm": "111122223333", "ifsc": "SBIN0000001", "account_type": "current"},
+    }
+    for key, data in sections.items():
+        assert c.put(f"/api/admin/vendors/{vid}/onboarding/{key}", headers=fin2, json=data).status_code == 200, key
+    assert c.post(f"/api/admin/vendors/{vid}/submit-for-approval", headers=fin2).status_code == 400            # documents + terms missing
+    for t in ("pan", "bank_proof", "address_proof", "identity", "gst", "business_registration"):
+        d = c.post(f"/api/admin/vendors/{vid}/onboarding/documents", headers=fin2, json={"type": t, "url": f"https://cdn.example.com/{t}.pdf"})
+        assert d.status_code == 200, d.text
+        assert c.post(f"/api/admin/vendor-documents/{d.json()['id']}/review", headers=fin2, json={"status": "verified"}).status_code == 200
+    # commercial preparation: finance drafts, a different finance admin approves (effective later, so today's orders carry no commission)
+    later = (datetime.now(timezone.utc) + timedelta(days=60)).date().isoformat()
+    ag0 = c.post(f"/api/admin/finance/vendors/{vid}/agreements", headers=fin1,
+                 json={"commission_pct": 2.0, "fixed_fee_paise": 0, "settlement_schedule": "monthly", "effective_from": later}).json()
+    assert c.post(f"/api/admin/finance/agreements/{ag0['id']}/approve", headers=fin2).status_code == 200
+
+    # 3. submitted for approval; only the super admin decides; approval issues the one owner invitation
+    assert c.post(f"/api/admin/vendors/{vid}/submit-for-approval", headers=fin2).status_code == 200
+    assert c.post(f"/api/admin/vendors/{vid}/final-review", headers=fin1, json={"action": "approve"}).status_code == 403
+    appr = c.post(f"/api/admin/vendors/{vid}/final-review", headers=fin2, json={"action": "approve"})
+    assert appr.status_code == 200 and appr.json()["vendor"]["status"] == "approved"
+    token = appr.json()["invitation"]["token"]
+
+    # 4. the owner sets a password through the invitation and reaches the operational panel
+    assert c.post("/api/vendor/invitation/owner/accept", json={"token": token, "password": OWNER_PW}).status_code == 200
     owner = _login(c, "owner.e2e@example.test", OWNER_PW)
     S["owner"] = owner
-
-    # 2. a draft vendor cannot sell; onboarding works; submitting moves to submitted
-    assert c.get("/api/vendor/products", headers=owner).status_code == 403
-    assert c.put("/api/vendor/me", headers=owner, json={**PROFILE, "submit": False}).json()["vendor"]["status"] == "draft"
-    assert c.put("/api/vendor/me", headers=owner, json={**PROFILE, "submit": True}).json()["vendor"]["status"] == "submitted"
-    # the owner's own status cannot be set by request body
-    assert c.put("/api/vendor/me", headers=owner, json={**PROFILE, "status": "active", "submit": False}).status_code == 409   # locked while under review
-
-    # 3. documents are submitted; corrections are requested; the owner resubmits; the documents are reviewed
-    doc = c.post("/api/vendor/documents", headers=owner, json={"type": "pan", "url": "https://cdn.example.com/pan.pdf"})
-    assert doc.status_code == 200, doc.text
-    doc_id = doc.json().get("id") or doc.json().get("document", {}).get("id")
-    assert c.post(f"/api/admin/vendor-documents/{doc_id}/review", headers=fin2, json={"status": "verified"}).status_code == 200
-    assert c.post(f"/api/admin/vendors/{vid}/decision", headers=fin2, json={"action": "request_changes", "reason": "Bank proof is unclear"}).status_code == 200
-    assert c.put("/api/vendor/me", headers=owner, json={**PROFILE, "address": "14 Market Road, Jaipur", "submit": True}).json()["vendor"]["status"] == "submitted"
-
-    # 4. activation only after approval; the vendor cannot approve or activate itself
     assert c.post("/api/vendor/finance/terms/x/accept", headers=owner).status_code in (403, 404)
     assert c.post(f"/api/admin/vendors/{vid}/decision", headers=owner, json={"action": "approve"}).status_code == 403
-    assert c.post(f"/api/admin/vendors/{vid}/decision", headers=fin2, json={"action": "activate"}).status_code == 400          # not approved yet
-    assert c.post(f"/api/admin/vendors/{vid}/decision", headers=fin2, json={"action": "start_review"}).status_code == 200
-    assert c.post(f"/api/admin/vendors/{vid}/decision", headers=fin2, json={"action": "approve"}).status_code == 200
-    assert c.post(f"/api/admin/vendors/{vid}/decision", headers=fin2, json={"action": "activate"}).status_code == 200
-    assert c.get("/api/vendor/products", headers=owner).status_code == 200                       # active vendors can sell
+    assert c.get("/api/vendor/products", headers=owner).status_code == 200                       # approved vendors can sell
 
     # 5. staff: invite, accept, scoped access, revoke
     inv = c.post("/api/vendor/staff/invitations", headers=owner, json={"mobile": "9199001102", "full_name": "Staff Member", "role": "store_manager"}).json()
@@ -152,7 +167,9 @@ def test_full_vendor_lifecycle(c):
     assert rep["earnings"]["sales_paise"] == sum(e["amount_paise"] for e in sale_entries) == 100000
     assert rep["dispatch"]["dispatched_orders"] == 1 and rep["dispatch"]["average_hours_to_dispatch"] is not None
     assert rep["stock_movements"]["added"] == 12                                   # 10 opening stock + 2 delivered; both are movements
-    assert rep["commission"]["available"] is False                                 # no agreement yet
+    # Vendor Pillar: an approved agreement exists from onboarding, but it starts later, so nothing has been charged yet
+    assert rep["commission"]["available"] is True
+    assert c.portal.call(lambda: db.vendor_ledger.count_documents({"vendor_id": vid, "type": "COMMISSION"})) == 0
 
     # 10. commercial terms: a version is approved by a different admin, applies to later sales, and is accepted by the vendor
     ag = c.post(f"/api/admin/finance/vendors/{vid}/agreements", headers=fin1,
@@ -160,7 +177,7 @@ def test_full_vendor_lifecycle(c):
     assert c.post(f"/api/admin/finance/agreements/{ag['id']}/approve", headers=fin1).status_code == 403
     assert c.post(f"/api/admin/finance/agreements/{ag['id']}/approve", headers=fin2).status_code == 200
     terms = c.get("/api/vendor/finance/terms", headers=owner).json()
-    assert terms["current"]["version"] == 1 and "approved_by" not in str(terms)
+    assert terms["current"]["version"] == 2 == ag["version"] and "approved_by" not in str(terms)     # v1 is the onboarding agreement (starts later)
     assert c.post(f"/api/vendor/finance/terms/{ag['id']}/accept", headers=owner).status_code == 200
     later = _paid_order(vid, prod["id"], 50000)
     c.portal.call(lambda: db.orders.insert_one(dict(later)))
@@ -202,11 +219,11 @@ def test_security_boundaries_hold_across_the_lifecycle(c):
     vid = S["vid"]
     other = c.post("/api/admin/vendors/create", headers=_hdr(S["fin2"]["id"]),
                    json={"business_name": "Other E2E", "full_name": "Other Owner", "mobile": "9199001150", "email": "other.e2e@example.test"}).json()
-    c.post("/api/vendor/invitation/owner/accept", json={"token": other["invitation"]["token"], "password": OWNER_PW})
+    # A second vendor that passed final approval (the onboarding checklist itself is covered in test_vendor_onboarding.py).
+    c.portal.call(lambda: db.vendors.update_one({"id": other["vendor_id"]}, {"$set": {"status": "approved", "owner_activation": "pending"}}))
+    inv = c.post(f"/api/admin/vendors/{other['vendor_id']}/owner-invitation", headers=_hdr(S["fin2"]["id"])).json()
+    assert c.post("/api/vendor/invitation/owner/accept", json={"token": inv["token"], "password": OWNER_PW}).status_code == 200
     other_owner = _login(c, "other.e2e@example.test", OWNER_PW)
-    c.put("/api/vendor/me", headers=other_owner, json={**PROFILE, "business_name": "Other E2E", "submit": True})
-    c.post(f"/api/admin/vendors/{other['vendor_id']}/decision", headers=_hdr(S["fin2"]["id"]), json={"action": "start_review"})
-    assert c.post(f"/api/admin/vendors/{other['vendor_id']}/decision", headers=_hdr(S["fin2"]["id"]), json={"action": "approve"}).status_code == 200
     assert c.get("/api/vendor/products", headers=other_owner).status_code == 200  # approved: now ownership, not the approval gate, decides
     assert c.get(f"/api/vendor/products/{S['pid']}/stock-history", headers=other_owner).status_code == 404
     assert all(o["id"] != S["order"]["id"] for o in c.get("/api/vendor/orders", headers=other_owner).json())

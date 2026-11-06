@@ -6,8 +6,7 @@ one that was checked (an atomic compare-and-set), then appends to the append-onl
 Roles (enforced by `vendor_routes.require_vendor_user`, `require_approved_vendor` and `require_admin`):
 - platform admin: decides applications and status changes, never acts as a vendor on vendor data;
 - vendor owner: role `vendor`, owns the vendor record through `vendors.user_id`;
-- vendor staff: role `vendor_staff` with a `vendor_members` row. Staff have NO portal access yet: the vendor gate refuses the
-  role. Per-permission staff access is a later phase and must add permissions here, not loosen the gate;
+- vendor staff: role `vendor_staff` with a `vendor_members` row; every staff request passes vendor_staff.authorize_staff;
 - customers: role `distributor`, never vendor privileges.
 """
 import re
@@ -18,42 +17,60 @@ from fastapi import HTTPException
 from core import db, next_sequence, now_iso
 from vendor_history import record_vendor_status
 
-STATUSES = ("invited", "draft", "pending_documents", "submitted", "under_review", "changes_requested",
+STATUSES = ("onboarding", "ready_for_review",                                   # Vendor Pillar: admin-run onboarding
+            "invited", "draft", "pending_documents", "submitted", "under_review", "changes_requested",   # legacy self-onboarding
             "approved", "active", "rejected", "suspended")
+# Admin-run onboarding (application -> onboarding -> ready_for_review -> super_admin decision). The owner has NO access in these.
+ONBOARDING = ("onboarding", "ready_for_review")
 # Statuses in which a vendor may sell: products, orders, settlements.
 SELLING = ("approved", "active")
 # Statuses in which the vendor may only edit contact details (legal and bank changes go through admin).
 CONTACT_ONLY = ("approved", "active", "suspended")
-# (from, to) -> the only actor allowed to make that change.
+# (from, to) -> the minimum actor allowed to make that change: "vendor", "admin" (admin or super_admin) or "super_admin".
 TRANSITIONS = {
+    ("onboarding", "ready_for_review"): "admin",          # admin submits a complete registration (checklist enforced)
+    ("ready_for_review", "approved"): "super_admin",      # final approval
+    ("ready_for_review", "onboarding"): "super_admin",    # request changes: back to the admin's onboarding work
+    ("ready_for_review", "rejected"): "super_admin",      # final rejection
+    ("rejected", "onboarding"): "super_admin",            # reopen a rejected onboarding registration
     ("invited", "draft"): "vendor",
     ("draft", "pending_documents"): "admin",
     ("draft", "submitted"): "vendor",
     ("pending_documents", "submitted"): "vendor",
     ("submitted", "under_review"): "admin",
     ("submitted", "changes_requested"): "admin",
-    ("submitted", "approved"): "admin",
-    ("submitted", "rejected"): "admin",
+    ("submitted", "approved"): "super_admin",
+    ("submitted", "rejected"): "super_admin",
     ("under_review", "changes_requested"): "admin",
-    ("under_review", "approved"): "admin",
-    ("under_review", "rejected"): "admin",
+    ("under_review", "approved"): "super_admin",
+    ("under_review", "rejected"): "super_admin",
     ("changes_requested", "submitted"): "vendor",
     ("rejected", "submitted"): "vendor",
-    ("rejected", "approved"): "admin",
-    ("approved", "active"): "admin",
+    ("rejected", "approved"): "super_admin",
+    ("approved", "active"): "super_admin",
     ("approved", "suspended"): "admin",
     ("active", "suspended"): "admin",
-    ("suspended", "approved"): "admin",
+    ("suspended", "approved"): "super_admin",
 }
 # Admin decision name -> target status. Each needs a reason when `REASON_REQUIRED`.
 ADMIN_ACTIONS = {"start_review": "under_review", "request_documents": "pending_documents", "request_changes": "changes_requested",
                  "approve": "approved", "reject": "rejected", "suspend": "suspended", "reinstate": "approved", "activate": "active"}
 REASON_REQUIRED = ("request_documents", "request_changes", "reject", "suspend")
+# OWNER-LOCKED (Vendor Pillar): final approval, final rejection and reinstatement (and the legacy "activate") restore or refuse
+# operational access, so they belong to super_admin alone. admin prepares; support_admin and accounts_admin never decide.
+SUPER_ADMIN_ACTIONS = ("approve", "reject", "reinstate", "activate")
+# Vendor and vendor-staff logins never carry a HomeGenie status: "green"/"red" mean HomeGenie selling eligibility only.
+VENDOR_ACCOUNT_STATUS = "not_applicable"
 
 VENDOR_STAFF_ROLE = "vendor_staff"
 
 def transition_allowed(frm: Optional[str], to: str, actor: str) -> bool:
-    return TRANSITIONS.get((frm, to)) == actor
+    need = TRANSITIONS.get((frm, to))
+    return need is not None and (need == actor or (need == "admin" and actor == "super_admin"))
+
+
+def admin_actor(admin: dict) -> str:
+    return "super_admin" if admin.get("role") == "super_admin" else "admin"
 
 
 async def move(vendor: dict, to: str, actor: str, actor_id: str, reason: str = "", internal_note: str = "",

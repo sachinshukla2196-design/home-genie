@@ -12,20 +12,20 @@ from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel, Field, field_validator
 
 import re
-import secrets
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import timedelta
 from money import paise_of
 from pagination import clamp_page, page_meta, text_filter, date_range
 from stock import release_stock, run_intents, intent
 from validators import safe_image_refs
-from vendor_history import record_vendor_status, missing_required_documents
-from vendor_lifecycle import move, ADMIN_ACTIONS, REASON_REQUIRED, SELLING, CONTACT_ONLY
+from vendor_history import missing_required_documents
+from vendor_lifecycle import (move, ADMIN_ACTIONS, REASON_REQUIRED, SELLING, CONTACT_ONLY, SUPER_ADMIN_ACTIONS,
+                              ONBOARDING, admin_actor)
 from vendor_staff import authorize_staff, VENDOR_STAFF_ROLE
 import catalogue as cat
 from fastapi.responses import Response
-from core import (db, now_iso, new_id, get_current_user, require_admin, create_notification, log_audit,
-                  hash_password, create_token, clean_user, next_sequence, P_PUBLIC)
+from core import (db, now_iso, new_id, get_current_user, require_admin, require_vendor_admin, create_notification, log_audit,
+                  create_token, clean_user, next_sequence, P_PUBLIC)
 
 router = APIRouter(prefix="/api", tags=["vendor"])
 
@@ -56,8 +56,13 @@ def _mask(v: str, keep: int = 4) -> str:
     return ("*" * max(len(v) - keep, 0)) + v[-keep:] if v else ""
 
 
+# Internal onboarding data (full bank number, reviewer ids, activation bookkeeping) never leaves through vendor/admin listings;
+# admins read the registration through the onboarding endpoint, which masks the account number.
+_INTERNAL = ("_id", "reviewed_by", "onboarding", "created_by", "submitted_for_approval_by", "approved_by", "owner_activation_claimed_at")
+
+
 def _public_vendor(v: dict) -> dict:
-    v = {k: val for k, val in v.items() if k not in ("_id", "reviewed_by")}
+    v = {k: val for k, val in v.items() if k not in _INTERNAL}
     v["bank_account"] = _mask(v.get("bank_account"))
     v["pan"] = _mask(v.get("pan"))
     return v
@@ -86,6 +91,8 @@ async def require_approved_vendor(user: dict = Depends(require_vendor_user)) -> 
 
 
 # ------------------------------------------------------------------ public vendor sign-up
+# RETIRED (owner decision, Vendor Pillar): there is no instant vendor account. The public route is "Apply to sell"
+# (vendor_applications.py), which creates an application only: no user, no vendor, no session.
 # ------------------------------------------------------------------ onboarding / profile
 class VendorProfileIn(BaseModel):
     business_name: str = Field(min_length=2, max_length=120)
@@ -808,41 +815,20 @@ class VendorAccountIn(BaseModel):
 
 
 @router.post("/admin/vendors/create")
-async def admin_vendor_create(body: VendorAccountIn, request: Request, admin: dict = Depends(require_admin)):
-    """Only an admin creates vendor accounts. The owner is invited and sets their own password through a single-use link
-    (vendor_invitations.py); until then the account has an unguessable password and cannot sign in."""
+async def admin_vendor_create(body: VendorAccountIn, request: Request, admin: dict = Depends(require_vendor_admin)):
+    """Start a vendor registration directly (without a public application). It creates the vendor in `onboarding` and an owner
+    account that cannot sign in (`pending_approval`). The admin completes onboarding; only a super admin approves; the owner
+    invitation is issued at that approval (vendor_onboarding.py). Existing accounts are never reused or converted."""
     mobile = body.mobile.strip()
     email = (body.email or "").strip().lower()
     if not re.fullmatch(r"[6-9]\d{9}", mobile):
         raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number.")
     if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
         raise HTTPException(status_code=400, detail="Enter a valid email address, or leave it blank.")
-    if await db.users.find_one({"mobile": mobile}) or (email and await db.users.find_one({"email": email})):
-        raise HTTPException(status_code=400, detail="An account with this mobile or email already exists.")
-
-    vid = await next_sequence("vendor", "VD", 6)
-    while await db.users.find_one({"distributor_id": vid}):      # skip IDs issued before the counter existed
-        vid = await next_sequence("vendor", "VD", 6)
-    now = now_iso()
-    user = {"id": new_id(), "distributor_id": vid, "full_name": body.full_name.strip(), "mobile": mobile,
-            "email": email or None, "password_hash": hash_password(secrets.token_urlsafe(32)), "role": "vendor", "status": "green",
-            "account_status": "invited", "mobile_verified": False, "email_verified": False, "kyc_status": "not_started",
-            "sponsor_id": None, "sponsor_user_id": None, "created_at": now, "updated_at": now}
-    try:
-        await db.users.insert_one(dict(user))
-    except DuplicateKeyError:
-        raise HTTPException(status_code=400, detail="An account with this mobile or email already exists.")
-    vrec = {"id": new_id(), "user_id": user["id"], "vendor_code": vid, "business_name": body.business_name.strip(),
-            "contact_person": body.full_name.strip(), "phone": mobile, "support_email": email,
-            "status": "draft", "categories": [], "created_at": now, "updated_at": now}
-    await db.vendors.insert_one(dict(vrec))
-    await record_vendor_status(vrec["id"], None, "draft", admin["id"], "Vendor account created by admin")
-    await create_notification(user["id"], "vendor", "Vendor account created",
-                              "HomeGenie created your vendor account. Sign in and complete your business profile.")
-    await log_audit(admin, "vendor_account_created", "vendor", vrec["id"], new_value={"vendor_code": vid, "user_id": user["id"]}, request=request)
-    from vendor_invitations import issue
-    invitation = await issue(user, vrec, admin, request)
-    return {"ok": True, "vendor_id": vrec["id"], "vendor_code": vid, "status": "draft", "user_id": user["id"], "invitation": invitation}
+    from vendor_onboarding import create_onboarding_vendor
+    v = await create_onboarding_vendor(business_name=body.business_name, contact_name=body.full_name, mobile=mobile, email=email or None,
+                                       admin=admin, request=request)
+    return {"ok": True, "vendor_id": v["id"], "vendor_code": v["vendor_code"], "status": v["status"], "user_id": v["user_id"]}
 
 
 @router.get("/admin/vendors")
@@ -866,20 +852,24 @@ class VendorDecision(BaseModel):
 
 
 @router.post("/admin/vendors/{vendor_id}/decision")
-async def admin_vendor_decision(vendor_id: str, body: VendorDecision, request: Request, admin: dict = Depends(require_admin)):
+async def admin_vendor_decision(vendor_id: str, body: VendorDecision, request: Request, admin: dict = Depends(require_vendor_admin)):
     v = await db.vendors.find_one({"id": vendor_id}, {"_id": 0})
     if not v:
         raise HTTPException(status_code=404, detail="Vendor not found.")
     target = ADMIN_ACTIONS.get(body.action)
     if not target:
         raise HTTPException(status_code=400, detail="Unknown action.")
+    if body.action in SUPER_ADMIN_ACTIONS and admin.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="Only a super admin can make this final vendor decision.")
+    if v.get("status") in ONBOARDING:
+        raise HTTPException(status_code=409, detail="This vendor is in onboarding. Use the onboarding and final review screens.")
     reason = body.reason.strip()
     if body.action in REASON_REQUIRED and len(reason) < 5:
         raise HTTPException(status_code=400, detail="A reason is required.")
     extra = {"reviewed_by": admin["id"], "reviewed_at": now_iso()}
     if target == "rejected":
         extra["rejection_reason"] = reason
-    await move(v, target, "admin", admin["id"], reason, body.internal_note.strip(), extra=extra)
+    await move(v, target, admin_actor(admin), admin["id"], reason, body.internal_note.strip(), extra=extra)
     if target == "suspended":   # hide all listings; history stays intact
         await db.products.update_many({"vendor_id": vendor_id}, {"$set": {"is_active": False}})
     await create_notification(v["user_id"], "vendor", "Vendor account update",
@@ -903,7 +893,7 @@ class ProductDecision(BaseModel):
 
 
 @router.post("/admin/vendor-products/{product_id}/decision")
-async def admin_product_decision(product_id: str, body: ProductDecision, request: Request, admin: dict = Depends(require_admin)):
+async def admin_product_decision(product_id: str, body: ProductDecision, request: Request, admin: dict = Depends(require_vendor_admin)):
     p = await db.products.find_one({"id": product_id, "vendor_id": {"$ne": None}}, P_PUBLIC)
     if not p:
         raise HTTPException(status_code=404, detail="Product not found.")
@@ -933,17 +923,10 @@ class VendorInvite(BaseModel):
 
 
 @router.post("/admin/vendors/invite")
-async def admin_vendor_invite(body: VendorInvite, request: Request, admin: dict = Depends(require_admin)):
-    ident = body.identifier.strip()
-    u = await db.users.find_one({"$or": [{"email": ident.lower()}, {"mobile": ident}, {"distributor_id": ident.upper()}]}, {"_id": 0})
-    if not u:
-        raise HTTPException(status_code=404, detail="No account found. The person must register first.")
-    if u.get("role") in ("super_admin", "admin", "accounts_admin", "support_admin"):
-        raise HTTPException(status_code=400, detail="Admin accounts cannot be vendors.")
-    if u.get("role") == "vendor":
-        raise HTTPException(status_code=400, detail="This account is already a vendor.")
-    await db.users.update_one({"id": u["id"]}, {"$set": {"role": "vendor", "status": "green", "updated_at": now_iso()}})
-    await create_notification(u["id"], "vendor", "Vendor access enabled",
-                              "You can now complete your vendor application in the Vendor portal.")
-    await log_audit(admin, "vendor_role_granted", "user", u["id"], old_value={"role": u.get("role")}, new_value={"role": "vendor"}, request=request)
-    return {"ok": True, "user_id": u["id"], "distributor_id": u.get("distributor_id")}
+async def admin_vendor_invite(body: VendorInvite, request: Request, admin: dict = Depends(require_vendor_admin)):
+    """RETIRED (owner decision): an existing customer, HomeGenie or admin account is NEVER converted into a vendor. Its role,
+    HomeGenie status, commission eligibility, wallet and password stay exactly as they are. A vendor owner is a separate
+    account created through Vendor applications / onboarding with the business's own contact number."""
+    await log_audit(admin, "vendor_conversion_refused", "user", "", new_value={"identifier_given": bool(body.identifier.strip())}, request=request)
+    raise HTTPException(status_code=410, detail="Existing accounts can no longer be converted into vendors. Create the vendor through "
+                                                "Vendor applications or onboarding, using the business's own mobile number.")

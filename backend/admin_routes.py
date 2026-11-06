@@ -17,7 +17,7 @@ from pagination import clamp_page, page_meta
 from money import to_paise, paise_to_float, paise_of
 from stock import run_intents, intent
 
-from core import (db, now_iso, new_id, require_admin, get_settings, P_PUBLIC,
+from core import (db, now_iso, new_id, require_admin, get_settings, P_PUBLIC, VENDOR_ADMIN_ROLES,
                   add_wallet_transaction, wallet_apply, create_notification, log_audit,
                   clean_user, mask_aadhaar, password_update)
 
@@ -112,6 +112,9 @@ async def admin_user_detail(user_id: str, admin: dict = Depends(require_admin)):
 
 
 # ---------------- Products ----------------
+VENDOR_PRODUCT_MSG = "This is a vendor's product. The vendor edits it and HOME GENIES approves it under Vendors; it can only be taken down here."
+
+
 class ProductBody(BaseModel):
     sku: str
     name: str
@@ -147,6 +150,10 @@ async def update_product(product_id: str, body: ProductBody, request: Request, a
     existing = await db.products.find_one({"id": product_id}, P_PUBLIC)
     if not existing:
         raise HTTPException(status_code=404, detail="Product not found.")
+    if existing.get("vendor_id"):
+        # Vendor V1.1: a vendor's product changes only through the vendor's own edit and the admin approval decision, so the
+        # review trail and suspension rules cannot be bypassed from the general catalogue screen.
+        raise HTTPException(status_code=409, detail=VENDOR_PRODUCT_MSG)
     upd = body.model_dump()
     upd["updated_at"] = now_iso()
     await db.products.update_one({"id": product_id}, {"$set": upd})
@@ -156,6 +163,9 @@ async def update_product(product_id: str, body: ProductBody, request: Request, a
 
 @router.delete("/products/{product_id}")
 async def deactivate_product(product_id: str, request: Request, admin: dict = Depends(require_admin)):
+    p = await db.products.find_one({"id": product_id}, {"_id": 0, "vendor_id": 1})
+    if p and p.get("vendor_id") and admin.get("role") not in VENDOR_ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="Only a super admin or admin can take down a vendor's product.")
     await db.products.update_one({"id": product_id}, {"$set": {"is_active": False, "updated_at": now_iso()}})
     await log_audit(admin, "product_deactivated", "product", product_id, request=request)
     return {"ok": True}
@@ -166,6 +176,8 @@ async def delete_product_permanent(product_id: str, request: Request, admin: dic
     p = await db.products.find_one({"id": product_id}, P_PUBLIC)
     if not p:
         raise HTTPException(status_code=404, detail="Product not found.")
+    if p.get("vendor_id"):
+        raise HTTPException(status_code=409, detail=VENDOR_PRODUCT_MSG)
     await db.products.delete_one({"id": product_id})
     await log_audit(admin, "product_deleted", "product", product_id,
                     old_value={"sku": p.get("sku"), "name": p.get("name")}, request=request)
@@ -979,6 +991,9 @@ async def admin_reset_password(user_id: str, body: AdminPwBody, request: Request
     u = await db.users.find_one({"id": user_id})
     if not u:
         raise HTTPException(status_code=404, detail="User not found.")
+    from core import not_activated
+    if not_activated(u):      # a vendor owner gets access ONLY through the owner invitation issued at final approval
+        raise HTTPException(status_code=409, detail="This account is not activated yet. It is activated through the vendor owner invitation, not a password reset.")
     # Generated default: 12 random chars (letters + digits), not a guessable prefix + 5 digits.
     alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
     new_pw = (body.password or "").strip() or ("".join(secrets.choice(alphabet) for _ in range(12)))
