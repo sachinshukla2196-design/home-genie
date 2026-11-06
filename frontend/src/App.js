@@ -68,6 +68,10 @@ import VendorCod from "@/pages/vendor/VendorCod";
 import VendorNotifications from "@/pages/vendor/VendorNotifications";
 import VendorSupport from "@/pages/vendor/VendorSupport";
 import VendorSecurity from "@/pages/vendor/VendorSecurity";
+import { VendorRegister, VendorLogin } from "@/pages/vendor/VendorAuth";
+import VendorApply from "@/pages/vendor/VendorApply";
+import AdminVendorApplications from "@/pages/admin/AdminVendorApplications";
+import AdminVendorOnboarding from "@/pages/admin/AdminVendorOnboarding";
 
 function App() {
   return (
@@ -91,7 +95,7 @@ function App() {
 function VendorGate({ children }) {
   const { vendor } = useVendor();
   if (vendor === null) return null;
-  return vendor && vendor.status === "approved" ? children : <PendingApproval vendor={vendor} />;
+  return vendor && ["approved", "active"].includes(vendor.status) ? children : <PendingApproval vendor={vendor} />;
 }
 function VendorHome() {
   return <VendorGate><VendorDashboard /></VendorGate>;
@@ -148,6 +152,8 @@ function AppRoutes() {
                   <Route path="withdrawals" element={<AdminWithdrawals />} />
                   <Route path="vendors" element={<AdminVendors />} />
                   <Route path="vendors/new" element={<AdminVendorCreate />} />
+                  <Route path="vendor-applications" element={<AdminVendorApplications />} />
+                  <Route path="vendors/:id/onboarding" element={<AdminVendorOnboarding />} />
                   <Route path="agreements" element={<AdminAgreements />} />
                   <Route path="benefits" element={<AdminBenefits />} />
                   <Route path="reports" element={<AdminReports />} />
@@ -155,6 +161,9 @@ function AppRoutes() {
                   <Route path="audit" element={<AdminAuditLogs />} />
                 </Route>
 
+                <Route path="/vendor/login" element={<VendorLogin />} />
+                <Route path="/vendor/register" element={<VendorRegister />} />
+                <Route path="/vendor/apply" element={<VendorApply />} />
                 <Route path="/vendor/invite" element={<VendorStaffInvite />} />
                 <Route path="/vendor/owner-invite" element={<VendorOwnerInvite />} />
                 <Route path="/vendor" element={<ProtectedRoute vendor><VendorLayout /></ProtectedRoute>}>

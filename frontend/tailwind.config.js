@@ -47,6 +47,10 @@ module.exports = {
           DEFAULT: '#C026A3',
           light: '#FBE8F6',
         },
+        // Vendor Pillar design system (cream / chocolate / gold). Scoped: used only by vendor + admin-vendor screens.
+        cream: { 50: '#FFFDF8', 100: '#FBF6EC', 200: '#F4EAD7', 300: '#E9D9BC', 400: '#D9C29A' },
+        choco: { 500: '#7A5038', 600: '#5C3A26', 700: '#4A2E1E', 800: '#3B2417', 900: '#2B1A10' },
+        aurum: { 200: '#F3E3B5', 300: '#EAD394', 400: '#DDB862', 500: '#C9A13B', 600: '#A9842A', 700: '#86671E' },
         ink: '#1B1024',
         muted2: '#6B6475',
         danger: '#C62828',

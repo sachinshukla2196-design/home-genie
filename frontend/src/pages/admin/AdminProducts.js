@@ -11,12 +11,17 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { Stagger, StaggerItem } from "@/components/motion";
+import { useAuth } from "@/context/AuthContext";
 import { useI18n } from "@/context/I18nContext";
 import { API, apiError } from "@/lib/api";
 
 const EMPTY = { sku: "", name: "", name_hi: "", description: "", description_hi: "", images: [""], mrp: 0, selling_price: 0, gst_percent: 5, stock: 100, category: "Household Essentials", is_active: true, options: [] };
 
+const VENDOR_ADMIN_ROLES = ["super_admin", "admin"];   // the server enforces this; hiding controls is only a convenience
+
 export default function AdminProducts() {
+  const { user } = useAuth();
+  const canTakeDown = VENDOR_ADMIN_ROLES.includes(user?.role);
   const { t } = useI18n();
   const [products, setProducts] = useState(null);
   const [open, setOpen] = useState(false);
@@ -82,6 +87,7 @@ export default function AdminProducts() {
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-1.5">
                   <span className="max-w-full truncate text-xs font-semibold uppercase tracking-wide text-hg-lavender">{p.category}</span>
+                  {p.vendor_id && <span className="rounded-full bg-hg-gold/15 px-2 py-0.5 text-[10px] font-semibold uppercase text-hg-gold ring-1 ring-hg-gold/25" data-testid={`vendor-pill-${p.sku}`}>Vendor · {p.vendor_name}</span>}
                   {!p.is_active && <span className="rounded-full bg-danger/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-danger ring-1 ring-danger/25">Inactive</span>}
                 </div>
                 <h3 className="mt-1 break-words font-display font-medium leading-snug text-ink">{p.name}</h3>
@@ -90,11 +96,19 @@ export default function AdminProducts() {
             </div>
             <div className="mt-4 flex items-baseline gap-2"><span className="font-display text-lg font-semibold tabular-nums text-ink">{money(p.selling_price)}</span><span className="text-sm tabular-nums text-muted2 line-through">{money(p.mrp)}</span></div>
             <div className="mt-1 text-xs text-muted2">Stock: {p.stock} · GST {p.gst_percent}%</div>
+            {p.vendor_id ? (
+              /* A vendor's product is edited by the vendor and approved under Vendors; here it can only be taken down. */
+              <div className="mt-auto flex items-center gap-2 pt-4">
+                <span className="flex-1 text-xs text-muted2">Managed by the vendor · approve changes under Vendors</span>
+                {canTakeDown && p.is_active && <Button onClick={() => toggle(p)} variant="outline" size="sm" className="h-9 rounded-full border-danger/30 bg-transparent px-3 text-danger hover:bg-danger/10 hover:text-danger" data-testid={`takedown-${p.sku}`}><Power size={14} className="mr-1" /> Take down</Button>}
+              </div>
+            ) : (
             <div className="mt-auto flex gap-2 pt-4">
               <Button onClick={() => openEdit(p)} variant="outline" size="sm" className="h-9 flex-1 rounded-full border-brand-50 bg-transparent" data-testid={`edit-${p.sku}`}><Pencil size={14} className="mr-1" /> Edit</Button>
               <Button onClick={() => toggle(p)} variant="outline" size="sm" aria-label={p.is_active ? "Deactivate product" : "Activate product"} title={p.is_active ? "Deactivate" : "Activate"} className={`h-9 w-9 rounded-full bg-transparent p-0 ${p.is_active ? "border-danger/30 text-danger hover:bg-danger/10 hover:text-danger" : "border-hg-success/40 text-hg-success hover:bg-hg-success/10 hover:text-hg-success"}`} data-testid={`toggle-${p.sku}`}><Power size={14} /></Button>
               <Button onClick={() => del(p)} variant="outline" size="sm" aria-label="Delete product" title="Delete" className="h-9 w-9 rounded-full border-danger/40 bg-transparent p-0 text-danger hover:bg-danger/10 hover:text-danger" data-testid={`delete-${p.sku}`}><Trash2 size={14} /></Button>
             </div>
+            )}
           </StaggerItem>
         ))}
       </Stagger>

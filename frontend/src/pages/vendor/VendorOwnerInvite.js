@@ -1,10 +1,8 @@
 import React, { useEffect, useState } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import { ShieldCheck } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { PageHeader, SectionCard } from "@/components/PageHeader";
+import { VendorPublicShell, VButton, VCard, VField, VInput, VBanner } from "@/components/vendor/VendorUI";
 import { useI18n } from "@/context/I18nContext";
 import { API, apiError } from "@/lib/api";
 
@@ -45,35 +43,38 @@ export default function VendorOwnerInvite() {
   };
 
   return (
-    <div className="mx-auto max-w-lg space-y-6 px-4 py-10" data-testid="vendor-owner-invite">
-      <PageHeader title={t("oi.title")} subtitle={info ? t("oi.sub", { business: info.business_name }) : undefined} icon={ShieldCheck} />
-      {error && <p role="alert" className="hg-card p-5 text-sm text-danger" data-testid="owner-invite-error">{t("oi.invalid")}</p>}
-      {!error && !info && <p className="text-sm text-muted2">{t("vx.loading")}</p>}
-      {info && !done && (
-        <SectionCard title={t("oi.setPassword")} testid="owner-invite-form-card">
-          <p className="mb-4 text-xs text-muted2">{t("oi.mobileHint", { hint: info.mobile_hint })}</p>
-          <form onSubmit={submit} noValidate className="grid gap-4" data-testid="owner-invite-form">
-            <div>
-              <label htmlFor="oi-pw" className="text-sm font-medium text-ink">{t("oi.password")}</label>
-              <Input id="oi-pw" type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)} className="mt-1.5" data-testid="owner-invite-password" />
-              <p className="mt-1 text-xs text-muted2">{t("oi.passwordHint")}</p>
-              {tried && !strong && <p role="alert" className="mt-1 text-xs text-danger">{t("oi.errPassword")}</p>}
-            </div>
-            <div>
-              <label htmlFor="oi-confirm" className="text-sm font-medium text-ink">{t("oi.confirm")}</label>
-              <Input id="oi-confirm" type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} className="mt-1.5" data-testid="owner-invite-confirm" />
-              {tried && !same && <p role="alert" className="mt-1 text-xs text-danger">{t("oi.errConfirm")}</p>}
-            </div>
-            <Button type="submit" disabled={busy} className="hg-btn h-11 rounded-full px-6" data-testid="owner-invite-submit">{t("oi.submit")}</Button>
-          </form>
-        </SectionCard>
-      )}
-      {done && (
-        <SectionCard title={t("oi.doneTitle")} testid="owner-invite-done">
-          <p className="text-sm text-ink">{t("oi.doneBody")}</p>
-          <Link to="/login" className="hg-btn mt-4 inline-flex h-10 items-center rounded-full px-5 text-sm font-semibold">{t("oi.signIn")}</Link>
-        </SectionCard>
-      )}
-    </div>
+    <VendorPublicShell>
+      <div className="space-y-5" data-testid="vendor-owner-invite">
+        <div className="text-center">
+          <span className="mx-auto flex h-14 w-14 items-center justify-center rounded-2xl bg-choco-800 text-aurum-300 shadow-lg"><ShieldCheck size={26} aria-hidden /></span>
+          <h1 className="hgv-title mt-4 text-3xl font-bold">{t("oi.title")}</h1>
+          {info && <p className="hgv-muted mt-2 text-[15px]">{t("oi.sub", { business: info.business_name })}</p>}
+        </div>
+        {error && <VBanner tone="red" icon={ShieldCheck}><span data-testid="owner-invite-error">{t("oi.invalid")}</span></VBanner>}
+        {!error && !info && <p className="hgv-muted text-center text-sm">{t("vx.loading")}</p>}
+        {info && !done && (
+          <VCard className="p-6 sm:p-7" data-testid="owner-invite-form-card">
+            <h2 className="hgv-title text-xl font-semibold">{t("oi.setPassword")}</h2>
+            <p className="hgv-muted mt-1 text-sm">{t("oi.mobileHint", { hint: info.mobile_hint })}</p>
+            <form onSubmit={submit} noValidate className="mt-5 grid gap-4" data-testid="owner-invite-form">
+              <VField id="oi-pw" label={t("oi.password")} required help={t("oi.passwordHint")} error={tried && !strong ? t("oi.errPassword") : null}>
+                <VInput id="oi-pw" type="password" autoComplete="new-password" value={pw} onChange={(e) => setPw(e.target.value)} invalid={tried && !strong} data-testid="owner-invite-password" />
+              </VField>
+              <VField id="oi-confirm" label={t("oi.confirm")} required error={tried && !same ? t("oi.errConfirm") : null}>
+                <VInput id="oi-confirm" type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} invalid={tried && !same} data-testid="owner-invite-confirm" />
+              </VField>
+              <VButton type="submit" variant="primary" busy={busy} className="w-full" data-testid="owner-invite-submit">{t("oi.submit")}</VButton>
+            </form>
+          </VCard>
+        )}
+        {done && (
+          <VCard className="p-6 text-center sm:p-7" data-testid="owner-invite-done">
+            <h2 className="hgv-title text-xl font-semibold">{t("oi.doneTitle")}</h2>
+            <p className="hgv-muted mt-2 text-sm">{t("oi.doneBody")}</p>
+            <VButton to="/vendor/login" variant="primary" className="mt-5">{t("oi.signIn")}</VButton>
+          </VCard>
+        )}
+      </div>
+    </VendorPublicShell>
   );
 }

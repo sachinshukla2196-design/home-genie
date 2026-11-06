@@ -3,7 +3,7 @@ import { Link, useLocation, Outlet } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
   LayoutDashboard, Users, Package, ShoppingCart, Banknote,
-  FileBarChart, Settings, ScrollText, LogOut, ShieldCheck, Store, Handshake, Award, UserCheck,
+  FileBarChart, Settings, ScrollText, LogOut, ShieldCheck, Store, Handshake, Award, UserCheck, Inbox,
 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
@@ -20,6 +20,7 @@ const NAV = [
   { to: "/admin/activations", icon: UserCheck, key: "nav.activations", roles: ["admin", "super_admin"] },   // the server enforces this too
   { to: "/admin/withdrawals", icon: Banknote, key: "nav.withdrawals" },
   { to: "/admin/vendors", icon: Store, key: "av.title" },
+  { to: "/admin/vendor-applications", icon: Inbox, key: "nav.vendorApplications", roles: ["super_admin", "admin", "support_admin"] },   // the server enforces this too
   { to: "/admin/agreements", icon: Handshake, key: "aa.nav" },
   { to: "/admin/benefits", icon: Award, key: "bn.nav" },
   { to: "/admin/reports", icon: FileBarChart, key: "nav.reports" },

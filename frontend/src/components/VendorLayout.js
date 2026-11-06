@@ -61,6 +61,8 @@ export const VENDOR_STATUS_TONE = {
   pending_documents: "bg-hg-gold/15 text-hg-gold ring-hg-gold/30",
   changes_requested: "bg-hg-gold/15 text-hg-gold ring-hg-gold/30",
   active: "bg-hg-success/15 text-hg-success ring-hg-success/30",
+  onboarding: "bg-hg-gold/15 text-hg-gold ring-hg-gold/30",
+  ready_for_review: "bg-[#5B7CFF]/15 text-[#8FA6FF] ring-[#8FA6FF]/30",
 };
 
 export function VendorLayout() {
@@ -79,7 +81,7 @@ export function VendorLayout() {
     API.get("/vendor/notifications", { params: { page_size: 1 } }).then(({ data }) => setUnread(data.unread)).catch(() => {});
   }, [loc.pathname]);
 
-  const approved = vendor && vendor.status === "approved";
+  const approved = vendor && ["approved", "active"].includes(vendor.status);
   const groups = NAV_GROUPS;
   const flat = groups.flatMap((g) => g.items);
   const active = (to) => (to === "/vendor" ? loc.pathname === "/vendor" : loc.pathname.startsWith(to));
