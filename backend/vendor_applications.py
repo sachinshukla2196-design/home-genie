@@ -18,7 +18,8 @@ from pydantic import BaseModel, Field
 from pymongo.errors import DuplicateKeyError
 
 from catalogue import PILLARS
-from core import db, now_iso, new_id, next_sequence, require_admin, require_vendor_admin, log_audit, create_notification, rate_limit, client_ip
+from core import (db, now_iso, new_id, next_sequence, require_admin, require_vendor_admin, log_audit, create_notification, rate_limit,
+                  client_ip, hash_password)
 from pagination import clamp_page, page_meta, text_filter
 from vendor_onboarding import BUSINESS_TYPES, INDIAN_STATES, create_onboarding_vendor
 
@@ -46,6 +47,10 @@ class ApplicationIn(BaseModel):
     state: str
     website: str = Field(default="", max_length=200)
     consent: bool = False
+    # OWNER DECISION: the applicant chooses the vendor-panel password while applying. It is stored ONLY as a bcrypt hash on the
+    # application, and it opens nothing until a super admin approves (the owner account stays `pending_approval` until then).
+    password: str = Field(min_length=8, max_length=128)
+    confirm_password: str = Field(max_length=128)
     company_fax: str = Field(default="", max_length=200)      # honeypot: hidden from people, filled in by bots
 
 
@@ -67,6 +72,10 @@ def _clean(body: ApplicationIn) -> dict:
         raise HTTPException(status_code=400, detail="Website must be a full https:// address, or leave it blank.")
     if not body.consent:
         raise HTTPException(status_code=400, detail="Please accept the terms and privacy policy to apply.")
+    if body.password != body.confirm_password:
+        raise HTTPException(status_code=400, detail="The passwords do not match.")
+    if not (re.search(r"[A-Za-z]", body.password) and re.search(r"\d", body.password)):
+        raise HTTPException(status_code=400, detail="Use a password of at least 8 characters with letters and numbers.")
     for label, value in (("Business name", body.business_name), ("Your name", body.contact_name), ("City", body.city)):
         if any(ch in value for ch in "<>") or not value.strip():
             raise HTTPException(status_code=400, detail=f"{label} contains characters that are not allowed.")
@@ -83,6 +92,7 @@ async def apply_to_sell(body: ApplicationIn, request: Request):
         return {"ok": True, "message": NEUTRAL}
     now = now_iso()
     app = {"id": new_id(), "number": await next_sequence("vendor_application", "VA", 6), **data, "status": "new",
+           "password_hash": hash_password(body.password),
            "open_mobile": data["mobile"], "consent_at": now, "source": "public_form",
            "history": [{"at": now, "by": None, "action": "submitted", "note": ""}], "created_at": now, "updated_at": now}
     try:
@@ -103,7 +113,9 @@ async def _require_view(admin: dict = Depends(require_admin)) -> dict:
 
 
 def _view(a: dict) -> dict:
-    return {k: v for k, v in a.items() if k not in ("_id", "open_mobile")}
+    out = {k: v for k, v in a.items() if k not in ("_id", "open_mobile", "password_hash")}      # the hash never leaves the server
+    out["applicant_password_set"] = bool(a.get("password_hash"))
+    return out
 
 
 @router.get("/admin/vendor-applications")

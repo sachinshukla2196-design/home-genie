@@ -1,12 +1,12 @@
 import React, { useState } from "react";
 import { Link } from "react-router-dom";
-import { Building2, CheckCircle2, ClipboardCheck, Globe2, MapPin, PackageCheck, Send, ShieldCheck, Sparkles, UserRound, Users } from "lucide-react";
+import { Building2, CheckCircle2, ClipboardCheck, Eye, EyeOff, Globe2, KeyRound, MapPin, PackageCheck, Send, ShieldCheck, Sparkles, UserRound, Users } from "lucide-react";
 import { VendorPublicShell, VButton, VCard, VChips, VField, VInput, VSelect, VTextarea, VBanner } from "@/components/vendor/VendorUI";
 import { API, apiError } from "@/lib/api";
 import { BUSINESS_TYPES, EMAIL_RE, INDIAN_STATES, MOBILE_RE, PILLARS } from "@/lib/vendorOptions";
 
 const EMPTY = { business_name: "", business_type: "", description: "", categories: [], contact_name: "", mobile: "", email: "",
-                city: "", state: "", website: "", consent: false, company_fax: "" };
+                city: "", state: "", website: "", consent: false, password: "", confirm_password: "", company_fax: "" };
 
 function problemsOf(f) {
   return {
@@ -20,6 +20,8 @@ function problemsOf(f) {
     city: f.city.trim().length < 2 ? "Enter your city." : null,
     state: !f.state ? "Choose your state." : null,
     website: !f.website.trim() || /^https:\/\/\S+$/.test(f.website.trim()) ? null : "Use a full https:// address, or leave it blank.",
+    password: f.password.length >= 8 && /[A-Za-z]/.test(f.password) && /\d/.test(f.password) ? null : "Use at least 8 characters with letters and numbers.",
+    confirm_password: f.confirm_password && f.confirm_password === f.password ? null : "The passwords do not match.",
     consent: f.consent ? null : "Please accept the terms and privacy policy.",
   };
 }
@@ -29,7 +31,7 @@ const STEPS = [
   ["Review", "Our partner team reviews it", ClipboardCheck],
   ["Onboarding", "We complete your registration with you", Building2],
   ["Approval", "Final approval by HOME GENIES", ShieldCheck],
-  ["Start selling", "Set your password and go live", PackageCheck],
+  ["Start selling", "Sign in with your password and go live", PackageCheck],
 ];
 
 export default function VendorApply() {
@@ -38,6 +40,7 @@ export default function VendorApply() {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(null);
   const [error, setError] = useState("");
+  const [showPw, setShowPw] = useState(false);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const problems = problemsOf(f);
   const err = (k) => (tried ? problems[k] : null);
@@ -72,8 +75,8 @@ export default function VendorApply() {
           <h1 className="hgv-title mt-5 text-3xl font-bold">Application received</h1>
           <p className="hgv-muted mx-auto mt-3 max-w-md text-[15px] leading-relaxed">{done}</p>
           <VBanner tone="gold" icon={ShieldCheck} className="mt-6 text-left">
-            No account has been created yet. If your application moves forward, our team completes your registration with you, and you
-            receive a secure link to set your password only after final approval.
+            Your vendor login is not active yet. If your application moves forward, our team completes your registration with you. Once
+            HOME GENIES gives final approval, sign in at Vendor login with your business mobile and the password you chose.
           </VBanner>
           <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
             <VButton to="/" variant="primary">Back to HOME GENIES</VButton>
@@ -183,6 +186,26 @@ export default function VendorApply() {
           </VCard>
 
           <VCard className="p-5 sm:p-6">
+            <h2 className="hgv-title flex items-center gap-2 text-xl font-semibold"><KeyRound size={19} className="text-aurum-600" aria-hidden /> 4. Your vendor login</h2>
+            <p className="hgv-muted mt-1 text-sm">Choose the password for your vendor panel. It works only after HOME GENIES approves your registration; you sign in with your business mobile.</p>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <VField id="va-password" label="Password" required error={err("password")} help="At least 8 characters, with letters and numbers.">
+                <div className="relative">
+                  <VInput id="va-password" type={showPw ? "text" : "password"} value={f.password} onChange={set("password")} autoComplete="new-password" maxLength={128}
+                          className="!pr-12" invalid={!!err("password")} data-testid="va-password" />
+                  <button type="button" onClick={() => setShowPw(!showPw)} aria-label={showPw ? "Hide password" : "Show password"}
+                          className="absolute right-1 top-1/2 mt-0.5 flex h-11 w-11 -translate-y-1/2 items-center justify-center rounded-full text-choco-600 hover:bg-cream-200">
+                    {showPw ? <EyeOff size={19} /> : <Eye size={19} />}</button>
+                </div>
+              </VField>
+              <VField id="va-confirm_password" label="Confirm password" required error={err("confirm_password")}>
+                <VInput id="va-confirm_password" type={showPw ? "text" : "password"} value={f.confirm_password} onChange={set("confirm_password")} autoComplete="new-password"
+                        maxLength={128} invalid={!!err("confirm_password")} data-testid="va-confirm-password" />
+              </VField>
+            </div>
+          </VCard>
+
+          <VCard className="p-5 sm:p-6">
             <label className="flex cursor-pointer items-start gap-3 text-[15px] text-choco-800" htmlFor="va-consent">
               <input id="va-consent" type="checkbox" checked={f.consent} onChange={(e) => setF({ ...f, consent: e.target.checked })}
                      className="mt-0.5 h-6 w-6 shrink-0 accent-[#3B2417]" aria-invalid={err("consent") ? "true" : undefined} data-testid="va-consent" />
@@ -190,7 +213,7 @@ export default function VendorApply() {
             </label>
             {err("consent") && <p role="alert" className="hgv-error">{err("consent")}</p>}
             <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="hgv-muted text-xs">Applying creates no account. You get access only after final approval.</p>
+              <p className="hgv-muted text-xs">Your login stays inactive until HOME GENIES gives final approval.</p>
               <VButton type="submit" variant="primary" icon={Send} busy={busy} className="w-full sm:w-auto" data-testid="va-submit">Submit application</VButton>
             </div>
           </VCard>

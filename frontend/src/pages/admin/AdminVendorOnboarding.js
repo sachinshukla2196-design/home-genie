@@ -124,7 +124,7 @@ export default function AdminVendorOnboarding() {
       const { data: d } = await API.post(`/admin/vendors/${id}/final-review`, { action, reason });
       apply(d); setDecision(null); setReason("");
       if (d.invitation) { setInvite(d.invitation); setTimeout(() => document.querySelector("[data-testid=owner-access-card]")?.scrollIntoView({ behavior: "smooth", block: "center" }), 150); }
-      toast.success(action === "approve" ? "Vendor approved. Share the owner invitation." : action === "reopen" ? "Reopened for onboarding" : "Decision recorded");
+      toast.success(action === "approve" ? (d.invitation?.token ? "Vendor approved. Share the owner invitation." : "Vendor approved and activated. The owner signs in with the password they chose.") : action === "reopen" ? "Reopened for onboarding" : "Decision recorded");
     } catch (e) { const d = errorDetail(e); if (d.missing) setMissing(d.missing); toast.error(d.message); }
     finally { setBusy(null); }
   };
@@ -188,6 +188,9 @@ export default function AdminVendorOnboarding() {
         <VCard className="mt-4 p-5 sm:p-6" data-testid="owner-access-card">
           <h2 className="hgv-title flex items-center gap-2 text-xl font-semibold"><KeyRound size={19} className="text-aurum-600" aria-hidden /> Owner access</h2>
           <p className="hgv-muted mt-1 text-sm">Owner account: <b className="text-choco-800">{data.owner.account_status}</b>{data.owner.invitation ? ` · invitation ${data.owner.invitation.status}, expires ${new Date(data.owner.invitation.expires_at).toLocaleString("en-IN")}` : ""}</p>
+          {data.owner.account_status === "active" && (
+            <VBanner tone="green" icon={CheckCircle2} className="mt-4"><span data-testid="owner-active">The owner's vendor login is active. They sign in at Vendor login with their mobile and password.</span></VBanner>
+          )}
           {inviteLink && (
             <div className="mt-4" data-testid="invite-link-box">
               <VBanner tone="green" icon={CheckCircle2}>Send this one-time link to the owner. It is shown only now and expires in 72 hours.</VBanner>

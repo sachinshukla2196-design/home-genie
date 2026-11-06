@@ -366,8 +366,10 @@ async def create_onboarding_vendor(*, business_name: str, contact_name: str, mob
         while await db.users.find_one({"distributor_id": code}):
             code = await next_sequence("vendor", "VD", 6)
         now = now_iso()
+        chosen = (application or {}).get("password_hash")          # the applicant's own password (hash), if they set one
         user = {"id": new_id(), "distributor_id": code, "full_name": contact_name.strip(), "mobile": mobile, "email": email or None,
-                "password_hash": hash_password(secrets.token_urlsafe(32)), "role": "vendor", "status": VENDOR_ACCOUNT_STATUS,
+                "password_hash": chosen or hash_password(secrets.token_urlsafe(32)), "applicant_password": bool(chosen),
+                "role": "vendor", "status": VENDOR_ACCOUNT_STATUS,
                 "account_status": "pending_approval", "mobile_verified": False, "email_verified": False, "kyc_status": "not_started",
                 "sponsor_id": None, "sponsor_user_id": None, "created_at": now, "updated_at": now}
         if app_id:
@@ -426,6 +428,15 @@ async def ensure_owner_invitation(vendor_id: str, admin: dict, request=None, res
     if owner.get("account_status") == "active":
         await db.vendors.update_one({"id": vendor_id}, {"$set": {"owner_activation": "active"}})
         return {"status": "active", "token": None}
+    if owner.get("applicant_password") and not resend:
+        # The owner chose a password when applying: approval activates that account directly (no invitation link needed).
+        await db.users.update_one({"id": owner["id"], "account_status": {"$in": ["pending_approval", "invited"]}},
+                                  {"$set": {"account_status": "active", "activated_at": now_iso(), "updated_at": now_iso()}})
+        await db.vendors.update_one({"id": vendor_id}, {"$set": {"owner_activation": "active", "owner_activated_at": now_iso()}})
+        await log_audit(admin, "vendor_owner_activated_with_applicant_password", "vendor", vendor_id, request=request)
+        await create_notification(owner["id"], "vendor", "Welcome to HOME GENIES",
+                                  "Your vendor registration is approved. Sign in to the vendor panel with the mobile and password you chose.")
+        return {"status": "active", "token": None, "activated_with_applicant_password": True}
     stale = (datetime.now(timezone.utc) - CLAIM_STALE).isoformat()
     open_states = ["not_started", "pending", None]
     flt = {"id": vendor_id, "$or": [{"owner_activation": {"$in": open_states}}, {"owner_activation": {"$exists": False}},

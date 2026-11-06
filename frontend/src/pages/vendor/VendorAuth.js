@@ -66,7 +66,7 @@ export function VendorLogin() {
           <p className="hgv-muted text-center text-sm">Shopping or selling as a HomeGenie? <Link to="/login" className="font-semibold text-choco-700 underline underline-offset-2">Log in here</Link></p>
         </div>
       </VCard>
-      <p className="hgv-muted mt-5 text-center text-xs">Approved vendors receive a secure link to set their password. Until then, sign-in is not available.</p>
+      <p className="hgv-muted mt-5 text-center text-xs">Sign-in works only after HOME GENIES approves your registration. Use the password you chose when applying, or the secure link we sent you.</p>
     </VendorPublicShell>
   );
 }

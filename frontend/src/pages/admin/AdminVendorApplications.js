@@ -142,6 +142,7 @@ export default function AdminVendorApplications() {
                 <div className="mt-1 flex flex-wrap gap-1.5">{(detail.categories || []).map((c) => <span key={c} className="hgv-pill hgv-pill-gold">{c}</span>)}</div>
               </div>
               <div className="mt-4"><p className="hgv-muted text-xs">About the business</p><p className="mt-1 whitespace-pre-line text-sm text-choco-800">{detail.description}</p></div>
+              {detail.applicant_password_set && <p className="mt-3"><span className="hgv-pill hgv-pill-green">Applicant chose a vendor password · activates at final approval</span></p>}
               {detail.website && <p className="mt-3 text-sm"><span className="hgv-muted text-xs">Website </span><a href={detail.website} target="_blank" rel="noreferrer noopener" className="break-all font-semibold text-choco-700 underline">{detail.website}</a></p>}
               {detail.decline_reason && <VBanner tone="red" className="mt-4">Declined: {detail.decline_reason}</VBanner>}
               {detail.duplicate_of && <VBanner tone="gold" icon={Copy} className="mt-4">Duplicate of {detail.duplicate_of}</VBanner>}

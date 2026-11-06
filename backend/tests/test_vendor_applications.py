@@ -26,6 +26,7 @@ from core import db, hash_password, create_token, now_iso, new_id  # noqa: E402
 
 S = {}
 PW = "Admin-Pass-123"
+APW = "Shop-Pass-2468"
 _seq = iter(range(10000, 99999))
 
 
@@ -41,7 +42,7 @@ def _app(**over):
     n = next(_seq)
     return {"business_name": f"Weavers {n}", "business_type": "proprietorship", "description": "Handloom cotton sarees made in our own unit.",
             "categories": ["Sarees"], "contact_name": "Meera Devi", "mobile": f"94{n:08d}", "email": f"weavers{n}@example.test",
-            "city": "Varanasi", "state": "Uttar Pradesh", "website": "", "consent": True, **over}
+            "city": "Varanasi", "state": "Uttar Pradesh", "website": "", "consent": True, "password": APW, "confirm_password": APW, **over}
 
 
 @pytest.fixture(scope="module")
@@ -125,7 +126,9 @@ def test_the_honeypot_stores_nothing_and_answers_the_same(c):
 @pytest.mark.parametrize("over,code", [
     ({"mobile": "12345"}, 400), ({"mobile": "5123456789"}, 400), ({"email": "nope"}, 400), ({"business_type": "empire"}, 400),
     ({"categories": ["Toys"]}, 400), ({"categories": []}, 422), ({"state": "Atlantis"}, 400), ({"website": "http://insecure.example"}, 400),
-    ({"consent": False}, 400), ({"description": "too short"}, 422), ({"business_name": "<script>x</script>"}, 400), ({"business_name": "x"}, 422)])
+    ({"consent": False}, 400), ({"description": "too short"}, 422), ({"business_name": "<script>x</script>"}, 400), ({"business_name": "x"}, 422),
+    ({"confirm_password": "Other-Pass-999"}, 400), ({"password": "lettersonly", "confirm_password": "lettersonly"}, 400),
+    ({"password": "short1", "confirm_password": "short1"}, 422)])
 def test_invalid_applications_are_refused_and_store_nothing(c, over, code):
     before = _counts(c)
     assert c.post("/api/vendor-applications", json=_app(**over)).status_code == code
@@ -229,7 +232,7 @@ def test_conversion_creates_an_onboarding_vendor_and_a_pending_owner_that_cannot
 def test_conversion_is_refused_when_the_contact_belongs_to_an_existing_account(c, who):
     existing = S[who]
     before = _run(c, lambda: db.users.find_one({"id": existing["id"]}, {"_id": 0}))
-    _run(c, lambda: db.vendor_applications.insert_one({"id": new_id(), "number": f"VAX{next(_seq)}", **{k: v for k, v in _app(mobile=existing["mobile"]).items() if k != "consent"},
+    _run(c, lambda: db.vendor_applications.insert_one({"id": new_id(), "number": f"VAX{next(_seq)}", **{k: v for k, v in _app(mobile=existing["mobile"]).items() if k not in ("consent", "password", "confirm_password")},
                                                        "status": "new", "history": [], "created_at": now_iso(), "updated_at": now_iso()}))
     aid = _run(c, lambda: db.vendor_applications.find_one({"mobile": existing["mobile"], "status": "new"}, {"_id": 0}))["id"]
     detail = c.get(f"/api/admin/vendor-applications/{aid}", headers=_hdr("admin")).json()
@@ -281,3 +284,66 @@ def test_a_conversion_in_progress_is_not_resumed_by_another_request(c):
     _run(c, lambda: db.vendor_applications.update_one({"id": aid}, {"$set": {"status": "converting", "converting_at": now_iso()}}))
     assert c.post(f"/api/admin/vendor-applications/{aid}/action", headers=_hdr("admin"), json={"action": "convert"}).status_code == 409
     assert _run(c, lambda: db.vendors.count_documents({"application_id": aid})) == 0
+
+
+
+# ================================================================ the applicant's own password (owner decision)
+def test_the_applicant_password_is_stored_only_as_a_hash_and_never_shown(c):
+    body = _app()
+    assert c.post("/api/vendor-applications", json=body).status_code == 200
+    a = _run(c, lambda: db.vendor_applications.find_one({"mobile": body["mobile"]}, {"_id": 0}))
+    assert a["password_hash"].startswith("$2") and APW not in str(a)
+    for who in ("super", "admin", "support"):
+        listing = c.get("/api/admin/vendor-applications", headers=_hdr(who)).text
+        detail = c.get(f"/api/admin/vendor-applications/{a['id']}", headers=_hdr(who))
+        assert "password_hash" not in listing and "password_hash" not in detail.text and detail.json()["applicant_password_set"] is True
+    assert _run(c, lambda: db.users.find_one({"mobile": body["mobile"]})) is None          # still no account
+
+
+def test_the_chosen_password_opens_the_vendor_panel_only_after_super_admin_approval(c):
+    from datetime import date, timedelta as td
+    body = _app()
+    c.post("/api/vendor-applications", json=body)
+    aid = _run(c, lambda: db.vendor_applications.find_one({"mobile": body["mobile"]}, {"_id": 0}))["id"]
+    vid = c.post(f"/api/admin/vendor-applications/{aid}/action", headers=_hdr("admin"), json={"action": "convert"}).json()["vendor_id"]
+    login = lambda: c.post("/api/auth/login", json={"email": body["mobile"], "password": APW})      # noqa: E731
+    assert login().status_code == 403                                                               # converted, not approved
+    # complete the registration (sections, documents, agreement) and submit
+    sections = {
+        "business": {"business_type": "proprietorship", "supplier_roles": ["manufacturer"], "description": "Cotton sarees from our own looms.", "categories": ["Sarees"]},
+        "person": {"full_name": "Meera Devi", "designation": "Proprietor", "mobile": body["mobile"], "email": body["email"], "relationship": "proprietor", "is_authorised_signatory": True},
+        "legal": {"pan": "ABCDE1234F", "gst_registered": False, "gst_exemption_declared": True},
+        "addresses": {"registered": {"line1": "5 Ghat Road", "city": "Varanasi", "state": "Uttar Pradesh", "pincode": "221001"},
+                      "pickup_same_as": "registered", "return_same_as": "pickup", "pickup_contact_name": "Meera Devi", "pickup_contact_phone": body["mobile"]},
+        "operations": {"handling_days": 2, "support_phone": body["mobile"], "support_hours": "10am-6pm", "packaging_by": "vendor", "shipping_by": "vendor"},
+        "bank": {"account_holder": "Meera Devi", "bank_name": "SBI", "account_number": "123456789012", "account_number_confirm": "123456789012", "ifsc": "SBIN0000001", "account_type": "savings"},
+    }
+    for k, d in sections.items():
+        assert c.put(f"/api/admin/vendors/{vid}/onboarding/{k}", headers=_hdr("admin"), json=d).status_code == 200, k
+    for t in ("pan", "bank_proof", "address_proof", "identity"):
+        d = c.post(f"/api/admin/vendors/{vid}/onboarding/documents", headers=_hdr("admin"), json={"type": t, "url": f"https://cdn.example.test/{t}.png"}).json()
+        assert c.post(f"/api/admin/vendor-documents/{d['id']}/review", headers=_hdr("support"), json={"status": "verified"}).status_code == 200
+    ag = c.post(f"/api/admin/finance/vendors/{vid}/agreements", headers=_hdr("fin"), json={"commission_pct": 10, "fixed_fee_paise": 0,
+                "settlement_schedule": "monthly", "effective_from": (date.today() + td(days=1)).isoformat()}).json()
+    assert c.post(f"/api/admin/finance/agreements/{ag['id']}/approve", headers=_hdr("super")).status_code == 200
+    assert c.post(f"/api/admin/vendors/{vid}/submit-for-approval", headers=_hdr("admin")).status_code == 200
+    assert login().status_code == 403                                                               # submitted, not approved
+    assert c.post(f"/api/admin/vendors/{vid}/final-review", headers=_hdr("admin"), json={"action": "approve"}).status_code == 403
+    r = c.post(f"/api/admin/vendors/{vid}/final-review", headers=_hdr("super"), json={"action": "approve"})
+    assert r.status_code == 200 and r.json()["invitation"]["status"] == "active" and r.json()["invitation"]["token"] is None
+    assert _run(c, lambda: db.account_invitations.count_documents({"vendor_id": vid})) == 0        # no link needed
+    ok = login()
+    assert ok.status_code == 200 and ok.json()["user"]["role"] == "vendor" and ok.json()["user"]["status"] != "green"
+    tok = {"Authorization": f"Bearer {ok.json()['token']}"}
+    assert c.get("/api/vendor/me", headers=tok).json()["vendor"]["status"] == "approved"
+    assert c.get("/api/vendor/products", headers=tok).status_code == 200
+
+
+def test_a_rejected_applicant_never_gets_access_with_the_chosen_password(c):
+    body = _app()
+    c.post("/api/vendor-applications", json=body)
+    aid = _run(c, lambda: db.vendor_applications.find_one({"mobile": body["mobile"]}, {"_id": 0}))["id"]
+    vid = c.post(f"/api/admin/vendor-applications/{aid}/action", headers=_hdr("admin"), json={"action": "convert"}).json()["vendor_id"]
+    _run(c, lambda: db.vendors.update_one({"id": vid}, {"$set": {"status": "ready_for_review"}}))
+    assert c.post(f"/api/admin/vendors/{vid}/final-review", headers=_hdr("super"), json={"action": "reject", "reason": "Not a fit for our pillars"}).status_code == 200
+    assert c.post("/api/auth/login", json={"email": body["mobile"], "password": APW}).status_code == 403
