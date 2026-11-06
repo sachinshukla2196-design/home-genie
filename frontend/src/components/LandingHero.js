@@ -76,18 +76,18 @@ function HeroTitle({ text, lang }) {
 }
 
 /** Phone mockup that renders the real catalogue (no invented items). */
-function PhoneMock({ t, products, name }) {
+export function PhoneMock({ t, products, name }) {
   return (
-    <div className="w-[230px] rounded-[2.2rem] bg-gradient-to-b from-[#3B1A73] to-[#1C0C38] p-[7px] shadow-[0_30px_70px_-20px_rgba(92,58,38,0.75)] ring-1 ring-white/25">
+    <div className="w-[230px] rounded-[2.2rem] bg-gradient-to-b from-[#5C3A26] to-[#2B1A10] p-[7px] shadow-[0_30px_70px_-20px_rgba(92,58,38,0.75)] ring-1 ring-white/25">
       <div className="relative overflow-hidden rounded-[1.8rem] bg-[#FBF6EC] text-[#2B1A10]">
-        <div className="absolute left-1/2 top-1.5 h-4 w-20 -translate-x-1/2 rounded-full bg-[#1C0C38]" />
+        <div className="absolute left-1/2 top-1.5 h-4 w-20 -translate-x-1/2 rounded-full bg-[#2B1A10]" />
         <div className="px-3.5 pb-3 pt-7">
           <div className="flex items-center gap-1.5">
             <img src="/brand/logo-icon.png" alt="" className="h-5 w-5 rounded-md" />
             <span className="text-[10px] font-bold tracking-tight">HOME <span className="text-[#5C3A26]">GENIES</span></span>
           </div>
           <div className="mt-2.5 text-[13px] font-bold">{t("dash.greeting")} 👋</div>
-          <div className="mt-2 flex items-center gap-1.5 rounded-full bg-[#F1EAFB] px-2.5 py-1.5 text-[9px] text-[#7A6E8C]"><Search size={10} /> {t("common.search")}…</div>
+          <div className="mt-2 flex items-center gap-1.5 rounded-full bg-[#F4E6C6] px-2.5 py-1.5 text-[9px] text-[#7A6450]"><Search size={10} /> {t("common.search")}…</div>
           <div className="mt-3 grid grid-cols-4 gap-1.5">
             {PILLARS.map((p) => (
               <div key={p.key} className="text-center">
@@ -102,7 +102,7 @@ function PhoneMock({ t, products, name }) {
               <div className="mt-1.5 grid grid-cols-2 gap-1.5">
                 {products.slice(0, 2).map((p) => (
                   <div key={p.id} className="overflow-hidden rounded-xl bg-white shadow-sm ring-1 ring-[#F4E6C6]">
-                    <div className="aspect-[4/3] bg-[#F1EAFB]">{p.images?.[0] && <img src={p.images[0]} alt="" className="h-full w-full object-cover" />}</div>
+                    <div className="aspect-[4/3] bg-[#F4E6C6]">{p.images?.[0] && <img src={p.images[0]} alt="" className="h-full w-full object-cover" />}</div>
                     <div className="p-1.5">
                       <div className="truncate text-[8px] font-semibold">{name(p)}</div>
                       <div className="text-[9px] font-bold text-[#5C3A26]">{inr(p.selling_price)}</div>
@@ -117,7 +117,7 @@ function PhoneMock({ t, products, name }) {
               <div className="mt-1.5 grid grid-cols-2 gap-1.5">
                 {PILLARS.slice(0, 2).map((p) => (
                   <div key={p.key} className="overflow-hidden rounded-xl bg-white shadow-sm ring-1 ring-[#F4E6C6]">
-                    <div className="aspect-[4/3] bg-[#F1EAFB]"><img src={p.img} alt="" className="h-full w-full object-cover" /></div>
+                    <div className="aspect-[4/3] bg-[#F4E6C6]"><img src={p.img} alt="" className="h-full w-full object-cover" /></div>
                     <div className="truncate p-1.5 text-[8px] font-semibold">{t(`${p.key}.t`)}</div>
                   </div>
                 ))}
@@ -125,7 +125,7 @@ function PhoneMock({ t, products, name }) {
             </>
           )}
         </div>
-        <div className="flex justify-around border-t border-[#F4E6C6] bg-white px-2 py-2 text-[#7A6E8C]">
+        <div className="flex justify-around border-t border-[#F4E6C6] bg-white px-2 py-2 text-[#7A6450]">
           <Home size={13} className="text-[#5C3A26]" /><ShoppingBag size={13} /><Gift size={13} /><User size={13} />
         </div>
       </div>
@@ -229,7 +229,7 @@ export function HowItWorks({ t }) {
   const at = (d) => (reduce ? 0 : d);
 
   return (
-    <section id="how-it-works" className="relative mx-auto w-full max-w-6xl scroll-mt-20 px-4 py-16 sm:px-8 lg:py-24">
+    <section id="how-it-works" className="relative mx-auto w-full max-w-6xl scroll-mt-20 px-4 py-10 sm:px-8 lg:py-14">
       <div className="grid items-center gap-10 lg:grid-cols-[0.85fr_2fr]">
         <motion.div initial={{ opacity: 0, x: reduce ? 0 : -20 }} whileInView={{ opacity: 1, x: 0 }} viewport={view} transition={{ duration: 0.6, ease: EASE }}>
           <span className="inline-flex items-center gap-1.5 rounded-full bg-hg-violet/15 px-3 py-1 text-xs font-semibold uppercase tracking-wider text-hg-lavender ring-1 ring-hg-lavender/25">
@@ -245,11 +245,13 @@ export function HowItWorks({ t }) {
         <ol className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4 lg:gap-6">
           {STEPS.map((s, i) => (
             <li key={s.key} className="relative">
-              <motion.div initial={{ opacity: 0, y: reduce ? 0 : 22, scale: reduce ? 1 : 0.96 }} whileInView={{ opacity: 1, y: 0, scale: 1 }} viewport={view}
-                transition={{ duration: 0.5, delay: at(i * 0.42), ease: EASE }} whileHover={reduce ? undefined : { y: -4 }}
+              {/* The icon animates from its CARD's visibility: a scale-0 element has no size, so it can never report being in view itself. */}
+              <motion.div initial="hidden" whileInView="show" viewport={view} whileHover={reduce ? undefined : { y: -4 }}
+                variants={{ hidden: { opacity: 0, y: reduce ? 0 : 22, scale: reduce ? 1 : 0.96 },
+                            show: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.5, delay: at(i * 0.42), ease: EASE } } }}
                 className="hg-card hg-lift h-full p-5" data-testid={`how-step-${i + 1}`}>
-                <motion.span initial={{ scale: reduce ? 1 : 0, rotate: reduce ? 0 : -30 }} whileInView={{ scale: 1, rotate: 0 }} viewport={view}
-                  transition={{ type: "spring", stiffness: 380, damping: 16, delay: at(i * 0.42 + 0.18) }}
+                <motion.span variants={{ hidden: { scale: reduce ? 1 : 0, rotate: reduce ? 0 : -30 },
+                                         show: { scale: 1, rotate: 0, transition: { type: "spring", stiffness: 380, damping: 16, delay: at(i * 0.42 + 0.18) } } }}
                   className={`flex h-12 w-12 items-center justify-center rounded-full shadow-lg ${s.tone}`}><s.icon size={22} /></motion.span>
                 <div className="mt-4 font-display text-base font-semibold text-ink">{i + 1}. {t(`${s.key}.t`)}</div>
                 <p className="mt-1.5 text-sm leading-relaxed text-muted2">{t(`${s.key}.d`)}</p>

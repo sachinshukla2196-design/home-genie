@@ -100,7 +100,7 @@ export function PillarsSection({ t, navigate }) {
     show: (i) => ({ opacity: 1, y: 0, transition: { duration: 0.5, delay: reduce ? 0 : 0.45 + i * 0.13, ease: EASE } }),
   };
   return (
-    <section id="categories" className="relative mx-auto w-full max-w-6xl scroll-mt-20 px-4 py-16 sm:px-8 lg:py-24">
+    <section id="categories" className="relative mx-auto w-full max-w-6xl scroll-mt-20 px-4 py-10 sm:px-8 lg:py-14">
       <span className="hg-orb -left-24 top-24 h-72 w-72 bg-hg-violet/20" />
       <div className="relative flex flex-wrap items-end justify-between gap-6">
         <motion.div className="max-w-2xl" initial={{ opacity: 0, y: reduce ? 0 : 18 }} whileInView={{ opacity: 1, y: 0 }} viewport={VIEW} transition={{ duration: 0.6, ease: EASE }}>
@@ -167,7 +167,7 @@ export function WhySection({ t, navigate, homeLink }) {
   const STEP = 0.38; // seconds between journey steps lighting up
 
   return (
-    <section id="about" className="relative mx-auto w-full max-w-6xl scroll-mt-20 px-4 py-16 sm:px-8 lg:py-24">
+    <section id="about" className="relative mx-auto w-full max-w-6xl scroll-mt-20 px-4 py-10 sm:px-8 lg:py-14">
       <span className="hg-orb -right-24 top-32 h-80 w-80 bg-hg-pink/10" />
       <div className="relative grid gap-10 lg:grid-cols-[1.15fr_1fr] lg:gap-12">
         {/* ---- Why: heading + feature cards ---- */}
@@ -278,7 +278,7 @@ export function DashboardPreviewSection({ t }) {
   const reduce = useReducedMotion();
   const at = (d) => (reduce ? 0 : d);
   return (
-    <section id="dashboard-preview" className="relative mx-auto w-full max-w-6xl scroll-mt-20 px-4 py-16 sm:px-8 lg:py-24">
+    <section id="dashboard-preview" className="relative mx-auto w-full max-w-6xl scroll-mt-20 px-4 py-10 sm:px-8 lg:py-14">
       <span className="hg-orb left-1/2 top-40 h-80 w-[36rem] -translate-x-1/2 bg-hg-violet/20" />
       <motion.div className="relative mx-auto max-w-3xl text-center" initial={{ opacity: 0, y: reduce ? 0 : 18 }} whileInView={{ opacity: 1, y: 0 }} viewport={VIEW} transition={{ duration: 0.6, ease: EASE }}>
         <Eyebrow>{t("preview.eyebrow")}</Eyebrow>
@@ -380,7 +380,7 @@ export function TrustSection({ t }) {
   const reduce = useReducedMotion();
   const at = (d) => (reduce ? 0 : d);
   return (
-    <section id="trust" className="relative mx-auto w-full max-w-6xl scroll-mt-20 px-4 py-16 sm:px-8 lg:py-24">
+    <section id="trust" className="relative mx-auto w-full max-w-6xl scroll-mt-20 px-4 py-10 sm:px-8 lg:py-14">
       <div className="grid items-center gap-12 lg:grid-cols-[0.9fr_1.4fr]">
         {/* emblem + heading */}
         <motion.div initial={{ opacity: 0, y: reduce ? 0 : 18 }} whileInView={{ opacity: 1, y: 0 }} viewport={VIEW} transition={{ duration: 0.6, ease: EASE }}
@@ -453,7 +453,7 @@ export function ClosingCTA({ t, navigate }) {
   const at = (d) => (reduce ? 0 : d);
   const words = t("cta.closingTitle").split(" ");
   return (
-    <section className="relative mx-auto w-full max-w-6xl px-4 py-16 sm:px-8 lg:py-24">
+    <section className="relative mx-auto w-full max-w-6xl px-4 py-10 sm:px-8 lg:py-14">
       <motion.div initial={{ opacity: 0, y: reduce ? 0 : 30, scale: reduce ? 1 : 0.97 }} whileInView={{ opacity: 1, y: 0, scale: 1 }} viewport={VIEW}
         transition={{ duration: 0.8, ease: EASE }} className="relative rounded-[2.2rem] p-[1.5px]">
         {/* rotating gradient border */}

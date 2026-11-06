@@ -14,7 +14,7 @@ import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
 import { API } from "@/lib/api";
 import { homeRouteFor } from "@/lib/homeRoute";
-import { HowItWorks } from "@/components/LandingHero";
+import { HowItWorks, PhoneMock } from "@/components/LandingHero";
 import { PillarsSection, WhySection, DashboardPreviewSection, TrustSection, ClosingCTA, SiteFooter } from "@/components/LandingSections";
 
 
@@ -25,7 +25,7 @@ const inr = (v) => `₹${Number(v || 0).toLocaleString("en-IN")}`;
 
 function Section({ id, children, className = "" }) {
   return (
-    <section id={id} className={`relative mx-auto w-full max-w-6xl scroll-mt-20 px-4 py-16 sm:px-8 lg:py-24 ${className}`}>
+    <section id={id} className={`relative mx-auto w-full max-w-6xl scroll-mt-20 px-4 py-10 sm:px-8 lg:py-14 ${className}`}>
       {children}
     </section>
   );
@@ -95,45 +95,60 @@ export default function Landing() {
         </div>
       </header>
 
-      {/* ---------- Hero ---------- */}
-      <section className="relative w-full overflow-hidden bg-gradient-to-br from-[#FFF8EC] via-[#F9EEDB] to-[#F1DFC2]" data-testid="hero-full">
-        <div className="relative">
-          <div className="grid min-h-[calc(100svh-72px)] items-stretch lg:grid-cols-[1.08fr_1fr]">
-            <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: EASE }} className="relative z-10 flex flex-col justify-center px-5 py-10 sm:px-10 lg:py-16 lg:pl-[max(2.5rem,calc((100vw-72rem)/2+1.5rem))] lg:pr-6">
-              <span className="inline-flex w-fit items-center gap-1.5 rounded-md bg-gradient-to-r from-[#C08A3E] to-[#9A6A33] px-3 py-1 text-[11px] font-bold uppercase tracking-[0.14em] text-[#FFF7E6] shadow-sm">
-                <Sparkles size={12} aria-hidden /> {t("lp.badge")}
-              </span>
-              <h1 className="mt-5 font-serif text-[2.4rem] font-extrabold leading-[1.08] sm:text-5xl lg:whitespace-nowrap lg:text-[2.85rem] xl:text-[3.1rem]" data-testid="hero-title">
-                <span className="block text-[#2B1A10]">{t("lp.h1")}</span>
-                <span className="block text-[#A8562F]">{t("lp.h2")}</span>
-                <span className="block text-[#A8562F]">{t("lp.h3")}</span>
-              </h1>
-              <p className="mt-4 max-w-md text-[15px] leading-relaxed text-[#4A2E1E]">{t("lp.sub")}</p>
-              <div className="mt-6 flex flex-col gap-3 sm:flex-row">
-                <button type="button" onClick={join} className="hg-btn inline-flex h-[52px] items-center justify-center gap-2 rounded-full px-6 text-[15px] font-semibold" data-testid="hero-join">
-                  <UserPlus size={18} aria-hidden /> {t("lp.cta1")} <ArrowRight size={17} aria-hidden />
-                </button>
-                <button type="button" onClick={shop} className="inline-flex h-[52px] items-center justify-center gap-2 rounded-full border-[1.5px] border-[#C9A13B] bg-[#FFFDF8] px-6 text-[15px] font-semibold text-[#3B2417] shadow-sm transition hover:bg-[#FBF1DA]" data-testid="hero-explore">
-                  <ShoppingCart size={18} aria-hidden /> {t("lp.cta2")}
-                </button>
-              </div>
-              <div className="mt-7 grid max-w-lg grid-cols-4 divide-x divide-[#C9A13B]/35">
-                {[[Truck, "lp.f1"], [ShieldCheck, "lp.f2"], [IndianRupee, "lp.f3"], [Package, "lp.f4"]].map(([Icon, k]) => (
-                  <div key={k} className="flex flex-col items-center gap-1.5 px-1 text-center">
-                    <Icon size={22} className="text-[#3B2417]" aria-hidden />
-                    <span className="text-[11px] font-medium leading-tight text-[#4A2E1E] sm:text-xs">{t(k)}</span>
-                  </div>
-                ))}
-              </div>
+      {/* ---------- Hero: photo fading in from the right + the HOME GENIES app on a floating phone ---------- */}
+      <section className="relative overflow-hidden bg-gradient-to-br from-[#FFF8EC] via-[#FBF1DF] to-[#F3E3C6]" data-testid="hero-full">
+        <div className="pointer-events-none absolute inset-y-0 right-0 hidden w-[56%] lg:block"
+             style={{ WebkitMaskImage: "linear-gradient(to right, transparent 0%, #000 30%)", maskImage: "linear-gradient(to right, transparent 0%, #000 30%)" }}>
+          <img src="/brand/hero.jpg" alt={t("lp.heroAlt")} className="h-full w-full object-cover object-[72%_center]" />
+          <span className="absolute inset-0 bg-gradient-to-t from-[#F3E3C6]/70 via-transparent to-transparent" />
+        </div>
+        <div className="relative mx-auto grid max-w-6xl items-center gap-8 px-4 py-8 sm:px-6 lg:min-h-[540px] lg:grid-cols-[1.05fr_1fr] lg:gap-6 lg:py-10">
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: EASE }} className="relative z-10">
+            <span className="inline-flex w-fit items-center gap-1.5 rounded-md bg-gradient-to-r from-[#C08A3E] to-[#9A6A33] px-3 py-1 text-[11px] font-bold uppercase tracking-[0.14em] text-[#FFF7E6] shadow-sm">
+              <Sparkles size={12} aria-hidden /> {t("lp.badge")}
+            </span>
+            <h1 className="mt-4 font-serif text-[2.3rem] font-extrabold leading-[1.08] sm:text-5xl lg:whitespace-nowrap lg:text-[2.8rem] xl:text-[3.05rem]" data-testid="hero-title">
+              <span className="block text-[#2B1A10]">{t("lp.h1")}</span>
+              <span className="block text-[#A8562F]">{t("lp.h2")}</span>
+              <span className="block text-[#A8562F]">{t("lp.h3")}</span>
+            </h1>
+            <p className="mt-3 max-w-md text-[15px] leading-relaxed text-[#4A2E1E]">{t("lp.sub")}</p>
+            <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+              <button type="button" onClick={join} className="hg-btn inline-flex h-[52px] items-center justify-center gap-2 rounded-full px-6 text-[15px] font-semibold" data-testid="hero-join">
+                <UserPlus size={18} aria-hidden /> {t("lp.cta1")} <ArrowRight size={17} aria-hidden />
+              </button>
+              <button type="button" onClick={shop} className="inline-flex h-[52px] items-center justify-center gap-2 rounded-full border-[1.5px] border-[#C9A13B] bg-[#FFFDF8] px-6 text-[15px] font-semibold text-[#3B2417] shadow-sm transition hover:bg-[#FBF1DA]" data-testid="hero-explore">
+                <ShoppingCart size={18} aria-hidden /> {t("lp.cta2")}
+              </button>
+            </div>
+            <div className="mt-6 grid max-w-lg grid-cols-4 divide-x divide-[#C9A13B]/35">
+              {[[Truck, "lp.f1"], [ShieldCheck, "lp.f2"], [IndianRupee, "lp.f3"], [Package, "lp.f4"]].map(([Icon, k]) => (
+                <div key={k} className="flex flex-col items-center gap-1.5 px-1 text-center">
+                  <Icon size={22} className="text-[#3B2417]" aria-hidden />
+                  <span className="text-[11px] font-medium leading-tight text-[#4A2E1E] sm:text-xs">{t(k)}</span>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+
+          <div className="relative mx-auto h-[430px] w-full max-w-md sm:h-[480px] lg:max-w-none">
+            {/* phones/tablets: the photo sits in a rounded frame behind the phone */}
+            <div className="absolute inset-0 overflow-hidden rounded-[2rem] ring-1 ring-[#C9A13B]/30 lg:hidden">
+              <img src="/brand/hero.jpg" alt={t("lp.heroAlt")} className="h-full w-full object-cover object-[75%_center]" data-testid="hero-image" />
+              <span className="absolute inset-0 bg-gradient-to-t from-[#2B1A10]/35 via-transparent to-transparent" />
+            </div>
+            <motion.div initial={{ opacity: 0, y: 60, rotate: -2 }} animate={{ opacity: 1, y: 0, rotate: 0 }} transition={{ duration: 0.9, delay: 0.35, ease: EASE }}
+              className="absolute left-3 top-6 z-10 origin-bottom-left scale-[0.8] sm:left-6 sm:scale-90 lg:left-[-2%] lg:top-4 lg:scale-[0.95]">
+              <div style={{ transform: "rotate(-5deg)" }}><div className="hg-float-slow"><PhoneMock t={t} products={products} name={name} /></div></div>
             </motion.div>
-            <motion.div initial={{ opacity: 0, scale: 0.98 }} animate={{ opacity: 1, scale: 1 }} transition={{ duration: 0.7, ease: EASE, delay: 0.1 }} className="relative h-80 sm:h-[28rem] lg:h-auto">
-              <img src="/brand/hero.jpg" alt={t("lp.heroAlt")} className="absolute inset-0 h-full w-full object-cover object-[80%_center]" />
-              <div className="absolute inset-0 bg-gradient-to-r from-[#F9EEDB] via-[#F9EEDB]/10 to-transparent lg:via-transparent" aria-hidden />
-              <div className="absolute right-4 top-4 w-36 rounded-2xl border border-[#DDB862] bg-gradient-to-b from-[#4A2E1E] to-[#2B1A10] p-3 text-center shadow-xl sm:right-6 sm:top-6 sm:w-44 sm:p-4" data-testid="hero-ribbon">
-                <Crown size={22} className="mx-auto text-[#EAD394]" aria-hidden />
-                <p className="mt-1.5 font-serif text-[13px] font-semibold leading-snug text-[#FBF1DA] sm:text-[15px]">{t("lp.ribbon")}</p>
-              </div>
+            <motion.div initial={{ opacity: 0, y: -10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, delay: 0.6, ease: EASE }}
+              className="absolute right-3 top-3 z-20 w-36 rounded-2xl border border-[#DDB862] bg-gradient-to-b from-[#4A2E1E] to-[#2B1A10] p-3 text-center shadow-xl sm:w-44 sm:p-4 lg:right-0 lg:top-2" data-testid="hero-ribbon">
+              <Crown size={22} className="mx-auto text-[#EAD394]" aria-hidden />
+              <p className="mt-1.5 font-serif text-[13px] font-semibold leading-snug text-[#FBF1DA] sm:text-[15px]">{t("lp.ribbon")}</p>
             </motion.div>
+            <div className="absolute bottom-3 right-3 z-20 text-right lg:bottom-6 lg:right-0" aria-hidden>
+              <div className="hg-script rotate-[-6deg] rounded-xl bg-[#FFFDF8]/85 px-3 py-1 text-2xl leading-none text-[#5C3A26] shadow-sm backdrop-blur-sm lg:text-[1.6rem]">{t("landing.moreThan")}</div>
+            </div>
           </div>
         </div>
       </section>
