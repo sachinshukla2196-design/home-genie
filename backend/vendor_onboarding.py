@@ -353,10 +353,13 @@ IN_USE = ("This mobile number or email already belongs to an existing HOME GENIE
           "vendors: use the business's own mobile number and email for the vendor owner.")
 
 
-async def create_onboarding_vendor(*, business_name: str, contact_name: str, mobile: str, email: Optional[str], admin: dict,
-                                   application: Optional[dict] = None, request=None) -> dict:
-    """Creates the owner account (pending_approval, unusable password, no invitation) and the vendor in `onboarding`.
-    Idempotent per application: a retry after an interruption finds and reuses what was already created."""
+async def create_onboarding_vendor(*, business_name: str, contact_name: str, mobile: str, email: Optional[str], admin: Optional[dict],
+                                   application: Optional[dict] = None, request=None, activate: bool = False) -> dict:
+    """Creates the owner account and the vendor in `onboarding`. Idempotent per application: a retry after an interruption finds and
+    reuses what was already created.
+    - admin-started vendors: the account is `pending_approval` (unusable password) until the owner invitation at final approval;
+    - OWNER DECISION: an applicant who chose a password (activate=True) can sign in at once and follows the application in the vendor
+      panel. Selling still requires super-admin approval (require_approved_vendor)."""
     app_id = (application or {}).get("id")
     user = await db.users.find_one({"vendor_application_id": app_id}, {"_id": 0}) if app_id else None
     if not user:
@@ -370,7 +373,7 @@ async def create_onboarding_vendor(*, business_name: str, contact_name: str, mob
         user = {"id": new_id(), "distributor_id": code, "full_name": contact_name.strip(), "mobile": mobile, "email": email or None,
                 "password_hash": chosen or hash_password(secrets.token_urlsafe(32)), "applicant_password": bool(chosen),
                 "role": "vendor", "status": VENDOR_ACCOUNT_STATUS,
-                "account_status": "pending_approval", "mobile_verified": False, "email_verified": False, "kyc_status": "not_started",
+                "account_status": "active" if (activate and chosen) else "pending_approval", "mobile_verified": False, "email_verified": False, "kyc_status": "not_started",
                 "sponsor_id": None, "sponsor_user_id": None, "created_at": now, "updated_at": now}
         if app_id:
             user["vendor_application_id"] = app_id
@@ -395,16 +398,18 @@ async def create_onboarding_vendor(*, business_name: str, contact_name: str, mob
     vendor = {"id": new_id(), "user_id": user["id"], "vendor_code": user["distributor_id"], "business_name": business_name.strip(),
               "contact_person": contact_name.strip(), "phone": mobile, "support_email": email or "", "status": "onboarding",
               "onboarding_path": True, "onboarding": onboarding, "categories": app.get("categories") or [],
-              "owner_activation": "not_started", "created_by": admin["id"], "created_at": now, "updated_at": now}
+              "owner_activation": "active" if user.get("account_status") == "active" else "not_started",
+              "created_by": admin["id"] if admin else user["id"], "created_at": now, "updated_at": now}
     if app_id:
         vendor["application_id"] = app_id
     try:
         await db.vendors.insert_one(dict(vendor))
     except DuplicateKeyError:
         return await db.vendors.find_one({"user_id": user["id"]}, {"_id": 0})
-    await record_vendor_status(vendor["id"], None, "onboarding", admin["id"],
-                               "Onboarding started from application " + app["number"] if app_id else "Onboarding started by HOME GENIES")
-    await log_audit(admin, "vendor_onboarding_started", "vendor", vendor["id"],
+    await record_vendor_status(vendor["id"], None, "onboarding", admin["id"] if admin else user["id"],
+                               ("Application " + app["number"] + " received" if not admin else "Onboarding started from application " + app["number"])
+                               if app_id else "Onboarding started by HOME GENIES")
+    await log_audit(admin or user, "vendor_onboarding_started", "vendor", vendor["id"],
                     new_value={"vendor_code": vendor["vendor_code"], "application": app.get("number")}, request=request)
     return vendor
 
@@ -543,12 +548,12 @@ async def save_section(vid: str, section: str, body: dict, request: Request, adm
         owner = await db.users.find_one({"id": v["user_id"]}, {"_id": 0})
         changes = {k: data[k] for k in ("mobile", "email") if data.get(k) and data.get(k) != (owner or {}).get(k)}
         if changes:
-            if (owner or {}).get("account_status") != "pending_approval":
+            if v.get("status") != "onboarding":
                 raise HTTPException(status_code=409, detail="The owner's login contact cannot be changed here after approval.")
             if await _account_in_use(changes.get("mobile"), changes.get("email"), allow_user_id=v["user_id"]):
                 raise HTTPException(status_code=409, detail=IN_USE)
             try:
-                await db.users.update_one({"id": v["user_id"], "account_status": "pending_approval"},
+                await db.users.update_one({"id": v["user_id"], "role": "vendor"},
                                           {"$set": {**changes, "full_name": data.get("full_name") or owner.get("full_name"), "updated_at": now_iso()}})
             except DuplicateKeyError:
                 raise HTTPException(status_code=409, detail=IN_USE)

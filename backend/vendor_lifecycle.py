@@ -33,6 +33,7 @@ TRANSITIONS = {
     ("ready_for_review", "onboarding"): "super_admin",    # request changes: back to the admin's onboarding work
     ("ready_for_review", "rejected"): "super_admin",      # final rejection
     ("rejected", "onboarding"): "super_admin",            # reopen a rejected onboarding registration
+    ("onboarding", "rejected"): "admin",                  # the application was declined / a duplicate (before any final review)
     ("invited", "draft"): "vendor",
     ("draft", "pending_documents"): "admin",
     ("draft", "submitted"): "vendor",

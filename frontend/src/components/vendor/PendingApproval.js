@@ -15,6 +15,27 @@ export function PendingApproval({ vendor }) {
   const status = vendor ? vendor.status : null;
   const staffOff = !vendor && user?.role === "vendor_staff";      // the backend refused this staff member: access is off, not "no profile"
   const item = NAV_GROUPS.flatMap((g) => g.items).find((i) => pathname === i.to || pathname.startsWith(i.to + "/"));
+  // Vendor Pillar: an applicant whose registration HOME GENIES is preparing (or has decided) follows it here; no self-edit button.
+  const onboarding = vendor && (["onboarding", "ready_for_review"].includes(status) || (vendor.onboarding_path && status === "rejected"));
+  if (onboarding) {
+    const text = status === "rejected"
+      ? `Your application was not taken forward.${vendor.rejection_reason ? " Reason: " + vendor.rejection_reason : ""} Contact HOME GENIES if you have questions.`
+      : status === "ready_for_review"
+        ? "Your registration is complete and waiting for final approval by HOME GENIES. Products, orders and payouts open as soon as it is approved."
+        : "Thank you for applying. Our partner team is reviewing your application and completing your registration with you. Products, orders and payouts open once HOME GENIES approves it.";
+    return (
+      <div className="space-y-6" data-testid="vendor-gate-page">
+        <PageHeader title={item ? t(item.key) : "Your application"} subtitle="Vendor registration" icon={item ? item.icon : Hourglass} />
+        <SectionCard title={status === "rejected" ? "Application not approved" : "Your application is in progress"} icon={Hourglass} testid="vendor-gate">
+          <p className="text-sm text-muted2" data-testid="vendor-gate-message">{text}</p>
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <Pill tone={status === "rejected" ? "bad" : "warn"} testid="vendor-gate-status">{t(`vp.st.${status}`)}</Pill>
+            <span className="text-xs text-muted2">{vendor.vendor_code} · {vendor.business_name}</span>
+          </div>
+        </SectionCard>
+      </div>
+    );
+  }
   return (
     <div className="space-y-6" data-testid="vendor-gate-page">
       <PageHeader title={item ? t(item.key) : t("vx.gate.title")} subtitle={t("vx.gate.title")} icon={item ? item.icon : Hourglass} />

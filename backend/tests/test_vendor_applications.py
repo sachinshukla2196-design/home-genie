@@ -1,8 +1,9 @@
-"""Vendor Pillar: public "Apply to sell" and the admin applications inbox (OWNER-LOCKED Option B).
+"""Vendor Pillar: public "Apply to sell" and the admin applications inbox.
 
-The application creates NO user, NO vendor, NO session; the public answer is neutral (no account enumeration); one open application
-per mobile, race-safe; honeypot and rate limit; super_admin/admin manage, support_admin reads, accounts_admin has no access;
-conversion never touches an existing account and is idempotent.
+OWNER DECISION (latest): the applicant can sign in to the vendor panel straight away with the password chosen on the form; the
+vendor is in `onboarding` and cannot sell until a super admin approves. The public answer stays neutral and returns no session
+(no account enumeration); existing accounts are never taken over; one open application per mobile, race-safe; honeypot and rate
+limit; super_admin/admin manage, support_admin reads, accounts_admin has no access; conversion is idempotent.
 
 In-process, THROWAWAY database (dropped at the end); needs MONGO_URL in the environment.
 Run this file in its own pytest process (e.g. `pytest tests/<file> -n 0`).
@@ -76,17 +77,31 @@ async def _gather():
 
 
 # ================================================================ public application
-def test_an_application_is_recorded_and_creates_no_user_vendor_or_session(c):
+def test_an_application_creates_a_signed_out_vendor_login_that_cannot_sell(c):
     before = _counts(c)
     body = _app(website="https://weavers.example.test")
     r = c.post("/api/vendor-applications", json=body)
     assert r.status_code == 200, r.text
-    assert set(r.json()) == {"ok", "message"} and "token" not in r.text
+    assert set(r.json()) == {"ok", "message"} and "token" not in r.text                 # no session handed out by the form
     after = _counts(c)
-    assert after == {**before, "apps": before["apps"] + 1}
+    assert after == {"users": before["users"] + 1, "vendors": before["vendors"] + 1, "apps": before["apps"] + 1}
     a = _run(c, lambda: db.vendor_applications.find_one({"mobile": body["mobile"]}, {"_id": 0}))
     assert a["status"] == "new" and a["number"].startswith("VA") and a["categories"] == ["Sarees"] and a["open_mobile"] == body["mobile"]
-    assert a["website"] == "https://weavers.example.test" and a["history"][0]["action"] == "submitted"
+    owner = _run(c, lambda: db.users.find_one({"vendor_application_id": a["id"]}, {"_id": 0}))
+    assert owner["role"] == "vendor" and owner["account_status"] == "active" and owner["status"] != "green"
+    v = _run(c, lambda: db.vendors.find_one({"application_id": a["id"]}, {"_id": 0}))
+    assert v["status"] == "onboarding" and v["user_id"] == owner["id"]
+    # signs in at once, sees the vendor panel status, but nothing that sells
+    login = c.post("/api/auth/login", json={"email": body["mobile"], "password": APW})
+    assert login.status_code == 200 and login.json()["user"]["role"] == "vendor"
+    tok = {"Authorization": f"Bearer {login.json()['token']}"}
+    assert c.get("/api/vendor/me", headers=tok).json()["vendor"]["status"] == "onboarding"
+    for path in ("/api/vendor/products", "/api/vendor/orders", "/api/vendor/finance/summary"):
+        assert c.get(path, headers=tok).status_code == 403, path
+    assert c.post("/api/vendor/products", headers=tok, json={"sku": "X-1", "name": "Saree", "mrp": 100, "selling_price": 90, "category": "Sarees"}).status_code == 403
+    assert c.put("/api/vendor/me", headers=tok, json={"business_name": "Mine", "contact_person": "Me", "phone": body["mobile"],
+                                                      "address": "1 Road, City", "categories": ["Sarees"]}).status_code == 409
+    assert c.post("/api/vendor/staff/invitations", headers=tok, json={"mobile": "9300000001", "full_name": "Staff", "role": "store_manager"}).status_code == 409
 
 
 @pytest.mark.parametrize("who", ("genie", "cust", "super"))
@@ -183,7 +198,7 @@ def test_support_and_accounts_cannot_act_on_applications(c, who, action):
     assert r.status_code == 403
     assert c.put(f"/api/admin/vendor-applications/{aid}", headers=_hdr(who), json={"city": "Agra"}).status_code == 403
     assert _run(c, lambda: db.vendor_applications.find_one({"id": aid}, {"_id": 0})) == before
-    assert _run(c, lambda: db.vendors.count_documents({"application_id": aid})) == 0
+    assert _run(c, lambda: db.vendors.count_documents({"application_id": aid})) == 1        # only the applicant's own (onboarding)
 
 
 def test_search_and_status_filters(c):
@@ -213,18 +228,19 @@ def test_review_decline_and_duplicate(c):
 
 
 # ================================================================ conversion into onboarding
-def test_conversion_creates_an_onboarding_vendor_and_a_pending_owner_that_cannot_sign_in(c):
+def test_conversion_keeps_the_applicants_own_account_and_vendor(c):
     aid = _new_app_id(c)
+    app = _run(c, lambda: db.vendor_applications.find_one({"id": aid}, {"_id": 0}))
+    owner = _run(c, lambda: db.users.find_one({"vendor_application_id": aid}, {"_id": 0}))
     r = c.post(f"/api/admin/vendor-applications/{aid}/action", headers=_hdr("admin"), json={"action": "convert"})
     assert r.status_code == 200, r.text
     a = r.json()
     assert a["status"] == "converted" and a["vendor_id"] and a["converted_vendor_id"] == a["vendor_id"]
     v = _run(c, lambda: db.vendors.find_one({"id": a["vendor_id"]}, {"_id": 0}))
-    assert v["status"] == "onboarding" and v["application_id"] == aid and v["onboarding"]["business"]["legal_name"] == a["business_name"]
-    owner = _run(c, lambda: db.users.find_one({"id": v["user_id"]}, {"_id": 0}))
-    assert owner["role"] == "vendor" and owner["account_status"] == "pending_approval" and owner["status"] != "green"
-    assert _run(c, lambda: db.account_invitations.count_documents({"vendor_id": v["id"]})) == 0       # no invitation before approval
-    assert c.post("/api/auth/login", json={"email": a["mobile"], "password": "anything1"}).status_code in (401, 403)
+    assert v["status"] == "onboarding" and v["application_id"] == aid and v["user_id"] == owner["id"]
+    assert v["onboarding"]["business"]["legal_name"] == app["business_name"]
+    assert _run(c, lambda: db.users.count_documents({"vendor_application_id": aid})) == 1
+    assert _run(c, lambda: db.account_invitations.count_documents({"vendor_id": v["id"]})) == 0       # no invitation needed
     assert c.post(f"/api/admin/vendor-applications/{aid}/action", headers=_hdr("admin"), json={"action": "convert"}).status_code == 409
 
 
@@ -283,7 +299,7 @@ def test_a_conversion_in_progress_is_not_resumed_by_another_request(c):
     aid = _new_app_id(c)
     _run(c, lambda: db.vendor_applications.update_one({"id": aid}, {"$set": {"status": "converting", "converting_at": now_iso()}}))
     assert c.post(f"/api/admin/vendor-applications/{aid}/action", headers=_hdr("admin"), json={"action": "convert"}).status_code == 409
-    assert _run(c, lambda: db.vendors.count_documents({"application_id": aid})) == 0
+    assert _run(c, lambda: db.vendors.count_documents({"application_id": aid})) == 1        # only the applicant's own (onboarding)
 
 
 
@@ -297,18 +313,19 @@ def test_the_applicant_password_is_stored_only_as_a_hash_and_never_shown(c):
         listing = c.get("/api/admin/vendor-applications", headers=_hdr(who)).text
         detail = c.get(f"/api/admin/vendor-applications/{a['id']}", headers=_hdr(who))
         assert "password_hash" not in listing and "password_hash" not in detail.text and detail.json()["applicant_password_set"] is True
-    assert _run(c, lambda: db.users.find_one({"mobile": body["mobile"]})) is None          # still no account
+    owner = _run(c, lambda: db.users.find_one({"vendor_application_id": a["id"]}, {"_id": 0}))
+    assert owner["password_hash"] == a["password_hash"] and APW not in str(owner)
 
 
-def test_the_chosen_password_opens_the_vendor_panel_only_after_super_admin_approval(c):
+def test_selling_opens_only_after_super_admin_approval(c):
     from datetime import date, timedelta as td
     body = _app()
     c.post("/api/vendor-applications", json=body)
     aid = _run(c, lambda: db.vendor_applications.find_one({"mobile": body["mobile"]}, {"_id": 0}))["id"]
-    vid = c.post(f"/api/admin/vendor-applications/{aid}/action", headers=_hdr("admin"), json={"action": "convert"}).json()["vendor_id"]
     login = lambda: c.post("/api/auth/login", json={"email": body["mobile"], "password": APW})      # noqa: E731
-    assert login().status_code == 403                                                               # converted, not approved
-    # complete the registration (sections, documents, agreement) and submit
+    tok = {"Authorization": f"Bearer {login().json()['token']}"}
+    assert c.get("/api/vendor/products", headers=tok).status_code == 403                            # signed in, cannot sell
+    vid = c.post(f"/api/admin/vendor-applications/{aid}/action", headers=_hdr("admin"), json={"action": "convert"}).json()["vendor_id"]
     sections = {
         "business": {"business_type": "proprietorship", "supplier_roles": ["manufacturer"], "description": "Cotton sarees from our own looms.", "categories": ["Sarees"]},
         "person": {"full_name": "Meera Devi", "designation": "Proprietor", "mobile": body["mobile"], "email": body["email"], "relationship": "proprietor", "is_authorised_signatory": True},
@@ -327,38 +344,40 @@ def test_the_chosen_password_opens_the_vendor_panel_only_after_super_admin_appro
                 "settlement_schedule": "monthly", "effective_from": (date.today() + td(days=1)).isoformat()}).json()
     assert c.post(f"/api/admin/finance/agreements/{ag['id']}/approve", headers=_hdr("super")).status_code == 200
     assert c.post(f"/api/admin/vendors/{vid}/submit-for-approval", headers=_hdr("admin")).status_code == 200
-    assert login().status_code == 403                                                               # submitted, not approved
+    assert c.get("/api/vendor/products", headers=tok).status_code == 403                            # submitted, still cannot sell
     assert c.post(f"/api/admin/vendors/{vid}/final-review", headers=_hdr("admin"), json={"action": "approve"}).status_code == 403
     r = c.post(f"/api/admin/vendors/{vid}/final-review", headers=_hdr("super"), json={"action": "approve"})
     assert r.status_code == 200 and r.json()["invitation"]["status"] == "active" and r.json()["invitation"]["token"] is None
-    assert _run(c, lambda: db.account_invitations.count_documents({"vendor_id": vid})) == 0        # no link needed
-    ok = login()
-    assert ok.status_code == 200 and ok.json()["user"]["role"] == "vendor" and ok.json()["user"]["status"] != "green"
-    tok = {"Authorization": f"Bearer {ok.json()['token']}"}
+    assert _run(c, lambda: db.account_invitations.count_documents({"vendor_id": vid})) == 0
     assert c.get("/api/vendor/me", headers=tok).json()["vendor"]["status"] == "approved"
-    assert c.get("/api/vendor/products", headers=tok).status_code == 200
+    assert c.get("/api/vendor/products", headers=tok).status_code == 200                            # the same session now sells
 
 
-def test_a_rejected_applicant_never_gets_access_with_the_chosen_password(c):
+def test_a_declined_application_closes_the_applicants_registration(c):
     body = _app()
     c.post("/api/vendor-applications", json=body)
     aid = _run(c, lambda: db.vendor_applications.find_one({"mobile": body["mobile"]}, {"_id": 0}))["id"]
-    vid = c.post(f"/api/admin/vendor-applications/{aid}/action", headers=_hdr("admin"), json={"action": "convert"}).json()["vendor_id"]
-    _run(c, lambda: db.vendors.update_one({"id": vid}, {"$set": {"status": "ready_for_review"}}))
-    assert c.post(f"/api/admin/vendors/{vid}/final-review", headers=_hdr("super"), json={"action": "reject", "reason": "Not a fit for our pillars"}).status_code == 200
-    assert c.post("/api/auth/login", json={"email": body["mobile"], "password": APW}).status_code == 403
+    r = c.post(f"/api/admin/vendor-applications/{aid}/action", headers=_hdr("admin"), json={"action": "decline", "reason": "Not a fit for our pillars"})
+    assert r.status_code == 200
+    v = _run(c, lambda: db.vendors.find_one({"application_id": aid}, {"_id": 0}))
+    assert v["status"] == "rejected" and v["rejection_reason"] == "Not a fit for our pillars"
+    tok = {"Authorization": f"Bearer {c.post('/api/auth/login', json={'email': body['mobile'], 'password': APW}).json()['token']}"}
+    me = c.get("/api/vendor/me", headers=tok).json()["vendor"]
+    assert me["status"] == "rejected" and c.get("/api/vendor/products", headers=tok).status_code == 403
 
 
-def test_an_applicant_signing_in_before_approval_is_told_the_application_is_under_review(c):
-    body = _app()
-    c.post("/api/vendor-applications", json=body)
-    for ident in (body["mobile"], body["email"]):
-        r = c.post("/api/auth/login", json={"email": ident, "password": APW})
-        assert r.status_code == 403 and "under review" in r.json()["detail"]
-    # a wrong password reveals nothing: the normal "invalid credentials" answer
-    wrong = c.post("/api/auth/login", json={"email": body["mobile"], "password": "Wrong-Pass-999"})
-    assert wrong.status_code == 401 and "under review" not in wrong.text
-    # once declined, the application no longer answers either
-    aid = _run(c, lambda: db.vendor_applications.find_one({"mobile": body["mobile"]}, {"_id": 0}))["id"]
-    c.post(f"/api/admin/vendor-applications/{aid}/action", headers=_hdr("admin"), json={"action": "decline", "reason": "Not a fit right now"})
-    assert c.post("/api/auth/login", json={"email": body["mobile"], "password": APW}).status_code == 401
+def test_an_earlier_applicant_without_an_account_gets_it_on_first_sign_in_with_the_right_password(c):
+    from core import hash_password as _hp
+    mobile = f"95{next(_seq):08d}"
+    app = {"id": new_id(), "number": f"VAOLD{next(_seq)}", "business_name": "Old Applicant Store", "business_type": "proprietorship",
+           "description": "Applied before accounts were created at apply time.", "categories": ["Sarees"], "contact_name": "Old Applicant",
+           "mobile": mobile, "email": f"old{mobile}@example.test", "city": "Agra", "state": "Uttar Pradesh", "status": "new",
+           "open_mobile": mobile, "password_hash": _hp(APW), "history": [], "created_at": now_iso(), "updated_at": now_iso()}
+    _run(c, lambda: db.vendor_applications.insert_one(dict(app)))
+    assert c.post("/api/auth/login", json={"email": mobile, "password": "Wrong-Pass-999"}).status_code == 401
+    assert _run(c, lambda: db.users.find_one({"mobile": mobile})) is None                            # a wrong password creates nothing
+    for ident in (mobile, app["email"]):
+        ok = c.post("/api/auth/login", json={"email": ident, "password": APW})
+        assert ok.status_code == 200 and ok.json()["user"]["role"] == "vendor"
+    assert _run(c, lambda: db.users.count_documents({"vendor_application_id": app["id"]})) == 1
+    assert _run(c, lambda: db.vendors.find_one({"application_id": app["id"]}, {"_id": 0}))["status"] == "onboarding"

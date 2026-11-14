@@ -291,16 +291,16 @@ async def login(body: LoginBody, request: Request):
                 await db.login_attempts.delete_one({"identifier": ident})
                 user = await db.users.find_one({"$or": [{"email": ident}, {"mobile": body.email.strip()}]})
     if not user:
-        # A vendor applicant has no login until HOME GENIES approves the application. If the mobile/email AND the password
-        # chosen on an OPEN application match, say so instead of "invalid credentials". Matching the password first means
-        # this cannot be used to discover who has applied.
+        # OWNER DECISION: a vendor applicant signs in without waiting for approval. Applications made before accounts were created
+        # at apply time get their account here, but ONLY when the mobile/email AND the password chosen on the open application
+        # match (so nothing is revealed or created for anyone else). Selling still waits for super-admin approval.
         app = await db.vendor_applications.find_one(
             {"status": {"$in": ["new", "in_review", "converting"]}, "password_hash": {"$exists": True},
-             "$or": [{"mobile": body.email.strip()}, {"email": ident}]}, {"_id": 0, "password_hash": 1})
+             "$or": [{"mobile": body.email.strip()}, {"email": ident}]}, {"_id": 0})
         if app and verify_password(body.password, app["password_hash"]):
-            await db.login_attempts.delete_one({"identifier": ident})
-            raise HTTPException(status_code=403, detail="Your vendor application has been received and is under review. "
-                                                        "You can sign in with this password once HOME GENIES approves it.")
+            from vendor_applications import ensure_applicant_account
+            await ensure_applicant_account(app, request)
+            user = await db.users.find_one({"vendor_application_id": app["id"]})
     if not user or not verify_password(body.password, user.get("password_hash", "")):
         await db.login_attempts.update_one({"identifier": ident},
                                            {"$inc": {"count": 1}, "$set": {"last": now_iso()}}, upsert=True)

@@ -31,7 +31,7 @@ const STEPS = [
   ["Review", "Our partner team reviews it", ClipboardCheck],
   ["Onboarding", "We complete your registration with you", Building2],
   ["Approval", "Final approval by HOME GENIES", ShieldCheck],
-  ["Start selling", "Sign in with your password and go live", PackageCheck],
+  ["Start selling", "Approved vendors list products and take orders", PackageCheck],
 ];
 
 export default function VendorApply() {
@@ -75,8 +75,8 @@ export default function VendorApply() {
           <h1 className="hgv-title mt-5 text-3xl font-bold">Application received</h1>
           <p className="hgv-muted mx-auto mt-3 max-w-md text-[15px] leading-relaxed">{done}</p>
           <VBanner tone="gold" icon={ShieldCheck} className="mt-6 text-left">
-            Your vendor login is not active yet. If your application moves forward, our team completes your registration with you. Once
-            HOME GENIES gives final approval, sign in at Vendor login with your business mobile and the password you chose.
+            You can sign in to your vendor panel now at Vendor login, with your business mobile (or email) and the password you
+            chose, to follow your application. Selling opens once HOME GENIES gives final approval.
           </VBanner>
           <div className="mt-7 flex flex-col justify-center gap-3 sm:flex-row">
             <VButton to="/" variant="primary">Back to HOME GENIES</VButton>
@@ -187,7 +187,7 @@ export default function VendorApply() {
 
           <VCard className="p-5 sm:p-6">
             <h2 className="hgv-title flex items-center gap-2 text-xl font-semibold"><KeyRound size={19} className="text-aurum-600" aria-hidden /> 4. Your vendor login</h2>
-            <p className="hgv-muted mt-1 text-sm">Choose the password for your vendor panel. It works only after HOME GENIES approves your registration; you sign in with your business mobile.</p>
+            <p className="hgv-muted mt-1 text-sm">Choose the password for your vendor panel. You can sign in right after applying to follow your application; selling opens once HOME GENIES approves it.</p>
             <div className="mt-4 grid gap-4 sm:grid-cols-2">
               <VField id="va-password" label="Password" required error={err("password")} help="At least 8 characters, with letters and numbers.">
                 <div className="relative">
@@ -213,7 +213,7 @@ export default function VendorApply() {
             </label>
             {err("consent") && <p role="alert" className="hgv-error">{err("consent")}</p>}
             <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="hgv-muted text-xs">Your login stays inactive until HOME GENIES gives final approval.</p>
+              <p className="hgv-muted text-xs">You can sign in straight away; selling opens after approval.</p>
               <VButton type="submit" variant="primary" icon={Send} busy={busy} className="w-full sm:w-auto" data-testid="va-submit">Submit application</VButton>
             </div>
           </VCard>

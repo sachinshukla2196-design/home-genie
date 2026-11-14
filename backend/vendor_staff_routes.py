@@ -77,6 +77,9 @@ async def invite_staff(body: InviteIn, request: Request, owner: dict = Depends(r
         raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number.")
     if await db.users.find_one({"mobile": mobile}):
         raise HTTPException(status_code=400, detail="An account with this mobile already exists. Staff need a new account, so use a different number.")
+    from vendor_lifecycle import SELLING
+    if owner["_vendor"].get("status") not in SELLING:
+        raise HTTPException(status_code=409, detail="You can add staff once HOME GENIES has approved your vendor registration.")
     vid = owner["_vendor"]["id"]
     if await db.vendor_members.find_one({"vendor_id": vid, "mobile": mobile, "status": {"$in": ["invited", "active", "suspended"]}}):
         raise HTTPException(status_code=409, detail="This number is already on your team or has a pending invitation.")

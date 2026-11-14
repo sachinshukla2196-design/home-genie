@@ -126,6 +126,9 @@ async def vendor_me(user: dict = Depends(require_vendor_user)):
 async def vendor_save(body: VendorProfileIn, request: Request, user: dict = Depends(require_vendor_user)):
     """Save or submit the business profile. The status is never read from the request: it only changes through vendor_lifecycle.move."""
     v = await _vendor_of(user)
+    if v and (v.get("status") in ONBOARDING or (v.get("onboarding_path") and v.get("status") == "rejected")):
+        raise HTTPException(status_code=409, detail="HOME GENIES is completing your registration with you. You will be able to edit your "
+                                                    "profile here once it is approved.")
     if v and v.get("status") in ("submitted", "under_review"):
         raise HTTPException(status_code=409, detail="Your application is with the HOME GENIES team. You can edit it again if changes are requested.")
     if v and v.get("status") in CONTACT_ONLY:

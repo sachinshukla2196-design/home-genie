@@ -99,10 +99,24 @@ async def apply_to_sell(body: ApplicationIn, request: Request):
         await db.vendor_applications.insert_one(dict(app))
     except DuplicateKeyError:                                   # an open application for this mobile already exists
         return {"ok": True, "message": NEUTRAL}
+    await ensure_applicant_account(app, request)                # sign-in works at once; selling waits for approval
     for a in await db.users.find({"role": {"$in": ["super_admin", "admin"]}}, {"_id": 0, "id": 1}).to_list(30):
         await create_notification(a["id"], "vendor", "New vendor application", f"{data['business_name']} applied to sell ({app['number']}).",
                                   meta={"application_id": app["id"]})
     return {"ok": True, "message": NEUTRAL}
+
+
+async def ensure_applicant_account(app: dict, request=None) -> Optional[dict]:
+    """OWNER DECISION: an applicant signs in to the vendor panel straight away with the password chosen on the form, and follows
+    the application there. Creates the owner account (active) and the vendor in `onboarding`; idempotent per application.
+    Nothing is created when the mobile/email already belongs to another account (never taken over) - the answer stays neutral."""
+    if not app.get("password_hash") or app.get("status") not in ("new", "in_review", "converting"):
+        return None
+    try:
+        return await create_onboarding_vendor(business_name=app["business_name"], contact_name=app["contact_name"], mobile=app["mobile"],
+                                              email=app.get("email"), admin=None, application=app, request=request, activate=True)
+    except HTTPException:
+        return None
 
 
 # ------------------------------------------------------------------ admin inbox
@@ -148,7 +162,7 @@ async def _application(aid: str) -> dict:
 async def _account_match(a: dict) -> Optional[dict]:
     """Admin-only: does the contact belong to an existing account? (Never shown to the applicant.)"""
     ors = [{"mobile": a["mobile"]}] + ([{"email": a["email"]}] if a.get("email") else [])
-    q = {"$or": ors}
+    q = {"$or": ors, "vendor_application_id": {"$ne": a["id"]}}
     if a.get("converted_vendor_id"):
         v = await db.vendors.find_one({"id": a["converted_vendor_id"]}, {"_id": 0, "user_id": 1})
         if v:
@@ -257,6 +271,13 @@ async def application_action(aid: str, body: ApplicationAction, request: Request
         return await _convert(a, admin, request)
     else:
         raise HTTPException(status_code=400, detail="Unknown action.")
+    # a declined / duplicate application also closes the applicant's own registration (they keep read-only access)
+    if body.action in ("decline", "duplicate"):
+        v = await db.vendors.find_one({"application_id": aid, "status": "onboarding"}, {"_id": 0})
+        if v:
+            from vendor_lifecycle import move as _move
+            note = reason or "Application not taken forward"
+            await _move(v, "rejected", "admin", admin["id"], note, extra={"rejection_reason": note})
     await log_audit(admin, f"vendor_application_{body.action}", "vendor_application", aid, new_value={"reason": reason}, request=request)
     return await get_application(aid, admin)
 
