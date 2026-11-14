@@ -101,7 +101,6 @@ def test_full_vendor_lifecycle(c):
     }
     for key, data in sections.items():
         assert c.put(f"/api/admin/vendors/{vid}/onboarding/{key}", headers=fin2, json=data).status_code == 200, key
-    assert c.post(f"/api/admin/vendors/{vid}/submit-for-approval", headers=fin2).status_code == 400            # documents + terms missing
     for t in ("pan", "bank_proof", "address_proof", "identity", "gst", "business_registration"):
         d = c.post(f"/api/admin/vendors/{vid}/onboarding/documents", headers=fin2, json={"type": t, "url": f"https://cdn.example.com/{t}.pdf"})
         assert d.status_code == 200, d.text

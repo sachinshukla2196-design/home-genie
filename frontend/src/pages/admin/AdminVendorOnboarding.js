@@ -88,6 +88,7 @@ export default function AdminVendorOnboarding() {
   const editable = status === "onboarding" && EDIT_ROLES.includes(role);
   const sections = useMemo(() => Object.fromEntries((data?.checklist?.sections || []).map((s) => [s.key, s])), [data]);
   const done = (data?.checklist?.sections || []).filter((s) => s.complete).length;
+  const missingNow = (data?.checklist?.sections || []).filter((s) => s.missing?.length).map((s) => `${s.label}: ${s.missing.join(", ")}`);
   const f = form[active] || {};
   const setF = (patch) => setForm({ ...form, [active]: { ...f, ...patch } });
   const val = (k) => (f[k] === undefined || f[k] === null ? "" : f[k]);
@@ -175,7 +176,7 @@ export default function AdminVendorOnboarding() {
         {status === "onboarding" && v.review_feedback && <VBanner tone="gold" icon={Undo2}><b>Changes requested by the super admin:</b> {v.review_feedback}</VBanner>}
         {status === "ready_for_review" && role !== "super_admin" && <VBanner tone="gold" icon={ShieldCheck}>Submitted. Waiting for a super admin to give final approval. The registration is locked meanwhile.</VBanner>}
         {status === "rejected" && <VBanner tone="red" icon={XCircle}><b>Rejected:</b> {v.rejection_reason}</VBanner>}
-        {missing && status !== "onboarding" && (
+        {missing && !["onboarding", "ready_for_review"].includes(status) && (
           <VBanner tone="red" icon={AlertTriangle}>
             <b>Not complete yet:</b>
             <ul className="mt-1 list-disc pl-5">{missing.map((m) => <li key={m}>{m}</li>)}</ul>
@@ -389,26 +390,34 @@ export default function AdminVendorOnboarding() {
         </VCard>
       </div>
 
-      {status === "onboarding" && EDIT_ROLES.includes(role) && (
-        <VCard className="mt-5 flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
-          <div>
-            <h2 className="hgv-title text-xl font-semibold">Submit for final approval</h2>
-            <p className="hgv-muted text-sm">{data.checklist.complete ? "Every section is complete. A super admin will review and decide." : `${ORDER.length - done} section(s) still incomplete. The server refuses submission until everything is complete.`}</p>
-          </div>
-          <VButton variant="gold" icon={Send} busy={busy === "submit"} onClick={submitForApproval} data-testid="submit-for-approval">Submit for approval</VButton>
-        </VCard>
-      )}
-      {status === "onboarding" && missing && (
-        <VBanner tone="red" icon={AlertTriangle} className="mt-3">
-          <span data-testid="submit-missing"><b>Not complete yet:</b></span>
-          <ul className="mt-1 list-disc pl-5">{missing.map((m) => <li key={m}>{m}</li>)}</ul>
+      {/* OWNER DECISION: the checklist is advisory. Missing items are shown as reminders; submitting and approving are never blocked. */}
+      {["onboarding", "ready_for_review"].includes(status) && missingNow.length > 0 && (
+        <VBanner tone="gold" icon={AlertTriangle} className="mt-5">
+          <span data-testid="submit-missing"><b>Still missing (optional — you can submit or approve anyway; it stays on record for follow-up):</b></span>
+          <ul className="mt-1 list-disc pl-5">{missingNow.map((m) => <li key={m}>{m}</li>)}</ul>
         </VBanner>
+      )}
+
+      {status === "onboarding" && EDIT_ROLES.includes(role) && (
+        <VCard className="mt-4 flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between sm:p-6">
+          <div>
+            <h2 className="hgv-title text-xl font-semibold">{role === "super_admin" ? "Approve or submit" : "Submit for final approval"}</h2>
+            <p className="hgv-muted text-sm">{data.checklist.complete ? "Every section is complete." : `${ORDER.length - done} section(s) still incomplete — that is allowed.`}
+              {role === "super_admin" ? " As super admin you can approve this vendor right now." : " A super admin gives the final approval."}</p>
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            {role === "super_admin" && (
+              <VButton variant="primary" icon={BadgeCheck} busy={busy === "approve"} onClick={() => finalReview("approve")} data-testid="approve-now">Approve vendor now</VButton>
+            )}
+            <VButton variant="gold" icon={Send} busy={busy === "submit"} onClick={submitForApproval} data-testid="submit-for-approval">Submit for approval</VButton>
+          </div>
+        </VCard>
       )}
 
       {status === "ready_for_review" && role === "super_admin" && (
         <VCard className="hgv-card-dark mt-5 p-5 sm:p-6" data-testid="final-review-card">
           <h2 className="hgv-title flex items-center gap-2 text-2xl font-semibold" style={{ color: "#FBF1DA" }}><ShieldCheck size={22} className="text-aurum-300" aria-hidden /> Final review</h2>
-          <p className="mt-1 text-sm text-cream-300">Check every section above. Approving makes the vendor operational and issues one owner invitation.</p>
+          <p className="mt-1 text-sm text-cream-300">Check the sections above. Approving makes the vendor operational{missingNow.length ? `, even with ${missingNow.length} item(s) still missing (kept on record)` : ""}.</p>
           {!decision ? (
             <div className="mt-5 flex flex-col gap-2 sm:flex-row sm:flex-wrap">
               <VButton variant="gold" icon={BadgeCheck} busy={busy === "approve"} onClick={() => finalReview("approve")} data-testid="final-approve">Approve vendor</VButton>

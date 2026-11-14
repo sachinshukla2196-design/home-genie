@@ -150,7 +150,6 @@ def test_sections_save_progress_and_the_checklist_reports_what_is_missing(c):
     assert all(secs[k]["complete"] for k in ("business", "person", "legal", "addresses", "operations", "bank")), secs
     assert not secs["documents"]["complete"] and not secs["commercial"]["complete"]
     assert after["onboarding"]["bank"]["account_number"].endswith("6789") and "50100123456789" not in str(after)   # masked
-    assert c.post(f"/api/admin/vendors/{v['vendor_id']}/submit-for-approval", headers=_hdr("admin")).status_code == 400
     # the platform fields the rest of the system reads are kept in step
     vv = _run(c, lambda: db.vendors.find_one({"id": v["vendor_id"]}, {"_id": 0}))
     assert vv["business_name"] == f"Onboard {v['n']}" and vv["categories"] == ["Sarees", "Fashion Products"] and vv["ifsc"] == "HDFC0001234"
@@ -300,13 +299,30 @@ def test_request_changes_returns_to_onboarding_and_reject_is_final_until_reopene
     assert c.post(f"/api/admin/vendors/{vid}/final-review", headers=_hdr("super"), json={"action": "reopen"}).json()["vendor"]["status"] == "onboarding"
 
 
-def test_approval_is_refused_if_the_registration_stopped_being_complete(c):
-    v = _ready(c)
-    doc = _run(c, lambda: db.vendor_documents.find_one({"vendor_id": v["vendor_id"], "type": "pan"}, {"_id": 0}))
-    _run(c, lambda: db.vendor_documents.update_one({"id": doc["id"]}, {"$set": {"status": "rejected"}}))
-    r = c.post(f"/api/admin/vendors/{v['vendor_id']}/final-review", headers=_hdr("super"), json={"action": "approve"})
-    assert r.status_code == 400 and any("PAN" in m for m in r.json()["detail"]["missing"])
-    assert _snapshot(c, v["vendor_id"])["vendor"]["status"] == "ready_for_review"
+def test_the_checklist_is_advisory_submit_and_approve_with_items_missing(c):
+    """OWNER DECISION: incomplete registrations may be submitted and approved; what was missing is kept on record."""
+    v = _create(c)
+    vid = v["vendor_id"]
+    sub = c.post(f"/api/admin/vendors/{vid}/submit-for-approval", headers=_hdr("admin"))
+    assert sub.status_code == 200 and sub.json()["vendor"]["status"] == "ready_for_review"
+    assert sub.json()["vendor"]["submitted_missing"] and any("PAN" in m for m in sub.json()["vendor"]["submitted_missing"])
+    assert c.post(f"/api/admin/vendors/{vid}/final-review", headers=_hdr("admin"), json={"action": "approve"}).status_code == 403
+    ok = c.post(f"/api/admin/vendors/{vid}/final-review", headers=_hdr("super"), json={"action": "approve"})
+    assert ok.status_code == 200 and ok.json()["vendor"]["status"] == "approved" and ok.json()["vendor"]["approved_with_missing"]
+    hist = c.get(f"/api/admin/vendors/{vid}/onboarding", headers=_hdr("super")).json()["history"]
+    assert "still missing" in hist[-1]["reason"]
+
+
+def test_super_admin_can_approve_directly_from_onboarding_but_admin_cannot(c):
+    v = _create(c)
+    vid = v["vendor_id"]
+    before = _snapshot(c, vid)
+    for who in ("admin", "support", "fin"):
+        assert c.post(f"/api/admin/vendors/{vid}/final-review", headers=_hdr(who), json={"action": "approve"}).status_code == 403
+    assert _snapshot(c, vid) == before
+    r = c.post(f"/api/admin/vendors/{vid}/final-review", headers=_hdr("super"), json={"action": "approve"})
+    assert r.status_code == 200 and r.json()["vendor"]["status"] == "approved" and r.json()["invitation"]["token"]
+    assert _snapshot(c, vid)["invites"] == 1
 
 
 # ================================================================ sign-in gates: nothing before activation

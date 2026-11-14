@@ -30,6 +30,7 @@ CONTACT_ONLY = ("approved", "active", "suspended")
 TRANSITIONS = {
     ("onboarding", "ready_for_review"): "admin",          # admin submits a complete registration (checklist enforced)
     ("ready_for_review", "approved"): "super_admin",      # final approval
+    ("onboarding", "approved"): "super_admin",            # OWNER DECISION: direct approval, checklist advisory
     ("ready_for_review", "onboarding"): "super_admin",    # request changes: back to the admin's onboarding work
     ("ready_for_review", "rejected"): "super_admin",      # final rejection
     ("rejected", "onboarding"): "super_admin",            # reopen a rejected onboarding registration

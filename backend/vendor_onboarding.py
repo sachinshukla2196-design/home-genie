@@ -510,7 +510,8 @@ async def get_onboarding(vid: str, admin: dict = Depends(_require_view)):
     docs = await db.vendor_documents.find({"vendor_id": vid, "deleted": {"$ne": True}}, {"_id": 0}).sort("created_at", -1).to_list(50)
     app = await db.vendor_applications.find_one({"id": v.get("application_id")}, {"_id": 0, "number": 1, "id": 1, "created_at": 1}) if v.get("application_id") else None
     return {"vendor": {k: v.get(k) for k in ("id", "vendor_code", "business_name", "status", "status_reason", "onboarding_path", "review_feedback",
-                                             "review_feedback_at", "submitted_for_approval_at", "approved_at", "rejection_reason", "created_at")},
+                                             "review_feedback_at", "submitted_for_approval_at", "approved_at", "rejection_reason", "created_at",
+                                             "submitted_missing", "approved_with_missing")},
             "onboarding": _onboarding_view(v), "checklist": await checklist(v), "documents": docs, "history": history,
             "owner": await owner_access(v), "application": app}
 
@@ -614,19 +615,23 @@ async def add_document(vid: str, body: AdminDocIn, request: Request, admin: dict
     return d
 
 
+def _missing_items(cl: dict) -> list:
+    return [f"{s['label']}: {', '.join(s['missing'])}" for s in cl["sections"] if s["missing"]]
+
+
 @router.post("/admin/vendors/{vid}/submit-for-approval")
 async def submit_for_approval(vid: str, request: Request, admin: dict = Depends(require_vendor_admin)):
     v = await _vendor(vid)
     if v.get("status") != "onboarding":
         raise HTTPException(status_code=409, detail="Only a registration in onboarding can be submitted for approval.")
-    cl = await checklist(v)
-    if not cl["complete"]:
-        missing = [f"{s['label']}: {', '.join(s['missing'])}" for s in cl["sections"] if s["missing"]]
-        raise HTTPException(status_code=400, detail={"message": "The registration is not complete yet.", "missing": missing})
+    # OWNER DECISION: the checklist is ADVISORY. A registration may be submitted with items still missing; they are recorded on
+    # the vendor and in the history so the super admin sees exactly what was not provided.
+    missing = _missing_items(await checklist(v))
     from vendor_lifecycle import admin_actor
-    await move(v, "ready_for_review", admin_actor(admin), admin["id"], "Submitted for final approval",
-               extra={"submitted_for_approval_by": admin["id"], "submitted_for_approval_at": now_iso()})
-    await log_audit(admin, "vendor_submitted_for_approval", "vendor", vid, request=request)
+    await move(v, "ready_for_review", admin_actor(admin), admin["id"],
+               "Submitted for final approval" + (f" with {len(missing)} item(s) still missing" if missing else ""),
+               extra={"submitted_for_approval_by": admin["id"], "submitted_for_approval_at": now_iso(), "submitted_missing": missing})
+    await log_audit(admin, "vendor_submitted_for_approval", "vendor", vid, new_value={"missing": missing}, request=request)
     for a in await db.users.find({"role": "super_admin"}, {"_id": 0, "id": 1}).to_list(20):
         await create_notification(a["id"], "vendor", "Vendor ready for approval", f"{v['business_name']} ({v['vendor_code']}) is ready for your final review.",
                                   meta={"vendor_id": vid})
@@ -649,15 +654,18 @@ async def final_review(vid: str, body: FinalReviewIn, request: Request, admin: d
     v = await _vendor(vid)
     reason = body.reason.strip()
     if body.action == "approve":
-        if v.get("status") != "ready_for_review":
-            raise HTTPException(status_code=409, detail="Only a registration that is ready for review can be approved.")
-        cl = await checklist(v)                              # re-checked at the moment of approval (e.g. a document was rejected since)
-        if not cl["complete"]:
-            missing = [f"{s['label']}: {', '.join(s['missing'])}" for s in cl["sections"] if s["missing"]]
-            raise HTTPException(status_code=400, detail={"message": "The registration is no longer complete.", "missing": missing})
-        await move(v, "approved", "super_admin", admin["id"], reason or "Final approval",
-                   extra={"approved_by": admin["id"], "approved_at": now_iso(), "owner_activation": "pending", "review_feedback": ""})
-        await log_audit(admin, "vendor_final_approved", "vendor", vid, request=request)
+        # OWNER DECISION: the super admin may approve straight from onboarding or from review, even with items missing. What was
+        # missing at approval is stored on the vendor and in the history/audit for follow-up; nothing is blocked.
+        if v.get("status") not in ("ready_for_review", "onboarding"):
+            raise HTTPException(status_code=409, detail="Only a registration in onboarding or ready for review can be approved.")
+        missing = _missing_items(await checklist(v))
+        note = reason or "Final approval"
+        if missing:
+            note += f" (approved with {len(missing)} item(s) still missing)"
+        await move(v, "approved", "super_admin", admin["id"], note,
+                   extra={"approved_by": admin["id"], "approved_at": now_iso(), "owner_activation": "pending", "review_feedback": "",
+                          "approved_with_missing": missing})
+        await log_audit(admin, "vendor_final_approved", "vendor", vid, new_value={"missing_at_approval": missing}, request=request)
         owner = await ensure_owner_invitation(vid, admin, request)
         out = await get_onboarding(vid, admin)
         return {**out, "invitation": owner}
