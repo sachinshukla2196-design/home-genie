@@ -347,3 +347,18 @@ def test_a_rejected_applicant_never_gets_access_with_the_chosen_password(c):
     _run(c, lambda: db.vendors.update_one({"id": vid}, {"$set": {"status": "ready_for_review"}}))
     assert c.post(f"/api/admin/vendors/{vid}/final-review", headers=_hdr("super"), json={"action": "reject", "reason": "Not a fit for our pillars"}).status_code == 200
     assert c.post("/api/auth/login", json={"email": body["mobile"], "password": APW}).status_code == 403
+
+
+def test_an_applicant_signing_in_before_approval_is_told_the_application_is_under_review(c):
+    body = _app()
+    c.post("/api/vendor-applications", json=body)
+    for ident in (body["mobile"], body["email"]):
+        r = c.post("/api/auth/login", json={"email": ident, "password": APW})
+        assert r.status_code == 403 and "under review" in r.json()["detail"]
+    # a wrong password reveals nothing: the normal "invalid credentials" answer
+    wrong = c.post("/api/auth/login", json={"email": body["mobile"], "password": "Wrong-Pass-999"})
+    assert wrong.status_code == 401 and "under review" not in wrong.text
+    # once declined, the application no longer answers either
+    aid = _run(c, lambda: db.vendor_applications.find_one({"mobile": body["mobile"]}, {"_id": 0}))["id"]
+    c.post(f"/api/admin/vendor-applications/{aid}/action", headers=_hdr("admin"), json={"action": "decline", "reason": "Not a fit right now"})
+    assert c.post("/api/auth/login", json={"email": body["mobile"], "password": APW}).status_code == 401

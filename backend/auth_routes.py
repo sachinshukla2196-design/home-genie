@@ -290,6 +290,17 @@ async def login(body: LoginBody, request: Request):
                 await activate_registration(pending)
                 await db.login_attempts.delete_one({"identifier": ident})
                 user = await db.users.find_one({"$or": [{"email": ident}, {"mobile": body.email.strip()}]})
+    if not user:
+        # A vendor applicant has no login until HOME GENIES approves the application. If the mobile/email AND the password
+        # chosen on an OPEN application match, say so instead of "invalid credentials". Matching the password first means
+        # this cannot be used to discover who has applied.
+        app = await db.vendor_applications.find_one(
+            {"status": {"$in": ["new", "in_review", "converting"]}, "password_hash": {"$exists": True},
+             "$or": [{"mobile": body.email.strip()}, {"email": ident}]}, {"_id": 0, "password_hash": 1})
+        if app and verify_password(body.password, app["password_hash"]):
+            await db.login_attempts.delete_one({"identifier": ident})
+            raise HTTPException(status_code=403, detail="Your vendor application has been received and is under review. "
+                                                        "You can sign in with this password once HOME GENIES approves it.")
     if not user or not verify_password(body.password, user.get("password_hash", "")):
         await db.login_attempts.update_one({"identifier": ident},
                                            {"$inc": {"count": 1}, "$set": {"last": now_iso()}}, upsert=True)
