@@ -12,15 +12,16 @@ export function CartProvider({ children }) {
 
   useEffect(() => { localStorage.setItem(KEY, JSON.stringify(items)); }, [items]);
 
-  const add = (product, qty = 1, variant = "") => {
+  // variantSku: the purchasable variant (CAT-01); price: that variant's price. The server re-prices every line anyway.
+  const add = (product, qty = 1, variant = "", variantSku = "", price = null) => {
     setItems((prev) => {
       const k = lineKey(product.id, variant);
       const found = prev.find((i) => lineKey(i.product_id, i.variant) === k);
       if (found) return prev.map((i) => lineKey(i.product_id, i.variant) === k ? { ...i, quantity: i.quantity + qty } : i);
       return [...prev, {
-        product_id: product.id, sku: product.sku, name: product.name, name_hi: product.name_hi,
-        price: product.selling_price, image: (product.images || [])[0], quantity: qty,
-        variant: variant || "",
+        product_id: product.id, sku: variantSku || product.sku, name: product.name, name_hi: product.name_hi,
+        price: price ?? product.selling_price, image: (product.images || [])[0], quantity: qty,
+        variant: variant || "", variant_sku: variantSku || "",
       }];
     });
   };

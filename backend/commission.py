@@ -19,7 +19,7 @@ Eligibility (all must hold, else nothing is credited):
 import logging
 from core import (db, now_iso, new_id, get_settings, add_wallet_transaction, wallet_apply,
                  create_notification, log_audit)
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from money import to_paise, paise_to_float, mul_pct, paise_of
 from cod_rules import collection_is_proven
 from pymongo.errors import DuplicateKeyError
@@ -280,6 +280,15 @@ async def distribute_sale_commissions(order: dict, buyer: dict, request=None) ->
     return result
 
 
+RELEASE_BLOCK_TEXT = {
+    "not_delivered": "The order has not been delivered yet, so this commission cannot be released.",
+    "return_window_open": "The return window after delivery has not ended, so this commission cannot be released yet.",
+    "open_return_or_refund": "A return or refund case is open on this order.",
+    "cancelled": "The order is cancelled.", "refund_due": "The order has a refund to settle first.",
+    "duplicate_payment_refund_due": "A duplicate payment on this order must be refunded first.",
+}
+
+
 async def release_due_points(now: datetime = None) -> dict:
     """Release commissions whose hold period has passed, for the UNREVERSED remainder only.
 
@@ -288,7 +297,7 @@ async def release_due_points(now: datetime = None) -> dict:
     intent is finished. A commission is held while its order has an unresolved return or refund case. A fully reversed
     commission is REVERSED and is never released. Repeated and concurrent runs cannot pay the same commission twice.
     """
-    from financial_ops import finish_release, has_open_case
+    from financial_ops import finish_release
     now = now or datetime.now(timezone.utc)
     finished = released = skipped = invalid = held = 0
     for plan in await db.commission_plans.find({"completed_at": None}, {"_id": 1}).to_list(5000):
@@ -298,31 +307,26 @@ async def release_due_points(now: datetime = None) -> dict:
             finished += 1
     cursor = db.commissions.find({"status": {"$in": ["PENDING", "PARTIALLY_REVERSED"]}, "released_at": None, "manual_hold": {"$ne": True},
                                   "distribution.applied": {"$ne": False}}, {"_id": 0})
+    from eligibility import payout_block, return_window_days
+    window = await return_window_days()
     for c in await cursor.to_list(5000):
         days = release_days(c.get("release_after_days"))
         if days is None:
             invalid += 1
             logger.error("commission %s has an invalid release_after_days; not released", c.get("id"))
             continue
-        try:
-            created = datetime.fromisoformat(str(c["created_at"]).replace("Z", "+00:00"))
-        except Exception:
-            skipped += 1
-            continue
-        if now < created + timedelta(days=days):
-            continue
         order = await db.orders.find_one({"id": c["order_id"]}, {"_id": 0})
-        if not order or order.get("payment_status") not in ("paid", "partially_refunded"):
-            skipped += 1
-            continue
-        if order.get("payment_method") == "cod" and not collection_is_proven(order):
+        if order and order.get("payment_method") == "cod" and not collection_is_proven(order):
             skipped += 1        # same rule as distribution and manual release: unproven, short or legacy COD never releases
             continue
-        if order.get("status") == "cancelled" or order.get("needs_refund"):
-            skipped += 1        # same rule as manual release: a cancelled order's commission waits for the refund decision
-            continue
-        if await has_open_case(c["order_id"]):
+        # Decision 2: payable only after delivery + the return window (the longer of the policy window and this commission's
+        # frozen hold), with no open return/refund case and no payment problem. Delivery, not payment, starts the clock.
+        block = await payout_block(order, now, hold_days=days, window=window)
+        if block == "open_return_or_refund":
             held += 1           # the remainder waits until the return or refund case is resolved
+            continue
+        if block:
+            skipped += 1
             continue
         amount_p = remaining_paise(c)
         if amount_p <= 0:
@@ -368,20 +372,13 @@ async def release_commission_now(commission_id: str, now: datetime = None) -> di
     days = release_days(c.get("release_after_days"))
     if days is None:
         return {"ok": False, "code": 409, "detail": "This commission has an invalid release period."}
-    try:
-        created = datetime.fromisoformat(str(c["created_at"]).replace("Z", "+00:00"))
-    except Exception:
-        return {"ok": False, "code": 409, "detail": "This commission has no valid creation date."}
-    if now < created + timedelta(days=days):
-        return {"ok": False, "code": 409, "detail": "The return window has not ended, so this commission cannot be released yet."}
     order = await db.orders.find_one({"id": c["order_id"]}, {"_id": 0})
-    if not order or order.get("payment_status") not in ("paid", "partially_refunded") or order.get("needs_refund") or order.get("status") == "cancelled":
-        return {"ok": False, "code": 409, "detail": "The order is not in a paid, active state."}
-    if order.get("payment_method") == "cod" and not collection_is_proven(order):
+    if order and order.get("payment_method") == "cod" and not collection_is_proven(order):
         return {"ok": False, "code": 409, "detail": "COD collection for this order is not proven."}
-    from financial_ops import has_open_case as _open
-    if await _open(c["order_id"]):
-        return {"ok": False, "code": 409, "detail": "A return or refund case is open on this order."}
+    from eligibility import payout_block
+    block = await payout_block(order, now, hold_days=days)        # decision 2: delivery + return window, nothing unresolved
+    if block:
+        return {"ok": False, "code": 409, "detail": RELEASE_BLOCK_TEXT.get(block, f"This commission cannot be released yet ({block}).")}
     amount_p = remaining_paise(c)
     if amount_p <= 0:
         return {"ok": False, "code": 409, "detail": "Nothing remains to release on this commission."}

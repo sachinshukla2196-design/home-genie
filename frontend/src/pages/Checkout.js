@@ -12,7 +12,7 @@ import { useI18n } from "@/context/I18nContext";
 import { useCart } from "@/context/CartContext";
 import { useAuth } from "@/context/AuthContext";
 import { API, apiError } from "@/lib/api";
-import { getSellerRef } from "@/lib/sellerRef";
+import { getSellerRef, clearSellerRef } from "@/lib/sellerRef";
 
 export default function Checkout() {
   const { t, lang } = useI18n();
@@ -29,10 +29,8 @@ export default function Checkout() {
   });
   const sym = cfg.currency_symbol || "₹";
   const money = (v) => `${sym}${Number(v).toLocaleString("en-IN")}`;
-  const gstPct = Number(cfg.gst_percent ?? 5);
   const codFee = Number(cfg.cod_fee ?? 0);
-  const gst = Math.round(subtotal * gstPct / 100);
-  const total = subtotal + gst;
+  const total = subtotal;          // Decision 1: prices include GST; only a COD fee can be added
   const set = (k) => (e) => setAddr((a) => ({ ...a, [k]: e.target.value }));
 
   useEffect(() => {
@@ -47,8 +45,9 @@ export default function Checkout() {
     e.preventDefault();
     setLoading(true);
     try {
-      const orderItems = items.map((i) => ({ product_id: i.product_id, quantity: i.quantity, variant: i.variant || null }));
+      const orderItems = items.map((i) => ({ product_id: i.product_id, quantity: i.quantity, variant: i.variant || null, variant_sku: i.variant_sku || null }));
       const { data: order } = await API.post("/orders", { items: orderItems, address: addr, seller_ref: getSellerRef(), payment_method: method });
+      clearSellerRef();      // the code attributed this order; it never carries over to later, unrelated orders
       if (method === "cod") {
         clear();
         toast.success(t("checkout.codPlaced"));
@@ -67,8 +66,9 @@ export default function Checkout() {
   const upiPay = async () => {
     setLoading(true);
     try {
-      const orderItems = items.map((i) => ({ product_id: i.product_id, quantity: i.quantity, variant: i.variant || null }));
+      const orderItems = items.map((i) => ({ product_id: i.product_id, quantity: i.quantity, variant: i.variant || null, variant_sku: i.variant_sku || null }));
       const { data: order } = await API.post("/orders", { items: orderItems, address: addr, seller_ref: getSellerRef(), payment_method: method });
+      clearSellerRef();      // the code attributed this order; it never carries over to later, unrelated orders
       await API.post("/payments/upi-claim", { order_id: order.id });
       clear();
       setShowQr(order);
@@ -87,8 +87,9 @@ export default function Checkout() {
   const razorpayPay = async () => {
     setLoading(true);
     try {
-      const orderItems = items.map((i) => ({ product_id: i.product_id, quantity: i.quantity, variant: i.variant || null }));
+      const orderItems = items.map((i) => ({ product_id: i.product_id, quantity: i.quantity, variant: i.variant || null, variant_sku: i.variant_sku || null }));
       const { data: order } = await API.post("/orders", { items: orderItems, address: addr, seller_ref: getSellerRef(), payment_method: method });
+      clearSellerRef();      // the code attributed this order; it never carries over to later, unrelated orders
       const { data: rzp } = await API.post("/payments/razorpay/order", { order_id: order.id });
       const ok = await loadRzp();
       if (!ok) { toast.error("Could not load payment gateway."); setLoading(false); return; }
@@ -199,7 +200,7 @@ export default function Checkout() {
             ))}
             <div className="my-2 border-t border-brand-50" />
             <div className="flex justify-between text-muted2"><span>{t("order.subtotal")}</span><span className="tabular-nums">{money(subtotal)}</span></div>
-            <div className="flex justify-between text-muted2"><span>{t("order.gst")} ({gstPct}%)</span><span className="tabular-nums">{money(gst)}</span></div>
+            <p className="text-xs text-muted2" data-testid="checkout-gst-note">Prices include GST. The GST breakdown is on your invoice.</p>
             {method === "cod" && codFee > 0 && <div className="flex justify-between text-muted2" data-testid="cod-fee-row"><span>{t("checkout.codFee")}</span><span className="tabular-nums">{money(codFee)}</span></div>}
             <div className="my-2 border-t border-brand-50" />
             <div className="flex justify-between font-display text-lg font-semibold text-ink"><span>{t("order.total")}</span><span className="tabular-nums text-hg-violet dark:text-hg-lavender">{money(total + (method === "cod" ? codFee : 0))}</span></div>

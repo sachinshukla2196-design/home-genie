@@ -242,6 +242,21 @@ class AdjustmentIn(BaseModel):
 
 @router.post("/admin/finance/vendors/{vendor_id}/adjustments")
 async def admin_adjustment(vendor_id: str, body: AdjustmentIn, request: Request, admin: dict = Depends(require_finance)):
+    """Decision 4 (maker-checker): an adjustment is only REQUESTED here; a different finance admin approves it."""
+    if not await db.vendors.find_one({"id": vendor_id}, {"_id": 1}):
+        raise HTTPException(status_code=404, detail="Vendor not found.")
+    if to_paise(body.amount) == 0:
+        raise HTTPException(status_code=400, detail="Adjustment amount cannot be zero.")
+    if body.reverses and not await db.vendor_ledger.find_one({"id": body.reverses, "vendor_id": vendor_id}, {"_id": 1}):
+        raise HTTPException(status_code=404, detail="The entry to reverse was not found for this vendor.")
+    from financial_approvals import submit
+    key = body.idempotency_key or new_id()
+    payload = {**body.model_dump(), "idempotency_key": key, "vendor_id": vendor_id}
+    return await submit("vendor_adjustment", f"{vendor_id}:{key}", payload, admin, body.reason, request,
+                        summary={"vendor_id": vendor_id, "amount": body.amount})
+
+
+async def apply_vendor_adjustment(vendor_id: str, body: AdjustmentIn, request: Optional[Request], admin: dict):
     if not await db.vendors.find_one({"id": vendor_id}, {"_id": 1}):
         raise HTTPException(status_code=404, detail="Vendor not found.")
     p = to_paise(body.amount)
@@ -317,18 +332,21 @@ async def settlement_action(sid: str, body: SettlementAction, request: Request, 
     target = {"approve": "approved", "reject": "rejected", "mark_paid": "paid", "fail": "failed"}.get(body.action)
     if not target or target not in SETTLE_FLOW.get(s["status"], set()):
         raise HTTPException(status_code=400, detail=f"Cannot {body.action} a settlement that is '{s['status']}'.")
-    policy = await get_policy()
-    if target == "approved" and policy.get("require_dual_approval") and s["created_by"] == admin["id"]:
+    # Decision 4 (maker-checker): always two people, whatever the policy flag says; the flag can no longer switch it off.
+    if target == "approved" and s["created_by"] == admin["id"]:
         raise HTTPException(status_code=403, detail="A different finance admin must approve this settlement.")
     if target in ("rejected", "failed") and len(body.note.strip()) < 5:
         raise HTTPException(status_code=400, detail="A reason is required.")
     if target == "paid":
         if len(body.reference.strip()) < 3:
             raise HTTPException(status_code=400, detail="The payment reference (UTR / transfer id) is required.")
-        if policy.get("require_dual_approval") and s.get("approved_by") == admin["id"]:
+        if s.get("approved_by") == admin["id"]:
             raise HTTPException(status_code=403, detail="A different finance admin must mark this settlement paid.")
         bal = await L.balances(s["vendor_id"])
-        if s["amount_paise"] > bal["pending_settlement_paise"]:        # balance fell since it was requested (e.g. a refund)
+        # Decision 3: what can be paid is the ELIGIBLE money (delivered, past the return window, nothing unresolved), counting
+        # the open settlements themselves. A refund, a new return case or a payment problem since the request blocks payment.
+        payable_now = bal["available_for_settlement_paise"] + bal["settlement_in_progress_paise"]
+        if s["amount_paise"] > min(bal["pending_settlement_paise"], payable_now):
             raise HTTPException(status_code=409, detail="The vendor's balance changed since this settlement was requested. Reject it and create a new one.")
     now = now_iso()
     sets = {"status": target, "updated_at": now}
@@ -410,7 +428,7 @@ async def resolve_cod_discrepancy(order_id: str, request: Request, admin: dict =
                   "expected_paise": expected_p, "collected_paise": collected_p}
     claim = await db.orders.update_one(
         {"id": order_id, "payment_status": "cod_discrepancy"},
-        {"$set": {"payment_status": "paid", "status": "delivered", "cod_collected_paise": collected_p, "cod_collected_by": admin["id"],
+        {"$set": {"payment_status": "paid", "status": "delivered", "delivered_at": now_iso(), "cod_collected_paise": collected_p, "cod_collected_by": admin["id"],
                   "cod_collected_role": "admin", "cod_collected_at": now, "paid_at": now, "updated_at": now,
                   "cod_collection": collection,
                   "cod_discrepancy.status": "resolved", "cod_discrepancy.resolution": r.resolution,

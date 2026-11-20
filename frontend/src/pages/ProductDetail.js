@@ -2,13 +2,15 @@ import React, { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
-import { ArrowLeft, Check, Minus, Plus, ShoppingCart, Zap, PackageX } from "lucide-react";
+import { ArrowLeft, Check, Minus, Plus, ShoppingCart, Zap, PackageX, Share2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/EmptyState";
 import { Stagger, StaggerItem, pressable } from "@/components/motion";
 import { useI18n } from "@/context/I18nContext";
 import { useCart } from "@/context/CartContext";
+import { useAuth } from "@/context/AuthContext";
+import { productShareLink } from "@/lib/sellerRef";
 import { API } from "@/lib/api";
 
 export default function ProductDetail() {
@@ -25,9 +27,30 @@ export default function ProductDetail() {
 
   useEffect(() => { API.get(`/products/${id}`).then(({ data }) => setP(data)).catch(() => setFailed(true)); }, [id]);
   const money = (v) => `${sym}${Number(v).toLocaleString("en-IN")}`;
-  const variantLabel = () => (p?.options || []).map((o) => `${o.name}: ${picked[o.name] || ""}`).filter((x) => !x.endsWith(": ")).join(" / ");
-  const missingChoice = () => (p?.options || []).some((o) => (o.values || []).length > 0 && !picked[o.name]);
+  // CAT-01: products with real variants (own SKU, price, stock) are bought by variant SKU; the server requires it.
+  const [vsku, setVsku] = useState("");
+  const { user } = useAuth();
+  // HG-01: an activated HomeGenie shares THIS product with their own code; the customer's order is attributed to them.
+  const canShare = user?.role === "distributor" && user?.status === "green" && !!user?.distributor_id;
+  const share = async () => {
+    const url = productShareLink(p.id, user.distributor_id);
+    try {
+      if (navigator.share) { await navigator.share({ title: p.name, url }); return; }
+      await navigator.clipboard.writeText(url);
+      toast.success("Share link copied");
+    } catch (err) { if (err?.name !== "AbortError") toast.error("Could not share. Copy this link: " + url); }
+  };
+  const variants = p?.variants || [];
+  const chosen = variants.find((x) => x.sku === vsku);
+  const vName = (x) => Object.values(x.attributes || {}).join(" / ") || x.sku;
+  const variantLabel = () => chosen ? vName(chosen)
+    : (p?.options || []).map((o) => `${o.name}: ${picked[o.name] || ""}`).filter((x) => !x.endsWith(": ")).join(" / ");
+  const missingChoice = () => (variants.length > 0 ? !chosen
+    : (p?.options || []).some((o) => (o.values || []).length > 0 && !picked[o.name]));
   const guard = () => { if (missingChoice()) { toast.error(t("product.chooseOptions")); return false; } return true; };
+  const unitPrice = chosen?.price || p?.selling_price;
+  const unitMrp = chosen?.mrp || p?.mrp;
+  const addLine = () => add(p, qty, variantLabel(), chosen ? chosen.sku : "", unitPrice);
 
   const backBtn = (
     <button onClick={() => navigate("/app/products")} className="group mb-4 inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-sm font-medium text-muted2 transition-colors hover:bg-brand-50 hover:text-ink" data-testid="back-products">
@@ -55,11 +78,11 @@ export default function ProductDetail() {
     </div>
   );
 
-  const off = p.mrp > p.selling_price ? Math.round((1 - p.selling_price / p.mrp) * 100) : 0;
+  const off = unitMrp > unitPrice ? Math.round((1 - unitPrice / unitMrp) * 100) : 0;
 
   const addToCart = () => {
     if (!guard()) return;
-    add(p, qty, variantLabel());
+    addLine();
     toast.success(t("cta.addToCart"));
     setAdded(true);
     setTimeout(() => setAdded(false), 1400);
@@ -83,8 +106,8 @@ export default function ProductDetail() {
             {p.category && <span className="inline-flex rounded-full bg-hg-violet/15 px-3 py-1 text-xs font-semibold text-hg-violet ring-1 ring-hg-lavender/25 dark:text-hg-lavender">{p.category}</span>}
             <h1 className="mt-3 break-words font-display text-2xl font-semibold text-ink sm:text-3xl">{lang === "hi" && p.name_hi ? p.name_hi : p.name}</h1>
             <div className="mt-3 flex flex-wrap items-baseline gap-x-3 gap-y-1">
-              <span className="font-display text-3xl font-semibold tabular-nums text-hg-violet dark:text-hg-lavender">{money(p.selling_price)}</span>
-              {off > 0 && <span className="text-lg text-muted2 line-through">{money(p.mrp)}</span>}
+              <span className="font-display text-3xl font-semibold tabular-nums text-hg-violet dark:text-hg-lavender">{money(unitPrice)}</span>
+              {off > 0 && <span className="text-lg text-muted2 line-through">{money(unitMrp)}</span>}
               {off > 0 && <span className="rounded-full bg-hg-success/15 px-2.5 py-0.5 text-xs font-semibold text-hg-success ring-1 ring-hg-success/25">{off}% OFF</span>}
             </div>
           </StaggerItem>
@@ -98,7 +121,26 @@ export default function ProductDetail() {
             </div>
           </StaggerItem>
 
-          {(p.options || []).length > 0 && (
+          {variants.length > 0 && (
+            <StaggerItem data-testid="variant-skus">
+              <div className="text-xs font-semibold uppercase tracking-wide text-muted2">Choose an option</div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {variants.map((x) => {
+                  const out = !(x.stock > 0);
+                  const active = vsku === x.sku;
+                  return (
+                    <button key={x.sku} type="button" disabled={out} onClick={() => setVsku(x.sku)} aria-pressed={active}
+                      data-testid={`variant-sku-${x.sku}`}
+                      className={`rounded-full px-4 py-2 text-sm font-medium transition-colors ${active ? "hg-chip-on text-white" : "hg-chip-off"} ${out ? "cursor-not-allowed opacity-50 line-through" : ""}`}>
+                      {vName(x)}{x.price && x.price !== p.selling_price ? ` · ${money(x.price)}` : ""}{out ? " · out of stock" : ""}
+                    </button>
+                  );
+                })}
+              </div>
+            </StaggerItem>
+          )}
+
+          {variants.length === 0 && (p.options || []).length > 0 && (
             <StaggerItem className="space-y-4" data-testid="variant-options">
               {(p.options || []).map((opt) => (
                 <div key={opt.name}>
@@ -149,12 +191,20 @@ export default function ProductDetail() {
               </Button>
             </motion.div>
             <motion.div {...pressable}>
-              <Button onClick={() => { if (!guard()) return; add(p, qty, variantLabel()); navigate("/app/cart"); }} variant="outline"
+              <Button onClick={() => { if (!guard()) return; addLine(); navigate("/app/cart"); }} variant="outline"
                 className="h-11 w-full rounded-full border-brand-50 bg-transparent px-6 text-ink" data-testid="detail-buy-now">
                 <Zap size={16} className="mr-1.5" /> {t("cta.buyNow")}
               </Button>
             </motion.div>
           </StaggerItem>
+          {canShare && (
+            <StaggerItem>
+              <Button type="button" variant="outline" onClick={share} className="h-11 w-full rounded-full border-hg-gold/40 bg-transparent text-ink sm:w-auto sm:px-6" data-testid="share-product">
+                <Share2 size={16} className="mr-2" aria-hidden /> Share this product
+              </Button>
+              <p className="mt-1.5 text-xs text-muted2">Orders placed through your link are credited to you once they qualify.</p>
+            </StaggerItem>
+          )}
         </Stagger>
       </div>
     </div>

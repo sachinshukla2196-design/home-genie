@@ -44,6 +44,10 @@ export const NAV_GROUPS = [
   ] },
 ];
 const BOTTOM = ["dashboard", "orders", "products", "earnings"];
+// Which backend permission each area needs (vendor_staff.RULES): null = everyone on the team, "owner" = the owner only.
+const NAV_PERMISSION = { dashboard: "reports.read", notifications: null, products: "products.read", inventory: "inventory.read",
+  orders: "orders.read", shipping: "orders.read", report: "reports.read", analytics: "reports.read", advancement: "owner",
+  earnings: "finance.read", terms: "finance.read", cod: "finance.read", profile: "owner", staff: "owner", support: "owner", security: null };
 
 const VendorCtx = createContext(null);
 /** The signed-in vendor's application record (null until loaded, false if none yet). */
@@ -69,10 +73,12 @@ export function VendorLayout() {
   const { user, logout } = useAuth();
   const loc = useLocation();
   const [vendor, setVendor] = useState(null);
+  const [access, setAccess] = useState(null);           // {role, permissions}; permissions null = owner
   const [unread, setUnread] = useState(0);
   const [menu, setMenu] = useState(false);
 
-  const reload = useCallback(() => API.get("/vendor/me").then(({ data }) => setVendor(data.vendor || false)).catch(() => setVendor(false)), []);
+  const reload = useCallback(() => API.get("/vendor/me").then(({ data }) => { setVendor(data.vendor || false); setAccess(data.access || null); })
+    .catch(() => setVendor(false)), []);
   useEffect(() => { reload(); }, [reload]);
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -81,7 +87,10 @@ export function VendorLayout() {
   }, [loc.pathname]);
 
   const approved = vendor && ["approved", "active"].includes(vendor.status);
-  const groups = NAV_GROUPS;
+  // VEN-07: staff see only the areas their permissions open (the server refuses the rest anyway). Owners see everything.
+  const perms = access && Array.isArray(access.permissions) ? access.permissions : null;
+  const allowed = (id) => !perms ? true : NAV_PERMISSION[id] === null ? true : NAV_PERMISSION[id] === "owner" ? false : perms.includes(NAV_PERMISSION[id]);
+  const groups = NAV_GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => allowed(i.id)) })).filter((g) => g.items.length);
   const flat = groups.flatMap((g) => g.items);
   const active = (to) => (to === "/vendor" ? loc.pathname === "/vendor" : loc.pathname.startsWith(to));
 

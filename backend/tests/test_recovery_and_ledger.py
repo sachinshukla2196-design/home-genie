@@ -217,7 +217,7 @@ def test_request_reaches_the_admin_queue_and_the_admin_reset_closes_it(c):
     assert any(x["user_id"] == S["member"]["id"] for x in queue)
     old_session = _h(S["member"]["id"])
     assert c.get("/api/auth/me", headers=old_session).status_code == 200
-    reset = c.post(f"/api/admin/users/{S['member']['id']}/reset-password", json={"password": NEW_PW}, headers=admin)
+    reset = c.post(f"/api/admin/users/{S['member']['id']}/reset-password", json={"temporary_password": NEW_PW, "reason": "Member asked for a reset"}, headers=admin)
     assert reset.status_code == 200, reset.text
     queue_after = c.get("/api/admin/password-reset-requests", headers=admin).json()
     assert not any(x["user_id"] == S["member"]["id"] for x in queue_after)
@@ -228,13 +228,13 @@ def test_request_reaches_the_admin_queue_and_the_admin_reset_closes_it(c):
 
 def test_members_and_anonymous_callers_cannot_use_the_admin_reset(c):
     target = S["ledger"]["id"]
-    assert c.post(f"/api/admin/users/{target}/reset-password", json={"password": NEW_PW}).status_code in (401, 403)
-    assert c.post(f"/api/admin/users/{target}/reset-password", json={"password": NEW_PW},
+    assert c.post(f"/api/admin/users/{target}/reset-password", json={"temporary_password": NEW_PW, "reason": "Member asked for a reset"}).status_code in (401, 403)
+    assert c.post(f"/api/admin/users/{target}/reset-password", json={"temporary_password": NEW_PW, "reason": "Member asked for a reset"},
                   headers=_h(S["member"]["id"])).status_code in (401, 403)
 
 
 def test_admin_reset_refuses_a_short_password(c):
-    r = c.post(f"/api/admin/users/{S['ledger']['id']}/reset-password", json={"password": "short"}, headers=_h(S["admin"]["id"]))
+    r = c.post(f"/api/admin/users/{S['ledger']['id']}/reset-password", json={"temporary_password": "short", "reason": "Member asked for a reset"}, headers=_h(S["admin"]["id"]))
     assert r.status_code == 400
 
 
@@ -245,7 +245,9 @@ def _ledger_flows(c):
     _run(c, lambda: add_wallet_transaction(uid, "MANUAL_ADMIN_CREDIT", 1000, "CREDITED",
                                            reference=f"test:credit:{uid}", description="test credit"))
     order_id = new_id()
-    _run(c, lambda: db.orders.insert_one({"id": order_id, "order_number": "TST-1", "payment_status": "paid", "user_id": uid}))
+    _run(c, lambda: db.orders.insert_one({"id": order_id, "order_number": "TST-1", "payment_status": "paid", "user_id": uid,
+                                          "status": "delivered",          # decision 2: released only after delivery + window
+                                          "delivered_at": (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()}))
     _run(c, lambda: add_wallet_transaction(uid, "COMMISSION_REFERRAL", 200, "PENDING", reference=order_id, description="test commission"))
     _run(c, lambda: db.commissions.insert_one({
         "id": new_id(), "order_id": order_id, "order_number": "TST-1", "user_id": uid, "type": "COMMISSION_REFERRAL",

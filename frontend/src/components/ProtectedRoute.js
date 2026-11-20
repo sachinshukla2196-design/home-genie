@@ -1,6 +1,8 @@
 import React from "react";
 import { Navigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
+import { ForcePasswordChange } from "@/components/ForcePasswordChange";
+import { ContactChangeBanner } from "@/components/ContactChangeBanner";
 
 function FullLoader() {
   return (
@@ -18,8 +20,10 @@ export function ProtectedRoute({ children, admin = false, vendor = false }) {
   const { user, ready } = useAuth();
   if (!ready) return <FullLoader />;
   if (!user) return <Navigate to={vendor ? "/vendor/login" : "/login"} replace />;
+  if (user.must_change_password) return <ForcePasswordChange />;   // after an admin reset: nothing else until a new password is set
   const adminRoles = ["super_admin", "admin", "accounts_admin", "support_admin"];
   if (admin && !adminRoles.includes(user.role)) return <Navigate to="/app/dashboard" replace />;
   if (vendor && user.role !== "vendor" && user.role !== "vendor_staff") return <Navigate to={adminRoles.includes(user.role) ? "/admin" : "/app/dashboard"} replace />;
+  if (user.pending_contact_change) return <><ContactChangeBanner />{children}</>;   // admin-proposed contact change awaiting the holder
   return children;
 }

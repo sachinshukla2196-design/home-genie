@@ -105,6 +105,29 @@ async def send_account_id_sms(mobile: str, distributor_id: str) -> bool:
         return False
 
 
+async def send_security_notice_sms(mobile: str, text: str) -> bool:
+    """Best-effort security notice to an account's trusted mobile (never a code, never a secret). Never raises."""
+    if not mobile:
+        return False
+    if _test_sms_adapter():
+        await db.test_sms_notices.insert_one({"mobile": mobile, "text": text, "created_at": now_iso()})
+        return True
+    if not sms_configured():
+        return False
+    url = f"https://api.twilio.com/2010-04-01/Accounts/{TWILIO_ACCOUNT_SID}/Messages.json"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            resp = await client.post(url, data={"To": _normalize_mobile(mobile), "From": TWILIO_FROM_NUMBER, "Body": text[:300]},
+                                     auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN))
+        if resp.status_code >= 400:
+            logger.error("Twilio security notice rejected (status=%s)", resp.status_code)
+            return False
+        return True
+    except httpx.HTTPError:
+        logger.error("Twilio security notice failed to send")
+        return False
+
+
 async def otp_create(identifier: str, purpose: str) -> dict:
     """Generate + store a hashed single-use OTP and deliver it via SMS. Returns NO code."""
     if not sms_available():

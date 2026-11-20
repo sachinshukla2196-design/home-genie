@@ -72,7 +72,10 @@ def _otp_for(c, mobile):
 
 
 def _reg_request(c, mobile, sponsor_id="", email=""):
-    return c.post("/api/auth/register-request", json={**REG, "mobile": mobile, "email": email, "sponsor_id": sponsor_id})
+    # Batch 4 (SEC-05): with SMS available the request also carries the code sent to the mobile being registered.
+    sent = c.post("/api/auth/register-request/send-otp", json={"mobile": mobile})
+    otp = _otp_for(c, mobile) if sent.status_code == 200 else ""
+    return c.post("/api/auth/register-request", json={**REG, "mobile": mobile, "email": email, "sponsor_id": sponsor_id, "otp": otp})
 
 
 def _send_otp(c, mobile, sponsor_id="", email=""):

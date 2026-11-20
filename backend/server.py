@@ -53,7 +53,13 @@ async def public_settings():
         "company_name": s.get("company_name"),
         "company_email": s.get("company_email"),
         "company_phone": s.get("company_phone"),
+        "sms_otp_available": _sms_available(),      # the sign-up form asks for a mobile code only when SMS works
     }
+
+
+def _sms_available() -> bool:
+    from providers import sms_available
+    return sms_available()
 
 
 app.include_router(auth_routes.router)
@@ -86,6 +92,12 @@ import activation_routes
 app.include_router(activation_routes.router)
 import vendor_onboarding  # noqa: E402
 app.include_router(vendor_onboarding.router)
+import contact_change  # noqa: E402
+app.include_router(contact_change.router)
+import admin_team  # noqa: E402
+app.include_router(admin_team.router)
+import financial_approvals  # noqa: E402
+app.include_router(financial_approvals.router)
 import vendor_applications  # noqa: E402
 app.include_router(vendor_applications.router)
 
@@ -136,6 +148,48 @@ async def _ensure_initialised(request, call_next):
                 except Exception as e:  # pragma: no cover - retried on the next request
                     logger.error(f"DB init failed ({e}); will retry on next request")
     return await call_next(request)
+
+
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=()",
+    "Cross-Origin-Opener-Policy": "same-origin",
+}
+
+
+@app.middleware("http")
+async def _harden(request, call_next):
+    """Batch 10 (PLT-06): security headers on every API response."""
+    response = await call_next(request)
+    _security_headers(request, response)
+    return response
+
+
+def _security_headers(request, response) -> None:
+    for k, v in SECURITY_HEADERS.items():
+        response.headers.setdefault(k, v)
+    if request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+
+
+@app.exception_handler(Exception)
+async def _unhandled_error(request, exc):
+    """Batch 10: an unhandled error becomes a JSON 500 with an error id (the traceback goes to the server log under the same
+    id). This handler runs outside the CORS layer, so it adds the CORS headers itself for allowed origins; otherwise the
+    browser would report a misleading CORS error. Starlette still re-raises afterwards, so tests and logs see the error."""
+    import uuid as _uuid
+    err = _uuid.uuid4().hex[:12]
+    logger.error("unhandled error %s on %s %s", err, request.method, request.url.path, exc_info=exc)
+    response = JSONResponse({"detail": "Something went wrong on our side. Please try again.", "error_id": err}, status_code=500)
+    origin = request.headers.get("origin")
+    if origin and origin in _cors:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Vary"] = "Origin"
+    _security_headers(request, response)
+    return response
 
 
 # Registered after the middleware above so CORS is the OUTERMOST layer: preflights are answered
@@ -237,6 +291,14 @@ async def _init_db():
     def _matches_env(stored_hash: str) -> bool:
         return stored_hash == admin_hash if admin_hash else verify_password(admin_password, stored_hash)
 
+    # SEC-17: remember WHICH environment credential was last applied (a salted bcrypt marker, never the value itself). The
+    # environment overrides the stored password only when the environment value CHANGES (a deliberate rotation / recovery),
+    # so a password the super admin changes in the app is no longer reverted at every cold start.
+    env_source = admin_hash or admin_password
+
+    def _env_marker_matches(marker: str) -> bool:
+        return bool(marker) and verify_password(env_source, marker)
+
     existing = await db.users.find_one({"$or": [{"email": admin_email},
                                                 {"role": "super_admin", "mobile": "9999999999"}]})
     if existing and existing.get("email") != admin_email:
@@ -248,18 +310,23 @@ async def _init_db():
         await db.users.insert_one({
             "id": new_id(), "distributor_id": "HGADMIN001", "full_name": "Platform Administrator",
             "email": admin_email, "username": admin_username, "mobile": "9999999999",
-            **_env_credential_set(),
+            **_env_credential_set(), "env_credential_marker": hash_password(env_source),
             "role": "super_admin", "status": "green", "mobile_verified": True, "email_verified": True,
             "sponsor_id": None, "sponsor_user_id": None, "kyc_status": "verified",
             "created_at": now_iso(), "updated_at": now_iso(),
         })
         logger.info(f"Seeded admin {admin_email}")
-    elif not _matches_env(existing.get("password_hash", "")):
+    elif _env_marker_matches(existing.get("env_credential_marker", "")):
+        pass       # the environment credential was already applied once; keep whatever password the admin set since
+    elif _matches_env(existing.get("password_hash", "")):
+        await db.users.update_one({"email": admin_email}, {"$set": {"env_credential_marker": hash_password(env_source)}})
+    else:
         # Credential rotated via env: store it and revoke sessions issued with the old password.
         await db.users.update_one({"email": admin_email},
-                                  {"$set": {**_env_credential_set(), "role": "super_admin", "updated_at": now_iso()}})
+                                  {"$set": {**_env_credential_set(), "env_credential_marker": hash_password(env_source),
+                                            "role": "super_admin", "updated_at": now_iso()}})
         await log_audit(None, "admin_credential_rotated", "user", existing.get("id", ""))
-        logger.info(f"Admin credential for {admin_email} rotated from environment; older sessions revoked.")
+        logger.info("Super admin credential rotated from the environment; older sessions revoked.")
     # always keep the admin username in sync with env
     await db.users.update_one({"email": admin_email}, {"$set": {"username": admin_username}})
 

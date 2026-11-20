@@ -414,6 +414,24 @@ async def vendor_notifications(unread: bool = False, type: Optional[str] = None,
 class ChangePasswordIn(BaseModel):
     current_password: str = Field(min_length=1, max_length=128)
     new_password: str = Field(min_length=8, max_length=128)
+    otp: str = ""   # required only to finish a FORCED change after an admin reset, when SMS is available
+
+
+def forced_change_needs_otp(user: dict) -> bool:
+    """After an admin reset the admin knows the temporary password. When SMS works, finishing the forced change also needs a
+    code sent to the account's trusted mobile, so the admin alone can never take the account over."""
+    from providers import sms_available
+    return bool(user.get("must_change_password")) and bool(user.get("mobile")) and sms_available()
+
+
+@router.post("/auth/forced-change/send-otp")
+async def forced_change_send_otp(user: dict = Depends(get_current_user)):
+    if not forced_change_needs_otp(user):
+        raise HTTPException(status_code=400, detail="No code is needed for this account.")
+    await rate_limit("forced_change_otp", user["id"])
+    from providers import otp_create
+    await otp_create(user["mobile"], "forced_change")
+    return {"sent": True, "to": "XXXXXX" + user["mobile"][-4:]}
 
 
 @router.put("/auth/change-password")
@@ -423,6 +441,11 @@ async def change_password(body: ChangePasswordIn, request: Request, user: dict =
     full = await db.users.find_one({"id": user["id"]}, {"_id": 0})
     if not verify_password(body.current_password, full.get("password_hash", "")):
         raise HTTPException(status_code=400, detail="Your current password is not correct.")
+    if forced_change_needs_otp(full):
+        if not body.otp:
+            raise HTTPException(status_code=400, detail="Enter the code sent to your registered mobile number.")
+        from providers import otp_verify
+        await otp_verify(full["mobile"], "forced_change", body.otp)
     import re
     pw = body.new_password
     strong = len(pw) >= 14 and re.search(r"[a-z]", pw) and re.search(r"[A-Z]", pw) and re.search(r"\d", pw) and re.search(r"[^A-Za-z0-9]", pw)

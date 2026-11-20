@@ -81,6 +81,7 @@ def create_token(user_id: str) -> str:
         "type": "access",
         "iat": now,  # lets a password change revoke sessions issued before it
         "iat_ms": int(now.timestamp() * 1000),  # millisecond precision, so a session issued in the same second as a change is still revoked
+        "jti": uuid.uuid4().hex,                # SEC-12: lets logout revoke exactly this session
         "exp": now + timedelta(days=7),
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGO)
@@ -96,6 +97,7 @@ def clean_user(user: dict) -> dict:
     user = dict(user)
     user.pop("_id", None)
     user.pop("password_hash", None)
+    user.pop("env_credential_marker", None)   # salted hash of the super-admin environment credential (server.py)
     if user.get("aadhaar_number"):
         user["aadhaar_masked"] = mask_aadhaar(user["aadhaar_number"])
         user.pop("aadhaar_number", None)
@@ -127,6 +129,8 @@ async def get_current_user(request: Request) -> dict:
     user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0})
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
+    if payload.get("jti") and await db.revoked_tokens.find_one({"_id": payload["jti"]}, {"_id": 1}):
+        raise HTTPException(status_code=401, detail="You have signed out. Please log in again.")
     if _issued_before_password_change(payload, user):
         raise HTTPException(status_code=401, detail="Your password was changed. Please log in again.")
     if user.get("blocked") or user.get("account_status") in ("blocked", "suspended", "deleted"):
@@ -134,7 +138,10 @@ async def get_current_user(request: Request) -> dict:
         raise HTTPException(status_code=401, detail="This account is no longer active. Please contact the admin.")
     if not_activated(user):          # a token obtained by any route before activation is useless
         raise HTTPException(status_code=401, detail=NOT_ACTIVATED_MSG)
+    if user.get("must_change_password") and request.url.path.rstrip("/") not in PASSWORD_CHANGE_PATHS:
+        raise HTTPException(status_code=403, detail=PASSWORD_CHANGE_MSG)
     user.pop("password_hash", None)
+    user.pop("env_credential_marker", None)
     return user
 
 
@@ -153,8 +160,14 @@ def _issued_before_password_change(payload: dict, user: dict) -> bool:
 
 
 def password_update(new_password: str) -> dict:
-    """$set fields for a password change: bcrypt hash + timestamp that revokes older sessions."""
-    return {"password_hash": hash_password(new_password), "password_changed_at": now_iso()}
+    """$set fields for a password change: bcrypt hash + timestamp that revokes older sessions. A password the user sets
+    themselves clears any forced-change flag; an admin reset (admin_routes.admin_reset_password) sets it back to True."""
+    return {"password_hash": hash_password(new_password), "password_changed_at": now_iso(), "must_change_password": False}
+
+
+# After an admin reset the account must choose a new password before doing anything else. Only these paths stay usable.
+PASSWORD_CHANGE_PATHS = ("/api/auth/me", "/api/auth/change-password", "/api/auth/logout", "/api/auth/forced-change/send-otp")
+PASSWORD_CHANGE_MSG = "Your password was reset by HOME GENIES. Choose a new password to continue."
 
 
 def require_roles(*roles):
@@ -207,6 +220,8 @@ async def next_sequence(name: str, prefix: str, width: int = 6) -> str:
 # ---------- business settings ----------
 DEFAULT_SETTINGS = {
     "id": "business_settings",
+    # Decision 9: an unverified UPI payment claim expires after this many hours (order cancelled, stock released).
+    "upi_claim_expiry_hours": 24,
     # HOME GENIES commission plan (percent of product price, before GST)
     "commission_direct_pct": 30.0,
     "commission_referral_pct": 10.0,
@@ -428,7 +443,7 @@ RATE_LIMIT_SCALE = float(_os.environ.get("RATE_LIMIT_SCALE", "1"))
 RATE_LIMITS = {   # name -> (max requests, window seconds); keys are per client IP (or per vendor for authenticated actions)
     "vendor_register": (10, 3600), "vendor_apply": (8, 3600), "staff_accept": (10, 3600), "customer_register": (20, 3600), "forgot_password": (10, 3600),
     "login_ip": (60, 600), "admin_login_ip": (20, 600), "support_ticket": (20, 86400), "upload_sign": (60, 3600),
-    "change_password": (10, 3600), "csv_import": (30, 3600), "forgot_reset": (20, 3600), "login_otp_send": (20, 3600), "login_otp_verify": (60, 3600),
+    "change_password": (10, 3600), "contact_change_otp": (10, 3600), "otp_send_ip": (20, 3600), "change_mobile_send": (10, 3600), "forced_change_otp": (10, 3600), "csv_import": (30, 3600), "forgot_reset": (20, 3600), "login_otp_send": (20, 3600), "login_otp_verify": (60, 3600),
 }
 
 
@@ -466,3 +481,19 @@ async def notify_order_vendors(order: dict, title: str, message: str):
         if await db.notifications.find_one({"user_id": v["user_id"], "meta.dedupe": key}, {"_id": 1}):
             continue
         await create_notification(v["user_id"], "order", title, message, meta={"order_id": order["id"], "dedupe": key})
+
+
+async def revoke_token_from_request(request: Request, user_id: str) -> bool:
+    """SEC-12: server-side logout. The token's id is stored until the token would have expired anyway (TTL index)."""
+    auth = request.headers.get("Authorization", "")
+    try:
+        payload = _decode(auth[7:]) if auth.startswith("Bearer ") else {}
+    except jwt.InvalidTokenError:
+        return False
+    jti = payload.get("jti")
+    if not jti:
+        return False
+    exp = datetime.fromtimestamp(int(payload.get("exp", 0)), tz=timezone.utc)
+    await db.revoked_tokens.update_one({"_id": jti}, {"$setOnInsert": {"user_id": user_id, "expires_at": exp, "revoked_at": now_iso()}},
+                                       upsert=True)
+    return True

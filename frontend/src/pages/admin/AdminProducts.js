@@ -15,7 +15,8 @@ import { useAuth } from "@/context/AuthContext";
 import { useI18n } from "@/context/I18nContext";
 import { API, apiError } from "@/lib/api";
 
-const EMPTY = { sku: "", name: "", name_hi: "", description: "", description_hi: "", images: [""], mrp: 0, selling_price: 0, gst_percent: 5, stock: 100, category: "Household Essentials", is_active: true, options: [] };
+const EMPTY = { sku: "", name: "", name_hi: "", description: "", description_hi: "", images: [""], mrp: 0, selling_price: 0, gst_percent: 5, hsn_code: "", stock: 0, category: "Household Essentials", is_active: true, options: [] };
+const PILLARS = ["Sarees", "Fashion Products", "Makeup, Beauty & Skincare", "Household Essentials"];   // the server validates against the same list
 
 const VENDOR_ADMIN_ROLES = ["super_admin", "admin"];   // the server enforces this; hiding controls is only a convenience
 
@@ -28,23 +29,40 @@ export default function AdminProducts() {
   const [editing, setEditing] = useState(null);
   const [form, setForm] = useState(EMPTY);
   const [imgUploading, setImgUploading] = useState(false);
+  const [q, setQ] = useState("");
+  const [page, setPage] = useState(1);
+  const [meta, setMeta] = useState({ pages: 1, total: 0 });
   const money = (v) => `₹${Number(v).toLocaleString("en-IN")}`;
 
-  const load = useCallback(() => API.get("/products?active=false").then(({ data }) => setProducts(data)).catch(() => setProducts([])), []);
-  useEffect(() => { load(); }, [load]);
+  const load = useCallback(() => API.get("/admin/products", { params: { q, page, page_size: 60 } })
+    .then(({ data }) => { setProducts(data.items); setMeta({ pages: data.pages || 1, total: data.total || 0 }); })
+    .catch((err) => { setProducts([]); toast.error(apiError(err)); }), [q, page]);
+  useEffect(() => { const h = setTimeout(load, 250); return () => clearTimeout(h); }, [load]);
+  const adjustStock = async (p) => {
+    const d = window.prompt(`Stock change for ${p.name} (now ${p.stock}). Use a negative number to remove units:`, "");
+    if (d === null || d.trim() === "") return;
+    const reason = window.prompt("Reason for this stock change (at least 3 characters):", "Stock count correction");
+    if (reason === null) return;
+    try { const { data } = await API.post(`/admin/products/${p.id}/stock`, { delta: parseInt(d, 10), reason }); toast.success(`Stock is now ${data.stock}`); load(); }
+    catch (err) { toast.error(apiError(err)); }
+  };
+  const liftTakedown = async (p) => {
+    try { const { data } = await API.post(`/admin/products/${p.id}/takedown/lift`); toast.success(data.note); load(); }
+    catch (err) { toast.error(apiError(err)); }
+  };
 
   const openNew = () => { setEditing(null); setForm(EMPTY); setOpen(true); };
   const openEdit = (p) => { setEditing(p); setForm({ ...p, images: p.images?.length ? p.images : [""] }); setOpen(true); };
 
   const save = async () => {
-    const payload = { ...form, mrp: parseFloat(form.mrp), selling_price: parseFloat(form.selling_price), gst_percent: parseFloat(form.gst_percent), stock: parseInt(form.stock), images: form.images.filter(Boolean) };
+    const payload = { ...form, mrp: parseFloat(form.mrp), selling_price: parseFloat(form.selling_price), gst_percent: parseFloat(form.gst_percent), stock: editing ? 0 : parseInt(form.stock || 0, 10), images: form.images.filter(Boolean) };
     try {
       if (editing) await API.put(`/admin/products/${editing.id}`, payload);
       else await API.post("/admin/products", payload);
       toast.success(t("cta.save")); setOpen(false); load();
     } catch (err) { toast.error(apiError(err)); }
   };
-  const toggle = async (p) => { try { if (p.is_active) { await API.delete(`/admin/products/${p.id}`); } else { await API.put(`/admin/products/${p.id}`, { ...p, is_active: true }); } load(); } catch (err) { toast.error(apiError(err)); } };
+  const toggle = async (p) => { try { if (p.is_active) { const reason = p.vendor_id ? window.prompt("Reason for taking this vendor product down (the vendor cannot re-list it until it is lifted):", "") : ""; if (reason === null) return; await API.delete(`/admin/products/${p.id}`, { params: { reason } }); } else { await API.put(`/admin/products/${p.id}`, { ...p, is_active: true }); } load(); } catch (err) { toast.error(apiError(err)); } };
   const del = async (p) => { if (!window.confirm(`Permanently delete "${p.name}"? This cannot be undone.`)) return; try { await API.delete(`/admin/products/${p.id}/permanent`); toast.success("Product deleted"); load(); } catch (err) { toast.error(apiError(err)); } };
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target?.value ?? e }));
 
@@ -76,7 +94,12 @@ export default function AdminProducts() {
   return (
     <div className="space-y-5">
       <PageHeader title={t("nav.products")} icon={Package} actions={addBtn} />
-      {products.length === 0 && <EmptyState icon={Package} title={t("nav.products")} />}
+      <div className="flex flex-wrap items-center gap-3">
+        <input value={q} onChange={(e) => { setQ(e.target.value); setPage(1); }} placeholder="Search name or SKU" aria-label="Search products"
+          className="hgv-input h-11 w-full max-w-sm rounded-full px-4 text-sm" data-testid="admin-product-search" />
+        <span className="text-xs text-muted2">{meta.total} products</span>
+      </div>
+      {products.length === 0 && <EmptyState icon={Package} title={q ? "No products match your search" : t("nav.products")} />}
       <Stagger className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {products.map((p) => (
           <StaggerItem key={p.id} className={`hg-card hg-lift flex min-w-0 flex-col p-5 ${p.is_active ? "" : "opacity-70 ring-1 ring-danger/30"}`} data-testid={`admin-product-${p.sku}`}>
@@ -100,11 +123,13 @@ export default function AdminProducts() {
               /* A vendor's product is edited by the vendor and approved under Vendors; here it can only be taken down. */
               <div className="mt-auto flex items-center gap-2 pt-4">
                 <span className="flex-1 text-xs text-muted2">Managed by the vendor · approve changes under Vendors</span>
+                {canTakeDown && p.admin_takedown && <Button onClick={() => liftTakedown(p)} variant="outline" size="sm" className="h-9 rounded-full border-hg-success/40 bg-transparent px-3 text-hg-success hover:bg-hg-success/10" data-testid={`lift-${p.sku}`}>Lift takedown</Button>}
                 {canTakeDown && p.is_active && <Button onClick={() => toggle(p)} variant="outline" size="sm" className="h-9 rounded-full border-danger/30 bg-transparent px-3 text-danger hover:bg-danger/10 hover:text-danger" data-testid={`takedown-${p.sku}`}><Power size={14} className="mr-1" /> Take down</Button>}
               </div>
             ) : (
             <div className="mt-auto flex gap-2 pt-4">
               <Button onClick={() => openEdit(p)} variant="outline" size="sm" className="h-9 flex-1 rounded-full border-brand-50 bg-transparent" data-testid={`edit-${p.sku}`}><Pencil size={14} className="mr-1" /> Edit</Button>
+              <Button onClick={() => adjustStock(p)} variant="outline" size="sm" className="h-9 rounded-full border-brand-50 bg-transparent px-3" data-testid={`stock-${p.sku}`}>Stock</Button>
               <Button onClick={() => toggle(p)} variant="outline" size="sm" aria-label={p.is_active ? "Deactivate product" : "Activate product"} title={p.is_active ? "Deactivate" : "Activate"} className={`h-9 w-9 rounded-full bg-transparent p-0 ${p.is_active ? "border-danger/30 text-danger hover:bg-danger/10 hover:text-danger" : "border-hg-success/40 text-hg-success hover:bg-hg-success/10 hover:text-hg-success"}`} data-testid={`toggle-${p.sku}`}><Power size={14} /></Button>
               <Button onClick={() => del(p)} variant="outline" size="sm" aria-label="Delete product" title="Delete" className="h-9 w-9 rounded-full border-danger/40 bg-transparent p-0 text-danger hover:bg-danger/10 hover:text-danger" data-testid={`delete-${p.sku}`}><Trash2 size={14} /></Button>
             </div>
@@ -120,7 +145,11 @@ export default function AdminProducts() {
             <section className="space-y-4">
               <div className="grid gap-4 md:grid-cols-2">
                 <FF label="SKU" value={form.sku} onChange={set("sku")} testid="pf-sku" />
-                <FF label="Category" value={form.category} onChange={set("category")} testid="pf-category" />
+                <label className="block text-sm text-ink">Category
+                  <select value={form.category} onChange={set("category")} className="hgv-input mt-1.5 h-11 w-full rounded-xl px-3" data-testid="pf-category">
+                    {PILLARS.map((c) => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </label>
                 <FF label="Name (EN)" value={form.name} onChange={set("name")} testid="pf-name" />
                 <FF label="Name (HI)" value={form.name_hi} onChange={set("name_hi")} testid="pf-name-hi" />
               </div>
@@ -142,12 +171,25 @@ export default function AdminProducts() {
             <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               <FF label="MRP" type="number" value={form.mrp} onChange={set("mrp")} testid="pf-mrp" />
               <FF label="Price" type="number" value={form.selling_price} onChange={set("selling_price")} testid="pf-price" />
-              <FF label="Stock" type="number" value={form.stock} onChange={set("stock")} testid="pf-stock" />
+              {editing
+                ? <div className="text-sm text-ink">Stock<div className="mt-1.5 rounded-xl px-3 py-2.5 text-muted2 ring-1 ring-brand-50" data-testid="pf-stock-readonly">{form.stock} · use “Stock” on the card to change it</div></div>
+                : <FF label="Opening stock" type="number" value={form.stock} onChange={set("stock")} testid="pf-stock" />}
+            </section>
+            <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <FF label="GST %" type="number" value={form.gst_percent} onChange={set("gst_percent")} testid="pf-gst" />
+              <FF label="HSN code (optional)" value={form.hsn_code || ""} onChange={set("hsn_code")} testid="pf-hsn" />
             </section>
           </div>
           <DialogFooter className="gap-2 pt-2"><Button onClick={save} className="hg-btn h-11 w-full rounded-full px-8 sm:w-auto" data-testid="pf-save">{t("cta.save")}</Button></DialogFooter>
         </DialogContent>
       </Dialog>
+      {meta.pages > 1 && (
+        <div className="flex items-center justify-center gap-3" data-testid="admin-product-pager">
+          <Button variant="outline" disabled={page <= 1} onClick={() => setPage((x) => x - 1)} className="h-10 rounded-full px-5">Previous</Button>
+          <span className="text-sm text-muted2">Page {page} of {meta.pages}</span>
+          <Button variant="outline" disabled={page >= meta.pages} onClick={() => setPage((x) => x + 1)} className="h-10 rounded-full px-5">Next</Button>
+        </div>
+      )}
     </div>
   );
 }

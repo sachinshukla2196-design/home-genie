@@ -240,10 +240,10 @@ def test_admin_confirming_a_late_upi_payment_goes_through_the_same_path(c):
     _age(c, o["id"], 20)
     _sweep(c)
     url = f"/api/admin/payments/upi-confirm/{o['id']}"
-    assert c.put(url, json={"reference": "UTR-LATE-1"}, headers=_hdr(S["admin"]["id"])).status_code == 200
+    assert c.put(url, json={"reference": "UTR-LATE-1", "amount": o["total"]}, headers=_hdr(S["admin"]["id"])).status_code == 200
     got = _get(c, o["id"])
     assert got["status"] == "processing" and got["payment_status"] == "paid" and _stock(c, p["id"]) == 3
-    assert c.put(url, json={"reference": "UTR-LATE-1"}, headers=_hdr(S["admin"]["id"])).json()["message"] == "Order already paid."
+    assert c.put(url, json={"reference": "UTR-LATE-1", "amount": o["total"]}, headers=_hdr(S["admin"]["id"])).json()["message"] == "Order already paid."
     assert _stock(c, p["id"]) == 3
 
 

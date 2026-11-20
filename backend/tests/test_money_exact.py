@@ -133,9 +133,11 @@ def _pay(c, o):
 def test_order_totals_are_exact_paise_and_floats_are_derived(c):
     p = _product(c, "M-1", 33.33)
     o = _order(c, p["id"], 3, method="cod")
-    assert (o["subtotal_paise"], o["gst_paise"], o["total_paise"]) == (9999, 500, 10499)    # 5% of 99.99 = 4.9995 -> 5.00
-    assert (o["subtotal"], o["gst_amount"], o["total"]) == (99.99, 5.0, 104.99)
-    assert o["items"][0]["price_paise"] == 3333 and o["items"][0]["total_paise"] == 9999 and o["money_version"] == 2
+    # Decision 1: prices INCLUDE 5% GST. 99.99 inclusive -> taxable 99.99 x 100/105 = 95.2286 -> 95.23, GST 4.76.
+    assert (o["subtotal_paise"], o["gst_paise"], o["total_paise"]) == (9523, 476, 9999)
+    assert (o["subtotal"], o["gst_amount"], o["total"]) == (95.23, 4.76, 99.99)
+    assert o["items"][0]["price_paise"] == 3333 and o["items"][0]["total_paise"] == 9999 and o["money_version"] == 3
+    assert o["items"][0]["taxable_paise"] + o["items"][0]["gst_paise"] == o["items"][0]["total_paise"]
     assert o["total"] == paise_to_float(o["total_paise"])
 
 
@@ -146,20 +148,21 @@ def test_totals_are_never_off_by_a_paisa_across_many_prices_and_quantities(c):
         qty = rnd.randint(1, 9)
         p = _product(c, f"M-R{k}", price)
         o = _order(c, p["id"], qty, method="cod")
-        sub = to_paise(price) * qty
-        assert o["subtotal_paise"] == sub and o["gst_paise"] == mul_pct(sub, 5) and o["total_paise"] == sub + mul_pct(sub, 5)
+        incl = to_paise(price) * qty                                   # Decision 1: the price includes GST
+        taxable = shop_routes._taxable_part(incl, 5)
+        assert o["subtotal_paise"] == taxable and o["gst_paise"] == incl - taxable and o["total_paise"] == incl
 
 
 def test_commissions_are_exact_paise_and_wallets_hold_them_exactly(c):
     p = _product(c, "M-2", 33.33)
-    o = _order(c, p["id"], 3)                                  # base 99.99 -> 30% / 10% / 5%
+    o = _order(c, p["id"], 3)                                  # 99.99 incl. GST -> pre-GST base 95.23 -> 30% / 10% / 5%
     _pay(c, o)
     rows = {r["type"]: r for r in c.portal.call(lambda: db.commissions.find({"order_id": o["id"]}).to_list(10))}
-    assert rows["COMMISSION_DIRECT"]["amount_paise"] == 3000 and rows["COMMISSION_REFERRAL"]["amount_paise"] == 1000
-    assert rows["COMMISSION_TEAM"]["amount_paise"] == 500
-    assert rows["COMMISSION_DIRECT"]["amount"] == 30.0 and rows["COMMISSION_DIRECT"]["base_paise"] == 9999
+    assert rows["COMMISSION_DIRECT"]["amount_paise"] == 2857 and rows["COMMISSION_REFERRAL"]["amount_paise"] == 952
+    assert rows["COMMISSION_TEAM"]["amount_paise"] == 476
+    assert rows["COMMISSION_DIRECT"]["amount"] == 28.57 and rows["COMMISSION_DIRECT"]["base_paise"] == 9523
     w = c.portal.call(lambda: db.wallets.find_one({"user_id": S["seller"]["id"]}))
-    assert w["pending_balance_paise"] == 3000 and w["pending_balance"] == 30.0
+    assert w["pending_balance_paise"] == 2857 and w["pending_balance"] == 28.57
     # paise arithmetic is exact: the three credits plus the platform remainder cannot exceed what the rules say
     assert 3000 + 1000 + 500 == 4500                              # direct + referral + team, exactly
 
@@ -228,14 +231,14 @@ def test_partial_and_final_refunds_claw_back_exactly_what_was_credited(c):
     o = _order(c, p["id"], 3)                                  # total 104.99, base 99.99
     _pay(c, o)
     credited = {r["user_id"]: r["amount_paise"] for r in c.portal.call(lambda: db.commissions.find({"order_id": o["id"]}).to_list(10))}
-    assert sum(credited.values()) == 4500
+    assert sum(credited.values()) == 2857 + 952 + 476             # 30/10/5 % of the pre-GST base 95.23
     refunded = 0
     for ref, amt in (("R1", 10.0), ("R2", 33.33), ("R3", 0.01), ("R4", None)):    # last one closes the order
         res = c.portal.call(lambda ref=ref, amt=amt: shop_routes.reverse_order_financials(o["id"], {"id": S["admin"]["id"]}, None, amt, ref, "t"))
         refunded += to_paise(res["refund_amount"])
-    assert refunded == 10499
+    assert refunded == 9999
     order = c.portal.call(lambda: db.orders.find_one({"id": o["id"]}))
-    assert order["refunded_paise"] == 10499 and order["payment_status"] == "refunded" and order["refunded_amount"] == 104.99
+    assert order["refunded_paise"] == 9999 and order["payment_status"] == "refunded" and order["refunded_amount"] == 99.99
     for row in c.portal.call(lambda: db.commissions.find({"order_id": o["id"]}).to_list(10)):
         assert row["reversed_paise"] == row["amount_paise"] and row["status"] == "REVERSED"      # exactly, never 1 paisa short/over
     for uid in credited:
@@ -249,8 +252,8 @@ def test_refund_cannot_exceed_the_order_and_duplicates_are_ignored(c):
     run = lambda ref, amt: c.portal.call(lambda: shop_routes.reverse_order_financials(o["id"], {"id": "a"}, None, amt, ref, "t"))
     assert run("X1", 50.0)["refund_amount"] == 50.0
     assert run("X1", 50.0).get("duplicate") is True                                              # same reference: no double refund
-    assert run("X2", 999.0)["refund_amount"] == 55.0                                              # capped at what is left (105 - 50)
-    assert run("X3", 1.0)["refund_amount"] == 0.0 and c.portal.call(lambda: db.orders.find_one({"id": o["id"]}))["refunded_paise"] == 10500
+    assert run("X2", 999.0)["refund_amount"] == 50.0                                              # capped at what is left (100 incl. GST - 50)
+    assert run("X3", 1.0)["refund_amount"] == 0.0 and c.portal.call(lambda: db.orders.find_one({"id": o["id"]}))["refunded_paise"] == 10000
 
 
 def test_admin_refund_endpoint_validates_in_paise(c):
@@ -258,9 +261,9 @@ def test_admin_refund_endpoint_validates_in_paise(c):
     o = _order(c, p["id"], 1)
     _pay(c, o)
     h = _hdr(S["admin"]["id"])
-    assert c.post(f"/api/admin/orders/{o['id']}/refund", json={"reference": "R", "amount": 105.01}, headers=h).status_code == 400
+    assert c.post(f"/api/admin/orders/{o['id']}/refund", json={"reference": "R", "amount": 100.01}, headers=h).status_code == 400
     assert c.post(f"/api/admin/orders/{o['id']}/refund", json={"reference": "R", "amount": 0}, headers=h).status_code == 400
-    assert c.post(f"/api/admin/orders/{o['id']}/refund", json={"reference": "R2", "amount": 105.0}, headers=h).status_code == 200
+    assert c.post(f"/api/admin/orders/{o['id']}/refund", json={"reference": "R2", "amount": 100.0}, headers=h).status_code == 200
     assert c.portal.call(lambda: db.orders.find_one({"id": o["id"]}))["status"] == "refunded"
 
 

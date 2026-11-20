@@ -93,7 +93,8 @@ def _order(c, tree):
     order = {"id": oid, "order_number": "CR-" + oid[:6].upper(), "user_id": tree["buyer"]["id"],
              "seller_user_id": tree["seller"]["id"], "payment_status": "paid",
              "subtotal": SUBTOTAL_P / 100, "subtotal_paise": SUBTOTAL_P, "total": TOTAL_P / 100, "total_paise": TOTAL_P,
-             "refunded_paise": 0, "refunded_amount": 0.0, "fulfilments": [], "created_at": now_iso()}
+             "refunded_paise": 0, "refunded_amount": 0.0, "fulfilments": [], "created_at": now_iso(),
+             "status": "delivered", "delivered_at": now_iso()}    # decision 2: the release clock starts at delivery
     _run(c, lambda: db.orders.insert_one(dict(order)))
     return order
 

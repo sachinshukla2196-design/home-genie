@@ -20,16 +20,26 @@ export default function AdminSettings() {
 
   useEffect(() => { API.get("/admin/settings").then(({ data }) => setS(data)).catch(() => {}); }, []);
 
+  // ADM-01: send exactly the fields this screen shows (the server ignores unknown keys, so the old payload silently saved
+  // almost nothing). The screen then shows what the server actually stored, so a success message always means "saved".
+  const NUMBER_FIELDS = ["commission_direct_pct", "commission_referral_pct", "commission_team_pct", "point_value", "cod_fee",
+    "badge_t1_sales", "badge_t2_sales", "badge_t3_sales", "badge_t4_sales", "gst_percent"];
+  const INT_FIELDS = ["return_window_days"];
+  const BOOL_FIELDS = ["points_withdrawal_enabled", "cod_enabled", "require_kyc_for_withdrawal"];
+  const TEXT_FIELDS = ["company_name", "company_email", "company_phone", "company_address"];
+  const [saving, setSaving] = useState(false);
   const save = async () => {
+    const body = {};
+    for (const k of NUMBER_FIELDS) { if (s[k] !== "" && s[k] != null) { const n = Number(s[k]); if (Number.isNaN(n)) { toast.error(`${k.replace(/_/g, " ")} must be a number`); return; } body[k] = n; } }
+    for (const k of INT_FIELDS) { if (s[k] !== "" && s[k] != null) { const n = Number(s[k]); if (!Number.isInteger(n)) { toast.error("Return window must be whole days"); return; } body[k] = n; } }
+    for (const k of BOOL_FIELDS) if (typeof s[k] === "boolean") body[k] = s[k];
+    for (const k of TEXT_FIELDS) if (s[k] != null) body[k] = String(s[k]);
+    setSaving(true);
     try {
-      await API.put("/admin/settings", {
-        activation_amount: parseFloat(s.activation_amount), activation_product_sku: s.activation_product_sku,
-        referral_commission: parseFloat(s.referral_commission),
-        require_kyc_for_withdrawal: s.require_kyc_for_withdrawal, gst_percent: parseFloat(s.gst_percent),
-        company_name: s.company_name, company_email: s.company_email, company_phone: s.company_phone, company_address: s.company_address,
-      });
-      toast.success(t("cta.save"));
-    } catch (e) { toast.error(apiError(e)); }
+      const { data } = await API.put("/admin/settings", body);
+      setS(data);
+      toast.success("Settings saved");
+    } catch (e) { toast.error(apiError(e)); } finally { setSaving(false); }
   };
 
   if (!s) return (
@@ -76,7 +86,7 @@ export default function AdminSettings() {
         </div>
       </SectionCard>
       <div className="flex justify-end">
-        <Button onClick={save} className="hg-btn h-11 w-full rounded-full px-8 sm:w-auto" data-testid="settings-save"><Save size={16} className="mr-1.5" /> {t("cta.save")}</Button>
+        <Button onClick={save} disabled={saving} className="hg-btn h-11 w-full rounded-full px-8 sm:w-auto" data-testid="settings-save"><Save size={16} className="mr-1.5" /> {saving ? "Saving…" : t("cta.save")}</Button>
       </div>
     </div>
   );

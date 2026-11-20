@@ -11,6 +11,7 @@ import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
 import { API, apiError } from "@/lib/api";
 import { CountUp, listVariants, itemVariants } from "@/components/motion";
+import { AccountSettings } from "@/components/AccountSettings";
 
 function resizeImage(file, max = 400) {
   return new Promise((resolve, reject) => {
@@ -142,6 +143,7 @@ export default function Profile() {
         ))}
       </motion.div>
 
+      <AccountSettings />
       <Button onClick={logout} variant="outline" className="h-12 w-full rounded-full border-danger/30 bg-transparent text-danger hover:bg-danger/10" data-testid="profile-logout"><LogOut size={18} className="mr-2" />{t("nav.logout")}</Button>
     </div>
   );

@@ -89,7 +89,8 @@ def test_draft_and_suspended_vendors_cannot_sell(c):
         assert c.get("/api/vendor/products", headers=h).status_code == 403
         assert c.post("/api/vendor/products", headers=h, json={"sku": "ZZ-1", "name": "Zz", "mrp": 10, "selling_price": 9,
                                                               "category": "Sarees"}).status_code == 403
-        assert c.get("/api/vendor/orders", headers=h).status_code == 403
+        # Batch 9 (owner instruction): a SUSPENDED vendor keeps access to orders it already owes customers; a draft one does not
+        assert c.get("/api/vendor/orders", headers=h).status_code == (200 if key == "us" else 403)
 
 
 # ---------------------------------------------------------------- tenant isolation

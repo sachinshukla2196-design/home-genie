@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PageHeader, SectionCard } from "@/components/PageHeader";
 import { useI18n } from "@/context/I18nContext";
+import { useAuth } from "@/context/AuthContext";
 import { API, apiError } from "@/lib/api";
 
 export default function AdminUsers() {
@@ -18,12 +19,30 @@ export default function AdminUsers() {
   const [reqs, setReqs] = useState([]);
   const [pwReqs, setPwReqs] = useState([]);
   const [genLoading, setGenLoading] = useState(false);
-  const [pwResult, setPwResult] = useState(null); // {full_name, distributor_id, password}
+  const [pwResult, setPwResult] = useState(null); // {full_name, distributor_id, message} — the password itself is never shown
+  const [resetTarget, setResetTarget] = useState(null); // {id, full_name, distributor_id, reqId?}
+  const [resetForm, setResetForm] = useState({ temporary_password: "", reason: "" });
   const [busyId, setBusyId] = useState(null);
   const [editUser, setEditUser] = useState(null);
   const [editForm, setEditForm] = useState({});
   const [creditUser, setCreditUser] = useState(null);
   const [creditForm, setCreditForm] = useState({ amount: "", reason: "" });
+  const { user: me } = useAuth();
+  const canReset = ["super_admin", "admin"].includes(me?.role);       // decision 10; the server enforces it
+  const [contactChanges, setContactChanges] = useState([]);
+  const loadContactChanges = () => API.get("/admin/contact-changes").then(({ data }) => setContactChanges(data)).catch(() => {});
+  useEffect(() => { loadContactChanges(); }, []);
+  const cancelContactChange = async (r) => {
+    if (!window.confirm("Cancel this pending contact change?")) return;
+    try { await API.post(`/admin/contact-changes/${r.id}/cancel`); toast.success("Contact change cancelled"); loadContactChanges(); }
+    catch (e) { toast.error(apiError(e)); }
+  };
+  const recoveryApprove = async (r) => {
+    const evidence = window.prompt("Reviewed recovery: the member cannot receive a code on their current mobile. Record the independent evidence you checked (at least 20 characters, e.g. ID document reference):", "");
+    if (evidence === null) return;
+    try { await API.post(`/admin/contact-changes/${r.id}/recovery-approve`, { evidence }); toast.success("Contact change approved"); loadContactChanges(); API.get("/admin/users").then(({ data }) => setUsers(data)); }
+    catch (e) { toast.error(apiError(e)); }
+  };
 
   useEffect(() => {
     API.get("/admin/users").then(({ data }) => setUsers(data)).catch(() => setUsers([]));
@@ -33,12 +52,18 @@ export default function AdminUsers() {
   }, []);
 
   const loadPwReqs = () => API.get("/admin/password-reset-requests").then(({ data }) => setPwReqs(data)).catch(() => {});
-  const resetForReq = async (r) => {
-    setBusyId(r.id);
+  const openReset = (target) => { setResetForm({ temporary_password: "", reason: target.reqId ? "Member asked for a password reset" : "" }); setResetTarget(target); };
+  const resetForReq = (r) => openReset({ id: r.user_id, full_name: r.full_name, distributor_id: r.distributor_id, reqId: r.id });
+  const tempOk = resetForm.temporary_password.length >= 10 && /[A-Za-z]/.test(resetForm.temporary_password) && /\d/.test(resetForm.temporary_password);
+  const submitReset = async () => {
+    const tgt = resetTarget;
+    setBusyId(tgt.id);
     try {
-      const { data } = await API.post(`/admin/users/${r.user_id}/reset-password`, {});
-      setPwResult(data); setPwReqs((l) => l.filter((x) => x.id !== r.id));
-      toast.success("New password generated");
+      const { data } = await API.post(`/admin/users/${tgt.id}/reset-password`, resetForm);
+      setPwResult({ full_name: data.full_name || tgt.full_name, distributor_id: data.distributor_id || tgt.distributor_id, message: data.message });
+      if (tgt.reqId) setPwReqs((l) => l.filter((x) => x.id !== tgt.reqId));
+      setResetTarget(null); setResetForm({ temporary_password: "", reason: "" });
+      toast.success("Temporary password set");
     } catch (e) { toast.error(apiError(e)); } finally { setBusyId(null); }
   };
   const dismissPwReq = async (r) => {
@@ -54,9 +79,12 @@ export default function AdminUsers() {
   const saveEdit = async () => {
     setBusyId(editUser.id);
     try {
-      const { data } = await API.put(`/admin/users/${editUser.id}`, editForm);
+      const { contact_change: cc, ...data } = (await API.put(`/admin/users/${editUser.id}`, editForm)).data;
       setUsers((list) => list.map((x) => (x.id === editUser.id ? { ...x, ...data } : x)));
-      toast.success("Profile updated");
+      if (cc) {
+        toast.success(`Profile saved. The ${cc.fields.join(" and ")} change is pending: the member must confirm it with a code sent to their current mobile.`);
+        loadContactChanges();
+      } else toast.success("Profile updated");
       setEditUser(null);
     } catch (e) { toast.error(apiError(e)); } finally { setBusyId(null); }
   };
@@ -97,22 +125,15 @@ export default function AdminUsers() {
     } catch (e) { toast.error(apiError(e)); }
   };
 
-  const resetPw = async (u) => {
-    setBusyId(u.id);
-    try {
-      const { data } = await API.post(`/admin/users/${u.id}/reset-password`, {});
-      setPwResult(data);
-      toast.success("New password generated");
-    } catch (e) { toast.error(apiError(e)); } finally { setBusyId(null); }
-  };
+  const resetPw = (u) => openReset({ id: u.id, full_name: u.full_name, distributor_id: u.distributor_id });
 
   const toggleBlock = async (u) => {
     const next = !u.blocked;
     if (!window.confirm(`${next ? "Block" : "Unblock"} ${u.full_name} (${u.distributor_id})?`)) return;
     setBusyId(u.id);
     try {
-      await API.put(`/admin/users/${u.id}/block`, { blocked: next });
-      setUsers((list) => list.map((x) => (x.id === u.id ? { ...x, blocked: next, account_status: next ? "blocked" : "active" } : x)));
+      const { data } = await API.put(`/admin/users/${u.id}/block`, { blocked: next });
+      setUsers((list) => list.map((x) => (x.id === u.id ? { ...x, blocked: data.blocked, account_status: data.account_status } : x)));
       toast.success(next ? "User blocked" : "User unblocked");
     } catch (e) { toast.error(apiError(e)); } finally { setBusyId(null); }
   };
@@ -165,9 +186,8 @@ export default function AdminUsers() {
             <div className="flex min-w-0 items-start gap-3">
               <span className="hg-icon-chip !h-9 !w-9 shrink-0 !rounded-xl !bg-hg-gold/15 !text-hg-gold"><KeyRound size={16} /></span>
               <div className="min-w-0 break-words text-sm text-ink">
-                New password for <b>{pwResult.full_name}</b> ({pwResult.distributor_id}):
-                <button onClick={() => copy(pwResult.password)} className="ml-2 mt-1 inline-flex items-center gap-1.5 rounded-lg bg-hg-gold/15 px-2.5 py-1 font-mono font-semibold text-hg-gold ring-1 ring-hg-gold/30 transition-colors hover:bg-hg-gold/25" data-testid="pw-reset-value">{pwResult.password} <Copy size={13} /></button>
-                <span className="mt-1 block text-xs text-muted2">Share this with the HomeGenie. She can log in and change it.</span>
+                Password reset for <b>{pwResult.full_name}</b> ({pwResult.distributor_id}).
+                <span className="mt-1 block text-xs text-muted2" data-testid="pw-reset-message">{pwResult.message} Give the temporary password to the member yourself; it is not stored or shown anywhere.</span>
               </div>
             </div>
             <button onClick={() => setPwResult(null)} aria-label="Dismiss" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-muted2 transition-colors hover:bg-brand-50 hover:text-ink" data-testid="pw-reset-dismiss"><X size={18} /></button>
@@ -175,16 +195,34 @@ export default function AdminUsers() {
         )}
       </AnimatePresence>
 
+      {/* Pending contact changes (admin-proposed; live contact unchanged until the member confirms) */}
+      {contactChanges.length > 0 && (
+        <SectionCard title="Pending Contact Changes" icon={KeyRound} testid="contact-changes-card" className="ring-1 ring-hg-gold/25">
+          <p className="-mt-2 mb-4 text-sm text-muted2">The member's current mobile and email keep working until the member confirms the change with a code sent to their current mobile. If they lost that mobile, a super admin who did not request the change can approve it after checking independent evidence.</p>
+          <div className="space-y-2">
+            {contactChanges.map((r) => (
+              <div key={r.id} className="hg-tile flex flex-wrap items-center justify-between gap-3 rounded-xl p-3" data-testid={`contact-change-${r.id}`}>
+                <div className="min-w-0 break-words text-sm text-ink">{r.fields.map((f) => <span key={f} className="mr-3"><b className="capitalize">{f}</b>: <span className="font-mono text-muted2">{r.old[f] || "(none)"}</span> → <span className="font-mono">{r.new[f] || "(none)"}</span></span>)}<span className="ml-1 text-xs text-muted2">expires {(r.expires_at || "").slice(0, 10)}</span></div>
+                <div className="flex flex-wrap gap-2">
+                  {me?.role === "super_admin" && me?.id !== r.requested_by && <button onClick={() => recoveryApprove(r)} className={outlineBtn} data-testid={`contact-change-recover-${r.id}`}>Approve with evidence</button>}
+                  <button onClick={() => cancelContactChange(r)} className={dangerBtn} data-testid={`contact-change-cancel-${r.id}`}>Cancel</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      )}
+
       {/* Password reset requests */}
       {pwReqs.length > 0 && (
         <SectionCard title="Password Reset Requests" icon={KeyRound} testid="password-reset-requests-card" className="ring-1 ring-hg-gold/25">
-          <p className="-mt-2 mb-4 text-sm text-muted2">HomeGenies who forgot their password. Reset it and share the new password with her (no OTP/email).</p>
+          <p className="-mt-2 mb-4 text-sm text-muted2">Members who forgot their password. Set a temporary password and give it to them yourself; they must choose a new one when they sign in.</p>
           <div className="space-y-2">
             {pwReqs.map((r) => (
               <div key={r.id} className="hg-tile flex flex-wrap items-center justify-between gap-3 rounded-xl p-3" data-testid={`pw-req-${r.distributor_id}`}>
                 <div className="min-w-0 break-words text-sm"><span className="font-mono font-semibold text-hg-lavender">{r.distributor_id}</span> · <span className="text-ink">{r.full_name}</span> · <span className="font-mono text-muted2">{r.mobile}</span><span className="ml-2 text-xs text-muted2">{(r.created_at || "").slice(0, 10)}</span></div>
                 <div className="flex flex-wrap gap-2">
-                  <button onClick={() => resetForReq(r)} disabled={busyId === r.id} className={primaryBtn} data-testid={`pw-req-reset-${r.distributor_id}`}>{busyId === r.id ? "…" : "Reset Password"}</button>
+                  {canReset && <button onClick={() => resetForReq(r)} disabled={busyId === r.id} className={primaryBtn} data-testid={`pw-req-reset-${r.distributor_id}`}>{busyId === r.id ? "…" : "Reset Password"}</button>}
                   <button onClick={() => dismissPwReq(r)} className={dangerBtn} data-testid={`pw-req-dismiss-${r.distributor_id}`}>Dismiss</button>
                 </div>
               </div>
@@ -275,9 +313,9 @@ export default function AdminUsers() {
                     <button onClick={() => openEdit(u)} disabled={busyId === u.id} className={outlineBtn} data-testid={`edit-user-${u.distributor_id}`}>
                       <Pencil size={13} /> Edit
                     </button>
-                    <button onClick={() => resetPw(u)} disabled={busyId === u.id} className={outlineBtn} data-testid={`reset-pw-${u.distributor_id}`}>
+                    {canReset && <button onClick={() => resetPw(u)} disabled={busyId === u.id} className={outlineBtn} data-testid={`reset-pw-${u.distributor_id}`}>
                       <KeyRound size={13} /> {busyId === u.id ? "…" : "Reset Password"}
-                    </button>
+                    </button>}
                     <button onClick={() => openCredit(u)} disabled={busyId === u.id} className={goldBtn} data-testid={`credit-user-${u.distributor_id}`}>
                       <Wallet size={13} /> Credit ₹
                     </button>
@@ -319,6 +357,29 @@ export default function AdminUsers() {
             <div className="mt-6 flex flex-wrap justify-end gap-2">
               <Button variant="outline" onClick={() => setEditUser(null)} className="h-11 rounded-full border-brand-50 bg-transparent px-5" data-testid="edit-user-cancel">Cancel</Button>
               <Button onClick={saveEdit} disabled={busyId === editUser.id} className="hg-btn h-11 rounded-full px-6" data-testid="edit-user-save">{busyId === editUser.id ? "Saving…" : "Save"}</Button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+      {resetTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm" data-testid="reset-pw-modal">
+          <motion.div initial={{ opacity: 0, scale: 0.96, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ duration: 0.25 }}
+            className="hg-glass w-full max-w-sm rounded-3xl p-5 sm:p-6">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="font-display text-lg font-semibold text-ink">Reset password</h3>
+              <button onClick={() => setResetTarget(null)} aria-label="Close" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-muted2 transition-colors hover:bg-brand-50 hover:text-ink" data-testid="reset-pw-close"><X size={18} /></button>
+            </div>
+            <p className="mt-1 break-words text-sm text-muted2">For <b className="font-mono text-hg-lavender">{resetTarget.distributor_id}</b> — {resetTarget.full_name}. All their sessions are signed out and they must choose a new password at the next sign-in.</p>
+            <label className="mt-5 block text-sm text-ink">Temporary password
+              <Input type="password" autoComplete="new-password" value={resetForm.temporary_password} onChange={(e) => setResetForm((f) => ({ ...f, temporary_password: e.target.value }))} className="mt-1.5" data-testid="reset-pw-temp" />
+              <span className="mt-1 block text-xs text-muted2">At least 10 characters with letters and numbers. You give it to the member; HOME GENIES never shows it again.</span>
+            </label>
+            <label className="mt-4 block text-sm text-ink">Reason
+              <Input value={resetForm.reason} onChange={(e) => setResetForm((f) => ({ ...f, reason: e.target.value }))} placeholder="Why is this reset needed?" className="mt-1.5" data-testid="reset-pw-reason" />
+            </label>
+            <div className="mt-6 flex flex-wrap justify-end gap-2">
+              <Button variant="outline" onClick={() => setResetTarget(null)} className="h-11 rounded-full border-brand-50 bg-transparent px-5" data-testid="reset-pw-cancel">Cancel</Button>
+              <Button onClick={submitReset} disabled={busyId === resetTarget.id || !tempOk || resetForm.reason.trim().length < 5} className="hg-btn h-11 rounded-full px-6" data-testid="reset-pw-submit">{busyId === resetTarget.id ? "Resetting…" : "Reset password"}</Button>
             </div>
           </motion.div>
         </div>

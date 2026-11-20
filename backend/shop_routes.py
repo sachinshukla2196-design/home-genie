@@ -1,5 +1,7 @@
 """Products, cart -> orders, and payment capture with server-side verification."""
 import os
+import re
+from datetime import datetime, timedelta, timezone
 import logging
 from decimal import Decimal, ROUND_HALF_UP
 from fastapi import APIRouter, Body, HTTPException, Request, Depends
@@ -13,7 +15,7 @@ except ImportError:  # other hosts (e.g. Vercel): same interface on the official
     from stripe_checkout import StripeCheckout, CheckoutSessionRequest, configured as _stripe_key_configured
     _STRIPE_VIA_EMERGENT = False
 
-from money import to_paise, paise_to_float, mul_pct, mul_ratio, paise_of
+from money import to_paise, paise_to_float, mul_ratio, paise_of
 from cod_rules import refundable_total_paise, require_confirmer_role, refuse_own_sale, parse_collection_evidence, hold_reason
 from pymongo.errors import DuplicateKeyError
 from core import (db, now_iso, new_id, get_current_user, get_settings, next_sequence, wallet_apply,
@@ -37,12 +39,31 @@ def _razorpay_client():
 STRIPE_API_KEY = os.environ.get("STRIPE_API_KEY", "sk_test_emergent")
 
 
+# ---------------- GST-inclusive pricing (Decision 1) ----------------
+def _line_gst_rate(product: dict, platform_rate) -> float:
+    """The product's own GST rate when it has a valid one (0-28 %), otherwise the platform GST setting. No rate is invented."""
+    r = product.get("gst_percent")
+    if isinstance(r, (int, float)) and not isinstance(r, bool) and 0 <= r <= 28:
+        return float(r)
+    return float(platform_rate or 0)
+
+
+def _taxable_part(inclusive_paise: int, rate: float) -> int:
+    """Taxable value inside a GST-inclusive amount: inclusive x 100 / (100 + rate), rounded half-up to the paisa."""
+    if not rate:
+        return inclusive_paise
+    return int((Decimal(inclusive_paise) * 100 / (Decimal(100) + Decimal(str(rate)))).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+
+
 # ---------------- Products ----------------
+# The public shop shows only products that can actually be bought: approved, listed, not archived (CAT-04, SEC-23).
+# Admins list every product through GET /api/admin/products instead.
+SHOP_VISIBLE = {"approval_status": {"$in": [None, "approved"]}, "is_active": True, "archived": {"$ne": True}}
+
+
 @router.get("/products")
-async def list_products(category: Optional[str] = None, active: bool = True):
-    q = {"approval_status": {"$in": [None, "approved"]}}
-    if active:
-        q["is_active"] = True
+async def list_products(category: Optional[str] = None):
+    q = dict(SHOP_VISIBLE)
     if category:
         q["category"] = category
     items = await db.products.find(q, P_PUBLIC).sort("created_at", 1).to_list(200)
@@ -51,7 +72,7 @@ async def list_products(category: Optional[str] = None, active: bool = True):
 
 @router.get("/products/{product_id}")
 async def get_product(product_id: str):
-    p = await db.products.find_one({"id": product_id, "approval_status": {"$in": [None, "approved"]}}, P_PUBLIC)
+    p = await db.products.find_one({"id": product_id, **SHOP_VISIBLE}, P_PUBLIC)
     if not p:
         raise HTTPException(status_code=404, detail="Product not found.")
     return p
@@ -95,12 +116,14 @@ async def create_order(body: CreateOrder, request: Request, user: dict = Depends
 
     line_items = []
     subtotal_p = 0   # exact integer paise; the rupee floats stored on the order are derived from these
+    gst_sum_p = 0    # GST contained in the inclusive line totals
+    inclusive_p = 0  # what the customer pays for the goods (before any COD fee)
     product_ids = [it.product_id for it in body.items]
     products = {p["id"]: p for p in await db.products.find(
         {"id": {"$in": product_ids}}, {"_id": 0}).to_list(len(product_ids) or 1)}
     for it in body.items:
         p = products.get(it.product_id)
-        if not p or not p.get("is_active") or p.get("approval_status", "approved") != "approved":
+        if not p or not p.get("is_active") or p.get("archived") or p.get("approval_status", "approved") != "approved":
             raise HTTPException(status_code=400, detail="A product in your cart is unavailable.")
         vsku, label = None, (it.variant or "").strip()
         sell = p["selling_price"]
@@ -114,8 +137,13 @@ async def create_order(body: CreateOrder, request: Request, user: dict = Depends
         elif it.variant_sku:
             raise HTTPException(status_code=400, detail=f"{p['name']} has no variants.")
         price_p = to_paise(sell)
-        total_p = price_p * it.quantity
-        subtotal_p += total_p
+        total_p = price_p * it.quantity           # Decision 1: the shelf price INCLUDES GST
+        rate = _line_gst_rate(p, gst_percent)
+        taxable_p = _taxable_part(total_p, rate)
+        line_gst_p = total_p - taxable_p
+        subtotal_p += taxable_p                   # the pre-GST (taxable) value: the base for commission and activation
+        gst_sum_p += line_gst_p
+        inclusive_p += total_p
         line_items.append({
             "product_id": p["id"], "sku": p["sku"], "name": p["name"], "name_hi": p.get("name_hi", ""),
             "image": (p.get("images") or [None])[0], "price": paise_to_float(price_p), "price_paise": price_p,
@@ -124,6 +152,12 @@ async def create_order(body: CreateOrder, request: Request, user: dict = Depends
             "total": paise_to_float(total_p), "total_paise": total_p,
             # order-time snapshot of who fulfils this line (None = platform-fulfilled)
             "vendor_id": p.get("vendor_id"), "vendor_name": p.get("vendor_name"),
+            # CAT-02 (data only): the product's own tax classification at order time. The order TOTAL still uses the
+            # platform GST setting until the owner decides whether shelf prices include GST (decision gate 1).
+            "product_gst_percent": p.get("gst_percent"), "hsn_code": p.get("hsn_code") or "",
+            # Decision 1 (GST-inclusive): the invoice breakdown of this line; total_paise = taxable_paise + gst_paise
+            "gst_rate": rate, "taxable_paise": taxable_p, "taxable": paise_to_float(taxable_p),
+            "gst_paise": line_gst_p, "gst_amount": paise_to_float(line_gst_p),
         })
 
     cod = (body.payment_method or "online").lower() == "cod"
@@ -140,8 +174,9 @@ async def create_order(body: CreateOrder, request: Request, user: dict = Depends
         if seller and seller["id"] != user["id"]:
             seller_user_id, seller_did = seller["id"], seller.get("distributor_id")
 
-    gst_p = mul_pct(subtotal_p, gst_percent)
-    total_paise = subtotal_p + gst_p + cod_fee_p
+    gst_p = gst_sum_p
+    total_paise = inclusive_p + cod_fee_p        # GST is already inside the prices; it is shown, never added on top
+    rates = sorted({li["gst_rate"] for li in line_items})
     gst_amount, grand_total, subtotal, cod_fee = paise_to_float(gst_p), paise_to_float(total_paise), paise_to_float(subtotal_p), paise_to_float(cod_fee_p)
     order_number = await next_sequence("order", "ORD", 6)
     oid = new_id()
@@ -152,9 +187,10 @@ async def create_order(body: CreateOrder, request: Request, user: dict = Depends
         "distributor_id": user.get("distributor_id"),
         "items": line_items,
         "subtotal": round(subtotal, 2),
-        "gst_percent": gst_percent,
+        "gst_percent": rates[0] if len(rates) == 1 else None,      # None when lines carry different rates
         "gst_amount": gst_amount, "gst_paise": gst_p,
-        "total": grand_total, "total_paise": total_paise, "subtotal_paise": subtotal_p, "money_version": 2,
+        "total": grand_total, "total_paise": total_paise, "subtotal_paise": subtotal_p, "money_version": 3,
+        "prices_include_gst": True, "items_total_paise": inclusive_p, "items_total": paise_to_float(inclusive_p),
         "currency": settings.get("currency", "INR"),
         "address": body.address.model_dump(),
         "seller_user_id": seller_user_id,
@@ -252,7 +288,7 @@ async def cod_collected(order_id: str, request: Request, user: dict = Depends(ge
 
     claim = await db.orders.update_one(
         {"id": order_id, "payment_status": "cod_pending"},
-        {"$set": {"payment_status": "paid", "status": "delivered",
+        {"$set": {"payment_status": "paid", "status": "delivered", "delivered_at": now_iso(),
                   "cod_collected_by": user["id"],
                   "cod_collected_by_id": user.get("distributor_id"),
                   "cod_collected_role": "admin",
@@ -441,12 +477,48 @@ async def razorpay_webhook(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid payload")
     event_id = request.headers.get("X-Razorpay-Event-Id") or event.get("id") or ""
+    # FIN-14: an event counts as handled only AFTER it was processed. A failed run leaves it "failed" so Razorpay's retry
+    # processes it again; a run that crashed mid-way is retried once its claim is older than WEBHOOK_STALE_SECONDS.
+    if event_id and not await _claim_webhook_event(event_id, event):
+        return {"status": "duplicate"}
+    try:
+        await _handle_razorpay_event(event, request)
+    except Exception:
+        if event_id:
+            await db.webhook_events.update_one({"event_id": event_id}, {"$set": {"status": "failed", "failed_at": now_iso()}})
+        raise
     if event_id:
-        seen = await db.webhook_events.find_one({"event_id": event_id})
-        if seen:
-            return {"status": "duplicate"}
-        await db.webhook_events.insert_one({"event_id": event_id, "provider": "razorpay",
-                                            "type": event.get("event"), "created_at": now_iso()})
+        await db.webhook_events.update_one({"event_id": event_id}, {"$set": {"status": "processed", "processed_at": now_iso()}})
+    return {"status": "ok"}
+
+
+WEBHOOK_STALE_SECONDS = 120
+
+
+async def _claim_webhook_event(event_id: str, event: dict) -> bool:
+    """True when THIS delivery should process the event. Processed events (and events recorded by the earlier version, which
+    had no status) are never processed again; a "failed" event, or a "processing" claim older than WEBHOOK_STALE_SECONDS
+    (a crashed run), is taken over with a compare-and-set so only one delivery wins."""
+    now = datetime.now(timezone.utc)
+    ev = await db.webhook_events.find_one({"event_id": event_id})
+    if not ev:
+        try:
+            await db.webhook_events.insert_one({"event_id": event_id, "provider": "razorpay", "type": event.get("event"),
+                                                "status": "processing", "claimed_at": now.isoformat(), "created_at": now.isoformat()})
+            return True
+        except DuplicateKeyError:
+            return False
+    status, claimed_at = ev.get("status"), ev.get("claimed_at") or ""
+    if status in (None, "processed"):
+        return False
+    if status == "processing" and claimed_at >= (now - timedelta(seconds=WEBHOOK_STALE_SECONDS)).isoformat():
+        return False
+    r = await db.webhook_events.update_one({"event_id": event_id, "status": status, "claimed_at": ev.get("claimed_at")},
+                                           {"$set": {"status": "processing", "claimed_at": now.isoformat()}})
+    return r.modified_count == 1
+
+
+async def _handle_razorpay_event(event: dict, request: Request) -> None:
     etype = event.get("event", "")
     if etype in ("payment.captured", "order.paid"):
         entity = (event.get("payload", {}).get("payment", {}) or {}).get("entity", {}) or {}
@@ -458,7 +530,6 @@ async def razorpay_webhook(request: Request):
             tx = await db.payment_transactions.find_one({"session_id": rzp_order_id})
             if tx:
                 await _process_paid_order(rzp_order_id, request)
-    return {"status": "ok"}
 
 
 HG_COMMISSION_TYPES = ["COMMISSION_DIRECT", "COMMISSION_REFERRAL", "COMMISSION_TEAM"]
@@ -605,6 +676,29 @@ def is_payable_online(order: dict) -> bool:
     return order.get("payment_method") != "cod" and order.get("payment_status") in PAYABLE_PAYMENT_STATES
 
 
+MANUAL_SESSION_PREFIXES = ("manual_", "admin_")
+
+
+async def _flag_unapplied_capture(order: dict, tx: dict, reason: str) -> None:
+    """A gateway reported money captured for an order that is already paid by ANOTHER payment (two tabs, card + Razorpay, ...)
+    or that can no longer take a payment (refunded, COD). The money is NOT applied to the order; it is recorded once as
+    refund-due so finance can return it (FIN-06). Idempotent per payment session."""
+    sid = tx["session_id"]
+    if sid.startswith(MANUAL_SESSION_PREFIXES):
+        return                                      # manual confirmations never capture money by themselves
+    entry = {"session_id": sid, "provider": tx.get("provider") or "stripe", "amount": tx.get("amount"),
+             "reason": reason, "status": "refund_due", "detected_at": now_iso()}
+    r = await db.orders.update_one({"id": order["id"], "duplicate_payments.session_id": {"$ne": sid}},
+                                   {"$push": {"duplicate_payments": entry}, "$set": {"has_duplicate_payment": True}})
+    await db.payment_transactions.update_one({"session_id": sid}, {"$set": {
+        "status": "completed", "payment_status": "paid", "applied_to_order": False, "duplicate_capture": True,
+        "refund_status": "refund_due", "updated_at": now_iso()}})
+    if r.modified_count:
+        logger.warning("payment %s for order %s not applied (%s); flagged refund_due", sid, order["id"], reason)
+        await log_audit(None, "payment_duplicate_capture", "order", order["id"],
+                        new_value={"session_id": sid, "reason": reason, "amount": tx.get("amount")})
+
+
 async def _process_paid_order(session_id: str, request: Request = None):
     """Idempotent: mark order paid, generate the invoice and credit pending sale commissions."""
     tx = await db.payment_transactions.find_one({"session_id": session_id})
@@ -618,16 +712,21 @@ async def _process_paid_order(session_id: str, request: Request = None):
         order = await db.orders.find_one({"id": tx["order_id"]})
         if not order:
             return
+        paid_by = order.get("paid_session_id")
         if order.get("payment_status") == "paid":
-            return  # already processed
+            if paid_by and paid_by != session_id:
+                await _flag_unapplied_capture(order, tx, "order_already_paid")
+            return  # already processed (the same payment reported again is a no-op)
         if not is_payable_online(order):
             logger.warning("payment for order %s ignored: payment_status=%s method=%s is not payable", order["id"],
                            order.get("payment_status"), order.get("payment_method"))
+            if paid_by != session_id:
+                await _flag_unapplied_capture(order, tx, f"order_not_payable:{order.get('payment_status')}")
             return  # refunded / partially refunded / COD: a payment call can never re-open or bypass it
         # A payment for an already-cancelled order must never silently re-open it (its stock may have been returned).
         cancelled = order.get("status") == "cancelled"
         revivable = cancelled and order.get("cancel_reason") == EXPIRY_REASON   # expired by the 15-minute rule
-        paid_set = {"payment_status": "paid", "paid_at": now_iso(), "updated_at": now_iso()}
+        paid_set = {"payment_status": "paid", "paid_at": now_iso(), "updated_at": now_iso(), "paid_session_id": session_id}
         if not cancelled:      # the invoice is written atomically with the claim (a lost claim only leaves a numbering gap)
             paid_set.update({"status": "processing", "invoice_number": await next_sequence("invoice", "INV", 6)})
         claim = await db.orders.update_one({"id": order["id"], "payment_status": {"$in": list(PAYABLE_PAYMENT_STATES)},
@@ -722,7 +821,7 @@ async def upi_claim(body: UpiClaim, request: Request, user: dict = Depends(get_c
         raise HTTPException(status_code=409, detail="This order cannot take a UPI payment (cash on delivery, or already refunded).")
     claimed = await db.orders.update_one({"id": order["id"], "payment_status": {"$in": list(PAYABLE_PAYMENT_STATES)},
                                           "payment_method": {"$ne": "cod"}}, {"$set": {
-        "payment_method": "upi_manual", "payment_status": "claimed",
+        "payment_method": "upi_manual", "payment_status": "claimed", "claimed_at": now_iso(),
         "upi_reference": body.reference, "updated_at": now_iso()}})
     if claimed.modified_count != 1:
         raise HTTPException(status_code=409, detail="This order changed just now. Please refresh.")
@@ -731,14 +830,54 @@ async def upi_claim(body: UpiClaim, request: Request, user: dict = Depends(get_c
     return {"message": "Payment submitted. Our team will verify it shortly.", "order_id": order["id"]}
 
 
+FINANCE_CONFIRM_ROLES = ("super_admin", "accounts_admin")
+
+
+async def require_finance_admin(admin: dict = Depends(require_admin)) -> dict:
+    """Decision 4: confirming, recording or rejecting a manual / UPI payment is a finance action."""
+    if admin.get("role") not in FINANCE_CONFIRM_ROLES:
+        raise HTTPException(status_code=403, detail="Only a finance administrator can confirm or reject payments.")
+    return admin
+
+
 class ManualPayBody(BaseModel):
     distributor_id: str
     reference: str
+    amount: float = Field(gt=0)        # the amount actually received; must equal the order total exactly (FIN-01)
     note: str = ""
 
 
+def _norm_reference(ref: str) -> str:
+    return re.sub(r"\s+", "", ref or "").upper()
+
+
+def _order_total_paise(order: dict) -> int:
+    return int(order["total_paise"]) if order.get("total_paise") is not None else to_paise(order.get("total") or 0)
+
+
+def _check_amount(order: dict, amount) -> None:
+    if to_paise(amount) != _order_total_paise(order):
+        raise HTTPException(status_code=400, detail=f"The amount received must equal the order total of ₹{paise_to_float(_order_total_paise(order)):.2f}.")
+
+
+async def _reserve_payment_reference(ref: str, order: dict, admin: dict, provider: str) -> str:
+    """One bank/UPI reference can confirm ONE order only (FIN-01). The reference is the document _id, so uniqueness holds
+    without any extra index. Re-confirming the same order with the same reference is idempotent."""
+    key = _norm_reference(ref)
+    if not re.fullmatch(r"[A-Z0-9][A-Z0-9/_.-]{5,39}", key):
+        raise HTTPException(status_code=400, detail="Enter the bank / UPI reference (UTR or transaction id, 6 to 40 letters or digits).")
+    try:
+        await db.payment_references.insert_one({"_id": key, "order_id": order["id"], "provider": provider,
+                                                "recorded_by": admin["id"], "created_at": now_iso()})
+    except DuplicateKeyError:
+        used = await db.payment_references.find_one({"_id": key})
+        if (used or {}).get("order_id") != order["id"]:
+            raise HTTPException(status_code=409, detail="This payment reference was already used to confirm another order.")
+    return key
+
+
 @router.post("/admin/payments/manual")
-async def manual_payment_by_distributor(body: ManualPayBody, request: Request, admin: dict = Depends(require_admin)):
+async def manual_payment_by_distributor(body: ManualPayBody, request: Request, admin: dict = Depends(require_finance_admin)):
     """ADMIN/MANUAL payment recorded against an existing HomeGenie ID. Never creates a user; no duplicates."""
     did = (body.distributor_id or "").strip().upper()
     ref = (body.reference or "").strip()
@@ -755,12 +894,14 @@ async def manual_payment_by_distributor(body: ManualPayBody, request: Request, a
         raise HTTPException(status_code=404, detail="This member has no pending order to mark as paid.")
     if order.get("payment_status") == "paid":
         return {"message": "This member's latest order is already paid.", "order_id": order["id"]}
+    _check_amount(order, body.amount)
+    ref = await _reserve_payment_reference(ref, order, admin, "admin_manual")
     prev = order.get("payment_status")
     sid = f"admin_{order['id']}"
     if not await db.payment_transactions.find_one({"session_id": sid}):
         await db.payment_transactions.insert_one({
             "id": new_id(), "session_id": sid, "order_id": order["id"], "user_id": user["id"],
-            "amount": float(order["total"]), "currency": order.get("currency", "INR"),
+            "amount": float(order["total"]), "amount_received": float(body.amount), "currency": order.get("currency", "INR"),
             "provider": "admin_manual", "reference": ref, "note": (body.note or "").strip(),
             "recorded_by": admin["id"], "status": "manual", "payment_status": "paid",
             "created_at": now_iso(), "updated_at": now_iso()})
@@ -777,10 +918,11 @@ async def manual_payment_by_distributor(body: ManualPayBody, request: Request, a
 
 class UpiConfirm(BaseModel):
     reference: str = ""
+    amount: float = Field(gt=0)        # the amount seen in the bank statement; must equal the order total exactly (FIN-01)
 
 
 @router.put("/admin/payments/upi-confirm/{order_id}")
-async def upi_confirm(order_id: str, body: UpiConfirm, request: Request, admin: dict = Depends(require_admin)):
+async def upi_confirm(order_id: str, body: UpiConfirm, request: Request, admin: dict = Depends(require_finance_admin)):
     ref = (body.reference or "").strip()
     if not ref:
         raise HTTPException(status_code=400, detail="Payment reference ID (UTR / txn id) is required.")
@@ -791,14 +933,80 @@ async def upi_confirm(order_id: str, body: UpiConfirm, request: Request, admin: 
         return {"message": "Order already paid."}
     if not is_payable_online(order):
         raise HTTPException(status_code=409, detail="This order cannot be confirmed as paid here (cash on delivery, or already refunded).")
+    _check_amount(order, body.amount)
+    ref = await _reserve_payment_reference(ref, order, admin, "upi_manual")
     await db.orders.update_one({"id": order_id}, {"$set": {
         "payment_reference": ref, "upi_reference": ref, "updated_at": now_iso()}})
     sid = f"manual_{order_id}"
     if not await db.payment_transactions.find_one({"session_id": sid}):
         await db.payment_transactions.insert_one({
             "id": new_id(), "session_id": sid, "order_id": order_id, "user_id": order["user_id"],
-            "amount": order["total"], "currency": order.get("currency", "INR"), "reference": ref,
+            "amount": order["total"], "amount_received": float(body.amount), "currency": order.get("currency", "INR"),
+            "reference": ref, "provider": "upi_manual", "recorded_by": admin["id"],
             "status": "manual", "payment_status": "paid", "created_at": now_iso(), "updated_at": now_iso()})
     await _process_paid_order(sid, request)  # idempotent: invoice + pending commissions
-    await log_audit(admin, "upi_payment_confirmed", "order", order_id, new_value={"reference": ref}, request=request)
-    return {"message": "Payment confirmed and account activated.", "reference": ref}
+    if (await db.orders.find_one({"id": order_id}, {"_id": 0, "payment_status": 1}) or {}).get("payment_status") != "paid":
+        # the claim expired (or the order changed) while this confirmation ran: nothing was marked paid
+        raise HTTPException(status_code=409, detail="This order could not be confirmed: its UPI claim expired or the order changed. "
+                                                    "If the money was received, refund it to the customer.")
+    await log_audit(admin, "upi_payment_confirmed", "order", order_id,
+                    new_value={"reference": ref, "amount": float(body.amount)}, request=request)
+    return {"message": "Payment confirmed.", "reference": ref}
+
+
+# ---------------- Duplicate captures (FIN-06): listing and recording their refunds ----------------
+@router.get("/admin/payments/duplicates")
+async def list_duplicate_payments(status: str = "refund_due", admin: dict = Depends(require_finance_admin)):
+    rows = await db.orders.find({"duplicate_payments.status": status}, {"_id": 0, "id": 1, "order_number": 1, "user_id": 1,
+                                                                        "duplicate_payments": 1}).sort("updated_at", -1).to_list(500)
+    return {"items": [{"order_id": o["id"], "order_number": o.get("order_number"), **d}
+                      for o in rows for d in o.get("duplicate_payments", []) if d.get("status") == status]}
+
+
+class DuplicateRefundIn(BaseModel):
+    session_id: str
+    reference: str = Field(min_length=6, max_length=60)
+    note: str = Field(default="", max_length=300)
+
+
+@router.post("/admin/payments/duplicates/{order_id}/refunded")
+async def mark_duplicate_refunded(order_id: str, body: DuplicateRefundIn, request: Request, admin: dict = Depends(require_finance_admin)):
+    """Records that the extra captured payment was returned to the customer through the gateway. Lifts the payout hold."""
+    r = await db.orders.update_one(
+        {"id": order_id, "duplicate_payments": {"$elemMatch": {"session_id": body.session_id, "status": "refund_due"}}},
+        {"$set": {"duplicate_payments.$.status": "refunded", "duplicate_payments.$.refund_reference": body.reference.strip(),
+                  "duplicate_payments.$.refunded_by": admin["id"], "duplicate_payments.$.refunded_at": now_iso()}})
+    if not r.modified_count:
+        raise HTTPException(status_code=409, detail="No refund-due duplicate payment with this session on this order.")
+    await db.payment_transactions.update_one({"session_id": body.session_id}, {"$set": {"refund_status": "refunded"}})
+    await log_audit(admin, "duplicate_payment_refunded", "order", order_id,
+                    new_value={"session_id": body.session_id, "reference": body.reference.strip(), "note": body.note.strip()}, request=request)
+    return {"ok": True}
+
+
+class UpiReject(BaseModel):
+    reason: str = Field(min_length=5, max_length=300)
+
+
+@router.put("/admin/payments/upi-reject/{order_id}")
+async def upi_reject(order_id: str, body: UpiReject, request: Request, admin: dict = Depends(require_finance_admin)):
+    """FIN-08: the admin could not find the customer's UPI payment. The claim is withdrawn and the order goes back to an
+    ordinary unpaid online order, so the normal unpaid-order expiry releases its stock (or the customer pays properly).
+    Nothing is deleted; the rejected claim stays on the order for the record."""
+    order = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found.")
+    if order.get("payment_status") != "claimed":
+        raise HTTPException(status_code=409, detail="Only a submitted (unverified) UPI payment can be rejected.")
+    entry = {"reference": order.get("upi_reference"), "reason": body.reason.strip(), "rejected_by": admin["id"], "rejected_at": now_iso()}
+    r = await db.orders.update_one({"id": order_id, "payment_status": "claimed"},
+                                   {"$set": {"payment_status": "pending", "payment_method": "online", "upi_reference": None,
+                                             "updated_at": now_iso()},
+                                    "$push": {"rejected_upi_claims": entry}})
+    if not r.modified_count:
+        raise HTTPException(status_code=409, detail="This order changed just now. Please refresh.")
+    await create_notification(order["user_id"], "payment", "UPI payment not found",
+                              f"We could not verify your UPI payment for order {order.get('order_number')}: {body.reason.strip()}. "
+                              "Please pay again or contact support.")
+    await log_audit(admin, "upi_payment_rejected", "order", order_id, new_value=entry, request=request)
+    return {"ok": True, "payment_status": "pending"}

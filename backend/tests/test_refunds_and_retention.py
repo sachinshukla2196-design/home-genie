@@ -79,7 +79,8 @@ def _order(c, tree, payment_status="paid"):
     order = {"id": oid, "order_number": "ORD-" + oid[:6].upper(), "user_id": tree["buyer"]["id"],
              "seller_user_id": tree["seller"]["id"], "payment_status": payment_status,
              "subtotal": SUBTOTAL_P / 100, "subtotal_paise": SUBTOTAL_P, "total": TOTAL_P / 100, "total_paise": TOTAL_P,
-             "refunded_paise": 0, "refunded_amount": 0.0, "fulfilments": [], "created_at": now_iso()}
+             "refunded_paise": 0, "refunded_amount": 0.0, "fulfilments": [], "created_at": now_iso(),
+             "status": "delivered", "delivered_at": now_iso()}    # decision 2: the release clock starts at delivery
     _run(c, lambda: db.orders.insert_one(dict(order)))
     return order
 
@@ -259,6 +260,7 @@ def test_a_stale_refund_is_recomputed_after_the_commission_was_released(c):
 # ============================================================ 2 (cont.). zero-day and default schedules, end to end
 def test_zero_day_schedule_is_released_at_once_and_still_respects_refunds(c):
     _run(c, lambda: db.business_settings.update_one({"id": "business_settings"}, {"$set": {"return_window_days": 0}}))
+    _run(c, lambda: db.returns_policy.update_one({"id": "returns_policy"}, {"$set": {"window_days": 0}}, upsert=True))   # decision 2: both windows
     try:
         t = _tree(c)
         order = _order(c, t)
@@ -277,6 +279,7 @@ def test_zero_day_schedule_is_released_at_once_and_still_respects_refunds(c):
         assert _wallet(c, refunded["seller"]["id"])["available_balance_paise"] == 0
         _assert_reconciles(c)
     finally:
+        _run(c, lambda: db.returns_policy.update_one({"id": "returns_policy"}, {"$set": {"window_days": 7}}))
         _run(c, lambda: db.business_settings.update_one({"id": "business_settings"}, {"$set": {"return_window_days": 7}}))
 
 

@@ -9,7 +9,7 @@ import httpx
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, HTTPException, Request, Depends
 from pydantic import BaseModel, EmailStr, Field
-from typing import Optional
+from typing import Literal, Optional
 
 from core import (db, now_iso, new_id, hash_password, verify_password, create_token,
                   clean_user, get_current_user, next_distributor_id, get_or_create_wallet,
@@ -22,6 +22,13 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 logger = logging.getLogger("homegenies")
 
 ADMIN_ROLES = {"super_admin", "admin", "accounts_admin", "support_admin"}
+ADMIN_USE_ADMIN_LOGIN = "Administrators sign in through the admin login page."
+INACTIVE_STATUSES = ("blocked", "suspended", "deleted")
+
+
+def _inactive(user: dict) -> bool:
+    """Blocked, suspended (e.g. vendor staff whose access was withdrawn) or deactivated: no sign-in path issues a token."""
+    return bool(user.get("blocked")) or user.get("account_status") in INACTIVE_STATUSES or bool(user.get("deleted_at"))
 
 
 class SendOtp(BaseModel):
@@ -85,7 +92,10 @@ async def _find_referrer(sid_raw: str) -> tuple:
 
 @router.post("/send-otp")
 async def send_otp(body: SendOtp, request: Request):
-    """Registration mobile OTP via Twilio SMS. Fails safe (503) if SMS is not configured."""
+    """Registration mobile OTP via Twilio SMS. Fails safe (503) if SMS is not configured. Rate-limited per client IP on top of
+    the per-number cooldown, so the endpoint cannot be used to pump SMS to many numbers."""
+    from core import rate_limit, client_ip
+    await rate_limit("otp_send_ip", client_ip(request))
     email = body.email.lower().strip()
     mobile = body.mobile.strip()
     if await db.users.find_one({"email": email}):
@@ -111,7 +121,50 @@ class RegRequestBody(BaseModel):
     pincode: str = ""
     sponsor_id: str = ""
     aadhaar_number: str = ""
-    google_verified: bool = False
+    google_verified: bool = False      # only honoured together with a valid google_signup_token (SEC-05)
+    google_signup_token: str = ""      # issued by /auth/google/session after the SERVER verified the Google account
+    otp: str = ""                      # code sent to the mobile by /auth/send-otp; required whenever SMS is available
+    account_type: Literal["homegenie", "customer"] = "homegenie"   # decision 5: shop as a customer, or join as a HomeGenie
+
+
+GOOGLE_SIGNUP_MINUTES = 20
+
+
+def _google_signup_token(email: str) -> str:
+    """Proof that the server itself verified this Google email (SEC-05). Short-lived and bound to the email."""
+    import jwt as _jwt
+    from core import JWT_SECRET, JWT_ALGO
+    now = datetime.now(timezone.utc)
+    return _jwt.encode({"type": "google_signup", "email": email, "iat": now, "exp": now + timedelta(minutes=GOOGLE_SIGNUP_MINUTES)},
+                       JWT_SECRET, algorithm=JWT_ALGO)
+
+
+def _google_signup_email(token: str) -> str:
+    import jwt as _jwt
+    from core import JWT_SECRET, JWT_ALGO
+    try:
+        data = _jwt.decode(token or "", JWT_SECRET, algorithms=[JWT_ALGO])
+    except _jwt.InvalidTokenError:
+        return ""
+    return data.get("email", "") if data.get("type") == "google_signup" else ""
+
+
+class RegisterOtpBody(BaseModel):
+    mobile: str
+
+
+@router.post("/register-request/send-otp")
+async def register_request_send_otp(body: RegisterOtpBody, request: Request):
+    """SEC-05: sends the sign-up code to the mobile being registered. Rate-limited per IP and per number (cooldown)."""
+    from core import rate_limit, client_ip
+    await rate_limit("otp_send_ip", client_ip(request))
+    mobile = (body.mobile or "").strip()
+    if not _valid_mobile(mobile):
+        raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number.")
+    if await db.users.find_one({"mobile": mobile}, {"_id": 1}):
+        raise HTTPException(status_code=400, detail="An account already exists for this mobile number. Please log in.")
+    await otp_create(mobile, "register")
+    return {"message": "Code sent to your mobile."}
 
 
 @router.post("/register-request")
@@ -126,6 +179,9 @@ async def register_request(body: RegRequestBody, request: Request):
     if email and not _valid_email(email):
         raise HTTPException(status_code=400, detail="Enter a valid email address, or leave it blank.")
     if body.google_verified:
+        # SEC-05: the browser's word is not enough. The token proves the server verified THIS email with Google.
+        if not email or _google_signup_email(body.google_signup_token) != email:
+            raise HTTPException(status_code=400, detail="Your Google sign-up has expired or does not match. Please continue with Google again.")
         if not email:
             raise HTTPException(status_code=400, detail="Google sign-up requires an email.")
         pw_hash = hash_password(new_id() + new_id())  # Google users sign in via Google; random placeholder
@@ -143,7 +199,8 @@ async def register_request(body: RegRequestBody, request: Request):
         raise HTTPException(status_code=400, detail="State, City and Pincode are required.")
     # HOME GENIES: a referral is OPTIONAL. Anyone may register and shop; the
     # HomeGenie selling role is granted by admin approval, not by a sponsor.
-    await _find_referrer(body.sponsor_id)
+    if body.account_type != "customer":            # a customer has no sponsor; a code they happen to send is ignored
+        await _find_referrer(body.sponsor_id)
     if await db.users.find_one({"mobile": mobile}):
         raise HTTPException(status_code=400, detail="An account already exists for this mobile number.")
     if email and await db.users.find_one({"email": email}):
@@ -152,11 +209,20 @@ async def register_request(body: RegRequestBody, request: Request):
         raise HTTPException(status_code=400, detail="A registration request for this mobile is already pending admin approval.")
     if email and await db.registration_requests.find_one({"email": email, "status": "pending"}):
         raise HTTPException(status_code=400, detail="A registration request for this email is already pending admin approval.")
+    # SEC-05: whenever SMS works, the mobile number must be proven with a code before an account is created, so nobody can
+    # register (and so squat or pre-hijack) somebody else's number. Without SMS the old flow continues, mobile unverified.
+    from providers import sms_available
+    mobile_proven = False
+    if sms_available():
+        if not (body.otp or "").strip():
+            raise HTTPException(status_code=400, detail="Enter the code sent to your mobile number.")
+        await otp_verify(mobile, "register", body.otp.strip())
+        mobile_proven = True
     doc = {
         "id": new_id(), "full_name": body.full_name.strip(), "mobile": mobile,
         "email": email or None,  # blank is stored as null everywhere, so optional e-mail is not an empty string
         "password_hash": pw_hash,
-        "email_verified": bool(body.google_verified),
+        "email_verified": bool(body.google_verified), "mobile_verified": mobile_proven, "account_type": body.account_type,
         "google_linked": bool(body.google_verified),
         "address": body.address.strip(), "state": body.state.strip(),
         "city": body.city.strip(), "pincode": body.pincode.strip(),
@@ -305,10 +371,13 @@ async def login(body: LoginBody, request: Request):
         await db.login_attempts.update_one({"identifier": ident},
                                            {"$inc": {"count": 1}, "$set": {"last": now_iso()}}, upsert=True)
         raise HTTPException(status_code=401, detail="Invalid credentials. Use your HomeGenie ID / email / mobile and password.")
-    if user.get("blocked"):
+    if _inactive(user):
         raise HTTPException(status_code=403, detail="Your account has been blocked. Please contact the admin.")
     if not_activated(user):
         raise HTTPException(status_code=403, detail=NOT_ACTIVATED_MSG)
+    if user.get("role") in ADMIN_ROLES:
+        # SEC-11: administrators sign in only through the admin login (its own lockout and rate limits).
+        raise HTTPException(status_code=403, detail=ADMIN_USE_ADMIN_LOGIN)
 
     await db.login_attempts.delete_one({"identifier": ident})
     await log_audit(clean_user(user), "login", "user", user["id"], request=request)
@@ -352,11 +421,19 @@ async def google_session(body: GoogleSessionBody, request: Request):
     user = await db.users.find_one({"email": email})
     if not user:
         # No account yet -> tell the frontend to start a Google-prefilled registration request.
-        return {"mode": "register", "email": email, "name": (data.get("name") or "").strip()}
-    if user.get("blocked"):
+        return {"mode": "register", "email": email, "name": (data.get("name") or "").strip(),
+                "google_signup_token": _google_signup_token(email)}
+    if _inactive(user):
         raise HTTPException(status_code=403, detail="Your account has been blocked. Please contact the admin.")
     if not_activated(user):
         raise HTTPException(status_code=403, detail=NOT_ACTIVATED_MSG)
+    if user.get("role") in ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail=ADMIN_USE_ADMIN_LOGIN)       # SEC-11
+    if not (user.get("google_linked") or user.get("email_verified")):
+        # SEC-05: an account whose email was never confirmed may have been registered by someone else with this address.
+        # Google proves the visitor owns the email, not that they own THIS account, so it is not linked automatically.
+        raise HTTPException(status_code=409, detail="An account uses this email but it was never confirmed with Google. "
+                                                    "Sign in with your mobile and password instead.")
 
     await db.users.update_one({"id": user["id"]},
                               {"$set": {"google_linked": True, "email_verified": True, "updated_at": now_iso()}})
@@ -447,7 +524,9 @@ async def admin_login(body: AdminLoginBody, request: Request):
     await rate_limit("admin_login_ip", client_ip(request))
     uname = (body.username or "").strip()
     ukey = uname.lower()
-    ident = f"admin:{ukey}"
+    # SEC-10: the lockout counts failures per (client IP, username). Failed guesses from elsewhere can no longer lock the
+    # real administrator out; the per-IP rate limit above still caps guessing from any one place.
+    ident = f"admin:{client_ip(request)}:{ukey}"
     la = await db.login_attempts.find_one({"identifier": ident})
     if la and la.get("count", 0) >= 5:
         try:
@@ -476,7 +555,11 @@ async def admin_login(body: AdminLoginBody, request: Request):
 
 @router.get("/me")
 async def me(user: dict = Depends(get_current_user)):
-    return clean_user(user)
+    out = clean_user(user)
+    if user.get("must_change_password"):
+        from governance_routes import forced_change_needs_otp
+        out["password_change_otp_required"] = forced_change_needs_otp(user)
+    return out
 
 
 class PhotoBody(BaseModel):
@@ -526,6 +609,12 @@ class MobileOtpBody(BaseModel):
     otp: str
 
 
+class ChangeMobileVerifyBody(BaseModel):
+    mobile: str
+    otp: str                 # code sent to the NEW mobile (proves possession of it)
+    current_otp: str = ""    # code sent to the CURRENT, trusted mobile (proves the account holder approves the change)
+
+
 class EmailBody(BaseModel):
     email: EmailStr
 
@@ -542,8 +631,7 @@ LOGIN_OTP_INVALID = "The OTP is invalid or has expired. Please request a new one
 
 def _eligible_for_login_otp(user: Optional[dict]) -> bool:
     """Only ordinary, unblocked accounts can sign in with a mobile OTP. Admins use the secure admin login."""
-    return bool(user) and user.get("role") not in ADMIN_ROLES and not user.get("blocked") \
-        and user.get("account_status") != "blocked" and not not_activated(user)
+    return bool(user) and user.get("role") not in ADMIN_ROLES and not _inactive(user) and not not_activated(user)
 
 
 @router.post("/login-otp/send")
@@ -591,6 +679,67 @@ class ForgotRequestBody(BaseModel):
     identifier: str
 
 
+class ForgotOtpSendBody(BaseModel):
+    mobile: str
+
+
+class ForgotOtpResetBody(BaseModel):
+    mobile: str
+    otp: str
+    password: str = Field(min_length=8, max_length=128)
+
+
+def _eligible_for_otp_reset(user: Optional[dict]) -> bool:
+    """Ordinary, usable accounts only. Admins recover through the environment credential / super admin; not-activated
+    vendor owners only through their invitation; blocked and deactivated accounts not at all."""
+    return bool(user) and user.get("role") not in ADMIN_ROLES and not user.get("blocked") \
+        and user.get("account_status") not in ("blocked", "deleted") and not user.get("deleted_at") and not not_activated(user)
+
+
+@router.post("/forgot/otp/send")
+async def forgot_otp_send(body: ForgotOtpSendBody, request: Request):
+    """Self-service recovery: a single-use code goes to the account's registered (trusted) mobile. The answer is the same
+    whether or not the number is registered, so it cannot be used to discover accounts."""
+    from core import rate_limit, client_ip
+    await rate_limit("forgot_password", client_ip(request))
+    mobile = (body.mobile or "").strip()
+    user = await db.users.find_one({"mobile": mobile}) if _valid_mobile(mobile) else None
+    if _eligible_for_otp_reset(user):
+        try:
+            await otp_create(mobile, "reset")
+        except HTTPException as e:
+            if e.status_code == 503:
+                raise                       # SMS not available: say so, the member can still use the admin request
+            if e.status_code != 429:
+                raise
+    return {"message": "If this number is registered, a code has been sent to it."}
+
+
+@router.post("/forgot/otp/reset")
+async def forgot_otp_reset(body: ForgotOtpResetBody, request: Request):
+    from core import rate_limit, client_ip
+    await rate_limit("forgot_reset", client_ip(request))
+    pw = body.password
+    if not (re.search(r"[A-Za-z]", pw) and re.search(r"\d", pw)):
+        raise HTTPException(status_code=400, detail="Use at least 8 characters with letters and numbers.")
+    mobile = (body.mobile or "").strip()
+    user = await db.users.find_one({"mobile": mobile})
+    invalid = HTTPException(status_code=400, detail="The code is invalid or has expired. Please request a new one.")
+    if not _eligible_for_otp_reset(user):
+        raise invalid
+    try:
+        await otp_verify(mobile, "reset", body.otp)
+    except HTTPException as e:
+        if e.status_code in (400, 429):
+            raise invalid
+        raise
+    await db.users.update_one({"id": user["id"]}, {"$set": {**password_update(pw), "updated_at": now_iso()}})
+    await db.password_reset_requests.update_many({"user_id": user["id"], "status": "pending"},
+        {"$set": {"status": "resolved", "resolved_at": now_iso(), "resolved_by": "self_service_otp"}})
+    await log_audit(clean_user(user), "password_reset_completed_otp", "user", user["id"], request=request)
+    return {"message": "Your password has been updated. You can log in now with the new password."}
+
+
 @router.post("/forgot/send")
 async def forgot_request(body: ForgotRequestBody, request: Request):
     """Admin-only password recovery: the user submits a request and an admin resets the
@@ -613,30 +762,54 @@ async def forgot_request(body: ForgotRequestBody, request: Request):
 
 @router.put("/change-mobile/send")
 async def change_mobile_send(body: MobileBody, user: dict = Depends(get_current_user)):
+    """Sends one code to the NEW mobile and one to the CURRENT (trusted) mobile. Both are needed to change it, so a session
+    alone (for example one opened with an admin-issued temporary password) can never move the account to another number."""
+    from core import rate_limit
+    await rate_limit("change_mobile_send", user["id"])
     new_mobile = body.mobile.strip()
     if not _valid_mobile(new_mobile):
         raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number.")
+    if new_mobile == (user.get("mobile") or ""):
+        raise HTTPException(status_code=400, detail="This is already your mobile number.")
     other = await db.users.find_one({"mobile": new_mobile})
     if other and other["id"] != user["id"]:
         raise HTTPException(status_code=400, detail="This mobile number is already attached to another account.")
+    if not user.get("mobile"):
+        raise HTTPException(status_code=409, detail="Your account has no mobile on record. Contact HOME GENIES support.")
+    await otp_create(user["mobile"], "change_current")
     await otp_create(new_mobile, "change")
-    return {"message": "OTP sent to the new mobile number."}
+    return {"message": "Codes sent to your current and your new mobile number."}
 
 
 @router.put("/change-mobile/verify")
-async def change_mobile_verify(body: MobileOtpBody, request: Request, user: dict = Depends(get_current_user)):
+async def change_mobile_verify(body: ChangeMobileVerifyBody, request: Request, user: dict = Depends(get_current_user)):
+    from core import rate_limit
+    from contact_change import mask_mobile, _notify_trusted
+    await rate_limit("change_mobile_send", user["id"])
     new_mobile = body.mobile.strip()
+    old_mobile = user.get("mobile") or ""
     other = await db.users.find_one({"mobile": new_mobile})
     if other and other["id"] != user["id"]:
         raise HTTPException(status_code=400, detail="This mobile number is already attached to another account.")
+    if not body.current_otp:
+        raise HTTPException(status_code=400, detail="Enter the code sent to your current mobile number as well.")
+    await otp_verify(old_mobile, "change_current", body.current_otp)
     await otp_verify(new_mobile, "change", body.otp)
-    await db.users.update_one({"id": user["id"]}, {"$set": {"mobile": new_mobile, "updated_at": now_iso()}})
-    await log_audit(user, "mobile_changed", "user", user["id"], request=request)
+    r = await db.users.update_one({"id": user["id"], "mobile": old_mobile},
+                                  {"$set": {"mobile": new_mobile, "mobile_verified": True, "updated_at": now_iso()}})
+    if not r.modified_count:
+        raise HTTPException(status_code=409, detail="Your mobile number changed in the meantime. Please start again.")
+    await log_audit(user, "mobile_changed", "user", user["id"], old_value={"mobile": mask_mobile(old_mobile)},
+                    new_value={"mobile": mask_mobile(new_mobile), "method": "otp_current_and_new"}, request=request)
+    await _notify_trusted({"id": user["id"], "mobile": old_mobile}, "Mobile number changed",
+                          f"Your HOME GENIES mobile number was changed to {mask_mobile(new_mobile)}. If this was not you, contact support immediately.")
     updated = await db.users.find_one({"id": user["id"]})
     return clean_user(updated)
 
 
 @router.post("/logout")
 async def logout(user: dict = Depends(get_current_user), request: Request = None):
+    from core import revoke_token_from_request
+    await revoke_token_from_request(request, user["id"])          # SEC-12: this token stops working now, not in 7 days
     await log_audit(user, "logout", "user", user["id"], request=request)
     return {"message": "Logged out"}

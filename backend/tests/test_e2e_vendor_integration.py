@@ -145,7 +145,7 @@ def test_full_vendor_lifecycle(c):
 
     # 7. staff revoked: the very next request is refused
     assert c.delete(f"/api/vendor/staff/{member}", headers=owner).status_code == 200
-    assert c.get("/api/vendor/products", headers=staff).status_code == 403
+    assert c.get("/api/vendor/products", headers=staff).status_code == 401       # SEC-16: the staff login itself is suspended
 
     # 8. orders: the owner fulfils a permitted order through each step
     order = _paid_order(vid, prod["id"], 100000)
@@ -185,6 +185,10 @@ def test_full_vendor_lifecycle(c):
     assert sum(e["amount_paise"] for e in commissions) == -1000                      # 2% of 50,000 paise
 
     # 11. settlement: request, approve by another admin, pay by a third step with a reference; no double payout
+    #     (decision 3: only orders delivered and past the return window are settleable; the test's orders are aged here)
+    long_ago = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    c.portal.call(lambda: db.orders.update_many({"fulfilments.vendor_id": vid, "payment_status": "paid"},
+                                                {"$set": {"status": "delivered", "delivered_at": long_ago}}))
     st = c.post("/api/admin/finance/settlements", headers=fin1, json={"vendor_id": vid, "amount": 100.0, "note": "Monthly"})
     assert st.status_code == 200, st.text
     sid = st.json()["id"]

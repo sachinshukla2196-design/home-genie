@@ -9,6 +9,7 @@ import { PageHeader, SectionCard } from "@/components/PageHeader";
 import { Stagger, StaggerItem, CountUp } from "@/components/motion";
 import { useI18n } from "@/context/I18nContext";
 import { API } from "@/lib/api";
+import { CommissionStatement } from "@/components/CommissionStatement";
 
 export default function Wallet() {
   const { t } = useI18n();
@@ -81,6 +82,7 @@ export default function Wallet() {
           </Stagger>
         )}
       </SectionCard>
+      <CommissionStatement />
     </div>
   );
 }

@@ -1,40 +1,20 @@
 import React, { useEffect, useState } from "react";
-import { toast } from "sonner";
-import { ScrollText, Trash2 } from "lucide-react";
+import { ScrollText } from "lucide-react";
 import { EmptyState } from "@/components/EmptyState";
 import { PageHeader } from "@/components/PageHeader";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useI18n } from "@/context/I18nContext";
-import { useAuth } from "@/context/AuthContext";
-import { API, apiError } from "@/lib/api";
+import { API } from "@/lib/api";
 
 export default function AdminAuditLogs() {
   const { t } = useI18n();
-  const { user } = useAuth();
   const [logs, setLogs] = useState(null);
-  const [busy, setBusy] = useState(false);
-  const isSuper = user?.role === "super_admin";
 
   const load = () => API.get("/admin/audit-logs").then(({ data }) => setLogs(data)).catch(() => setLogs([]));
   useEffect(() => { load(); }, []);
 
-  const clearLogs = async () => {
-    if (!window.confirm("Permanently delete ALL audit logs? This cannot be undone. A single system event will remain to record this action.")) return;
-    setBusy(true);
-    try {
-      const { data } = await API.delete("/admin/audit-logs");
-      toast.success(`Cleared ${data.deleted} audit logs`);
-      load();
-    } catch (e) { toast.error(apiError(e)); } finally { setBusy(false); }
-  };
-
-  const header = (
-    <PageHeader title={t("nav.audit")} icon={ScrollText} actions={isSuper && logs && logs.length > 0 && (
-      <button onClick={clearLogs} disabled={busy} className="inline-flex h-10 items-center gap-1.5 rounded-full border border-danger/40 px-4 text-xs font-semibold text-danger transition-colors hover:bg-danger/10 disabled:opacity-50" data-testid="clear-audit-logs-btn">
-        <Trash2 size={14} /> {busy ? "Deleting…" : "Delete All Logs"}
-      </button>
-    )} />
-  );
+  // AUD-01: audit records are append-only. Nobody can delete them, so there is no delete control.
+  const header = <PageHeader title={t("nav.audit")} icon={ScrollText} subtitle="Append-only record of administrative and security actions." />;
 
   if (!logs) return (
     <div className="space-y-5">

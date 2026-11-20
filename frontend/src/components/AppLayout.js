@@ -2,7 +2,7 @@ import React, { useEffect, useState } from "react";
 import { Link, useLocation, Outlet } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
-  LayoutDashboard, ShoppingBag, Package, Coins, Share2, Banknote, Gift, Home,
+  LayoutDashboard, ShoppingBag, Package, Coins, Share2, Banknote, Gift, Home, ShieldCheck,
   Bell, User, LogOut, ChevronLeft, ShoppingCart,
 } from "lucide-react";
 import { Logo } from "@/components/Logo";
@@ -15,11 +15,12 @@ import { API } from "@/lib/api";
 const NAV = [
   { to: "/app/dashboard", icon: LayoutDashboard, key: "nav.dashboard" },
   { to: "/app/products", icon: ShoppingBag, key: "nav.products" },
-  { to: "/app/rewards", icon: Gift, key: "nav.rewards" },
+  { to: "/app/rewards", icon: Gift, key: "nav.rewards", homegenie: true },
   { to: "/app/orders", icon: Package, key: "nav.orders" },
-  { to: "/app/wallet", icon: Coins, key: "nav.wallet" },
-  { to: "/app/withdrawals", icon: Banknote, key: "nav.withdrawals" },
-  { to: "/app/referral", icon: Share2, key: "nav.referral" },
+  { to: "/app/wallet", icon: Coins, key: "nav.wallet", homegenie: true },
+  { to: "/app/withdrawals", icon: Banknote, key: "nav.withdrawals", homegenie: true },
+  { to: "/app/kyc", icon: ShieldCheck, key: "nav.kyc", homegenie: true },
+  { to: "/app/referral", icon: Share2, key: "nav.referral", homegenie: true },
   { to: "/app/notifications", icon: Bell, key: "nav.notifications" },
   { to: "/app/profile", icon: User, key: "nav.profile" },
 ];
@@ -112,7 +113,7 @@ export function AppLayout() {
           </button>
         </div>
         <nav className="flex-1 space-y-1 overflow-y-auto p-3 no-scrollbar">
-          {NAV.map((i) => <NavItem key={i.to} item={i} />)}
+          {NAV.filter((i) => !(i.homegenie && user?.role === "customer")).map((i) => <NavItem key={i.to} item={i} />)}
         </nav>
         <div className="border-t border-brand-50 p-3">
           <button onClick={logout} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-muted2 hover:bg-danger/10 hover:text-danger transition-all" data-testid="logout-btn">

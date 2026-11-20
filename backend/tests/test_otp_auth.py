@@ -39,11 +39,11 @@ def _mongo():
     return cli, cli[os.environ.get("DB_NAME") or be.get("DB_NAME")]
 
 
-def _last_sms_otp():
+def _last_sms_otp(mobile=None):
     """The code the TEST SMS adapter recorded for the most recent OTP. The API never returns it."""
     cli, db = _mongo()
     try:
-        row = db.test_sms_outbox.find_one({}, sort=[("created_at", -1)])
+        row = db.test_sms_outbox.find_one({"mobile": mobile} if mobile else {}, sort=[("created_at", -1)])
     finally:
         cli.close()
     assert row, "no test SMS recorded (backend needs SMS_TEST_ADAPTER=true on a *_test database)"
@@ -260,7 +260,7 @@ class TestForgotPassword:
         u = register_user()
         requests.post(f"{API}/auth/forgot/send", json={"identifier": u["mobile"]}, timeout=TIMEOUT)
         r = requests.post(f"{API}/admin/users/{u['user']['id']}/reset-password",
-                          json={"password": NEW_PW}, headers=_admin_headers(), timeout=TIMEOUT)
+                          json={"temporary_password": NEW_PW, "reason": "Member asked for a reset"}, headers=_admin_headers(), timeout=TIMEOUT)
         assert r.status_code == 200, r.text[:300]
         assert _login(u["email"], NEW_PW).status_code == 200
         assert _login(u["email"], u["password"]).status_code == 401
@@ -272,19 +272,19 @@ class TestForgotPassword:
         h = {"Authorization": f"Bearer {u['token']}"}
         assert requests.get(f"{API}/auth/me", headers=h, timeout=TIMEOUT).status_code == 200
         requests.post(f"{API}/admin/users/{u['user']['id']}/reset-password",
-                      json={"password": NEW_PW}, headers=_admin_headers(), timeout=TIMEOUT)
+                      json={"temporary_password": NEW_PW, "reason": "Member asked for a reset"}, headers=_admin_headers(), timeout=TIMEOUT)
         assert requests.get(f"{API}/auth/me", headers=h, timeout=TIMEOUT).status_code == 401
 
     def test_short_admin_password_is_refused(self):
         u = register_user()
         r = requests.post(f"{API}/admin/users/{u['user']['id']}/reset-password",
-                          json={"password": "123"}, headers=_admin_headers(), timeout=TIMEOUT)
+                          json={"temporary_password": "123", "reason": "Member asked for a reset"}, headers=_admin_headers(), timeout=TIMEOUT)
         assert r.status_code == 400
 
     def test_members_cannot_reset_other_passwords(self):
         u, other = register_user(), register_user()
         r = requests.post(f"{API}/admin/users/{other['user']['id']}/reset-password",
-                          json={"password": NEW_PW}, headers={"Authorization": f"Bearer {u['token']}"}, timeout=TIMEOUT)
+                          json={"temporary_password": NEW_PW, "reason": "Member asked for a reset"}, headers={"Authorization": f"Bearer {u['token']}"}, timeout=TIMEOUT)
         assert r.status_code in (401, 403), r.text[:200]
         assert _login(other["email"], other["password"]).status_code == 200
 
@@ -297,9 +297,10 @@ class TestChangeMobile:
         new_mobile = rnd_mobile()
         r = requests.put(f"{API}/auth/change-mobile/send", json={"mobile": new_mobile}, headers=h, timeout=TIMEOUT)
         assert r.status_code == 200, r.text[:300]
-        otp = _last_sms_otp()
+        otp = _last_sms_otp(new_mobile)
+        current_otp = _last_sms_otp(u["mobile"])     # the change also needs the code sent to the CURRENT (trusted) mobile
         r = requests.put(f"{API}/auth/change-mobile/verify",
-                         json={"mobile": new_mobile, "otp": otp}, headers=h, timeout=TIMEOUT)
+                         json={"mobile": new_mobile, "otp": otp, "current_otp": current_otp}, headers=h, timeout=TIMEOUT)
         assert r.status_code == 200, r.text[:300]
         assert r.json()["mobile"] == new_mobile
         # persisted

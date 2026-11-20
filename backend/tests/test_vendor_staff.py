@@ -192,7 +192,8 @@ def test_staff_cannot_manage_the_team_profile_bank_or_documents(c):
 def test_admins_and_customers_are_not_vendor_staff_and_keep_their_own_access(c):
     assert c.get("/api/vendor/staff", headers=_hdr(S["cust"]["id"])).status_code == 403
     assert c.get("/api/vendor/staff", headers=_hdr(S["adm"]["id"])).status_code == 403
-    assert c.post("/api/auth/login", json={"email": "9100001001", "password": PW}).status_code == 200      # admin login unchanged
+    # SEC-11 (Batch 4): administrators no longer sign in through the member login; they use /api/auth/admin-login.
+    assert c.post("/api/auth/login", json={"email": "9100001001", "password": PW}).status_code == 403
     assert c.post("/api/auth/login", json={"email": "9100001002", "password": PW}).status_code == 200      # customer login unchanged
 
 
@@ -201,11 +202,11 @@ def test_suspension_and_revocation_stop_access_on_the_next_request(c):
     h, mid = _joined(c, "9100001601", role="order_manager")
     assert c.get("/api/vendor/orders", headers=h).status_code == 200
     assert c.post(f"/api/vendor/staff/{mid}/suspend", headers=_hdr(S["ua"]["id"])).status_code == 200
-    assert c.get("/api/vendor/orders", headers=h).status_code == 403                         # same token, now refused
+    assert c.get("/api/vendor/orders", headers=h).status_code == 401                         # same token, now refused (SEC-16: the whole login is suspended)
     assert c.post(f"/api/vendor/staff/{mid}/reactivate", headers=_hdr(S["ua"]["id"])).status_code == 200
     assert c.get("/api/vendor/orders", headers=h).status_code == 200
     assert c.delete(f"/api/vendor/staff/{mid}", headers=_hdr(S["ua"]["id"])).status_code == 200
-    assert c.get("/api/vendor/orders", headers=h).status_code == 403
+    assert c.get("/api/vendor/orders", headers=h).status_code == 401
     assert c.post(f"/api/vendor/staff/{mid}/reactivate", headers=_hdr(S["ua"]["id"])).status_code == 400   # revoke is final
     actions = {a["action"] for a in c.portal.call(lambda: db.audit_logs.find({"entity_id": mid}, {"_id": 0, "action": 1}).to_list(20))}
     assert {"vendor_staff_suspended", "vendor_staff_reactivated", "vendor_staff_revoked"} <= actions

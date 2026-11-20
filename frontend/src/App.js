@@ -1,4 +1,6 @@
 import "@/App.css";
+import { useEffect } from "react";
+import { captureSellerRef } from "@/lib/sellerRef";
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import { Toaster } from "sonner";
 import { I18nProvider } from "@/context/I18nContext";
@@ -39,8 +41,12 @@ import AdminActivations from "@/pages/admin/AdminActivations";
 import AdminReports from "@/pages/admin/AdminReports";
 import AdminSettings from "@/pages/admin/AdminSettings";
 import AdminAuditLogs from "@/pages/admin/AdminAuditLogs";
+import AdminTeam from "@/pages/admin/AdminTeam";
 import Legal from "@/pages/Legal";
 import Withdrawals from "@/pages/Withdrawals";
+import Kyc from "@/pages/Kyc";
+import AdminKyc from "@/pages/admin/AdminKyc";
+import AdminOperations from "@/pages/admin/AdminOperations";
 import AdminWithdrawals from "@/pages/admin/AdminWithdrawals";
 import AdminVendors from "@/pages/admin/AdminVendors";
 import AdminVendorCreate from "@/pages/admin/AdminVendorCreate";
@@ -81,6 +87,7 @@ function App() {
           <CartProvider>
             <ThemedToaster />
             <BrowserRouter>
+              <SellerRefCapture />
               <AppRoutes />
             </BrowserRouter>
           </CartProvider>
@@ -92,10 +99,12 @@ function App() {
 
 // Toasts follow the light/dark theme and use the glass styling.
 // Vendor data pages need an approved vendor account. Until then the page explains what is pending, inside the portal.
-function VendorGate({ children }) {
+function VendorGate({ children, obligations = false }) {
   const { vendor } = useVendor();
   if (vendor === null) return null;
-  return vendor && ["approved", "active"].includes(vendor.status) ? children : <PendingApproval vendor={vendor} />;
+  // Batch 9: a suspended vendor still sees the orders and returns it owes customers (the server allows exactly these).
+  const ok = vendor && (["approved", "active"].includes(vendor.status) || (obligations && vendor.status === "suspended"));
+  return ok ? children : <PendingApproval vendor={vendor} />;
 }
 function VendorHome() {
   return <VendorGate><VendorDashboard /></VendorGate>;
@@ -138,6 +147,7 @@ function AppRoutes() {
                   <Route path="rewards" element={<Rewards />} />
                   <Route path="wallet" element={<Wallet />} />
                   <Route path="withdrawals" element={<Withdrawals />} />
+                  <Route path="kyc" element={<Kyc />} />
                   <Route path="referral" element={<Referral />} />
                   <Route path="notifications" element={<Notifications />} />
                   <Route path="profile" element={<Profile />} />
@@ -150,6 +160,8 @@ function AppRoutes() {
                   <Route path="orders" element={<AdminOrders />} />
                   <Route path="activations" element={<AdminActivations />} />
                   <Route path="withdrawals" element={<AdminWithdrawals />} />
+                  <Route path="kyc" element={<AdminKyc />} />
+                  <Route path="operations" element={<AdminOperations />} />
                   <Route path="vendors" element={<AdminVendors />} />
                   <Route path="vendors/new" element={<AdminVendorCreate />} />
                   <Route path="vendor-applications" element={<AdminVendorApplications />} />
@@ -159,6 +171,7 @@ function AppRoutes() {
                   <Route path="reports" element={<AdminReports />} />
                   <Route path="settings" element={<AdminSettings />} />
                   <Route path="audit" element={<AdminAuditLogs />} />
+                  <Route path="team" element={<AdminTeam />} />
                 </Route>
 
                 <Route path="/vendor/login" element={<VendorLogin />} />
@@ -169,18 +182,18 @@ function AppRoutes() {
                 <Route path="/vendor" element={<ProtectedRoute vendor><VendorLayout /></ProtectedRoute>}>
                   <Route index element={<Navigate to="dashboard" replace />} />
                   <Route path="dashboard" element={<VendorHome />} />
-                  <Route path="orders" element={<VendorGate><VendorOrders /></VendorGate>} />
+                  <Route path="orders" element={<VendorGate obligations><VendorOrders /></VendorGate>} />
                   <Route path="products" element={<VendorGate><VendorProducts /></VendorGate>} />
                   <Route path="inventory" element={<VendorGate><VendorInventory /></VendorGate>} />
-                  <Route path="dispatch" element={<VendorGate><VendorDispatch /></VendorGate>} />
-                  <Route path="returns" element={<VendorGate><VendorReturns /></VendorGate>} />
+                  <Route path="dispatch" element={<VendorGate obligations><VendorDispatch /></VendorGate>} />
+                  <Route path="returns" element={<VendorGate obligations><VendorReturns /></VendorGate>} />
                   <Route path="analytics" element={<VendorGate><VendorAnalytics /></VendorGate>} />
                   <Route path="reports" element={<VendorGate><VendorReports /></VendorGate>} />
                   <Route path="advancement" element={<VendorGate><VendorAdvancement /></VendorGate>} />
                   <Route path="finance" element={<VendorGate><VendorFinance /></VendorGate>} />
                   <Route path="earnings" element={<VendorGate><VendorEarnings /></VendorGate>} />
                   <Route path="terms" element={<VendorGate><VendorTerms /></VendorGate>} />
-                  <Route path="shipping" element={<VendorGate><VendorShipping /></VendorGate>} />
+                  <Route path="shipping" element={<VendorGate obligations><VendorShipping /></VendorGate>} />
                   <Route path="cod" element={<VendorGate><VendorCod /></VendorGate>} />
                   <Route path="notifications" element={<VendorGate><VendorNotifications /></VendorGate>} />
                   <Route path="support" element={<VendorGate><VendorSupport /></VendorGate>} />
@@ -195,3 +208,11 @@ function AppRoutes() {
 }
 
 export default App;
+
+
+/** HG-01: remember a HomeGenie share code from any page the visitor lands on (see lib/sellerRef.js for the rules). */
+function SellerRefCapture() {
+  const loc = useLocation();
+  useEffect(() => { captureSellerRef(loc.search, loc.pathname); }, [loc.search, loc.pathname]);
+  return null;
+}

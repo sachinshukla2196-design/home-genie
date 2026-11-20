@@ -123,10 +123,25 @@ async def _notify_member(m: dict, title: str, text: str) -> None:
         await create_notification(m["user_id"], "vendor", title, text)
 
 
+async def _staff_login_access(member: dict, allowed: bool) -> None:
+    """SEC-16: a staff login exists only for its vendor membership. Suspending or revoking the membership suspends the login
+    itself (every existing session stops at once, /app included); reactivating restores it. Never touches other roles."""
+    uid = member.get("user_id")
+    if not uid:
+        return                                          # still only an invitation: no login exists yet
+    if allowed:
+        await db.users.update_one({"id": uid, "role": "vendor_staff", "account_status": "suspended", "deleted_at": None},
+                                  {"$set": {"account_status": "active", "updated_at": now_iso()}})
+    else:
+        await db.users.update_one({"id": uid, "role": "vendor_staff", "account_status": {"$ne": "deleted"}},
+                                  {"$set": {"account_status": "suspended", "updated_at": now_iso()}})
+
+
 @router.post("/vendor/staff/{mid}/suspend")
 async def suspend_staff(mid: str, request: Request, owner: dict = Depends(require_owner_account)):
     m = await _member_of_owner(owner, mid, ("active",))
     await _claim(mid, ("active",), {"status": "suspended"})
+    await _staff_login_access(m, False)
     await _notify_member(m, "Access suspended", "The vendor owner has suspended your access.")
     await log_audit(owner, "vendor_staff_suspended", "vendor_member", mid, old_value={"status": "active"}, new_value={"status": "suspended"}, request=request)
     return {"ok": True, "status": "suspended"}
@@ -136,6 +151,7 @@ async def suspend_staff(mid: str, request: Request, owner: dict = Depends(requir
 async def reactivate_staff(mid: str, request: Request, owner: dict = Depends(require_owner_account)):
     m = await _member_of_owner(owner, mid, ("suspended",))
     await _claim(mid, ("suspended",), {"status": "active"})
+    await _staff_login_access(m, True)
     await _notify_member(m, "Access restored", "The vendor owner has restored your access.")
     await log_audit(owner, "vendor_staff_reactivated", "vendor_member", mid, old_value={"status": "suspended"}, new_value={"status": "active"}, request=request)
     return {"ok": True, "status": "active"}
@@ -146,6 +162,7 @@ async def revoke_staff(mid: str, request: Request, owner: dict = Depends(require
     """Revoke is final: the record stays for the audit trail, the login stops working at once, and the invitation is void."""
     m = await _member_of_owner(owner, mid, ("invited", "active", "suspended"))
     await _claim(mid, ("invited", "active", "suspended"), {"status": "revoked", "token_hash": None, "invite_expires_at": None})
+    await _staff_login_access(m, False)
     await _notify_member(m, "Access removed", "The vendor owner has removed your access.")
     await log_audit(owner, "vendor_staff_revoked", "vendor_member", mid, old_value={"status": m["status"]}, new_value={"status": "revoked"}, request=request)
     return {"ok": True, "status": "revoked"}

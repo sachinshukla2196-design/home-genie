@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Link, useSearchParams, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
@@ -20,6 +20,10 @@ export default function Register() {
   const location = useLocation();
   const gEmail = location.state?.googleEmail || "";
   const gName = location.state?.googleName || "";
+  const gToken = location.state?.googleSignupToken || "";      // server-signed proof of the Google check (SEC-05)
+  const [smsOtp, setSmsOtp] = useState(false);                 // the server needs a mobile code when SMS is available
+  const [otpSent, setOtpSent] = useState(false);
+  useEffect(() => { API.get("/settings/public").then(({ data }) => setSmsOtp(!!data.sms_otp_available)).catch(() => {}); }, []);
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
   const [pinLookup, setPinLookup] = useState(false);
@@ -27,8 +31,14 @@ export default function Register() {
   const [form, setForm] = useState({
     full_name: gName, mobile: "", email: gEmail, password: "", confirm_password: "",
     sponsor_id: params.get("ref") || "", aadhaar_number: "", address: "", state: "", city: "", pincode: "",
-    google_verified: !!gEmail,
+    google_verified: !!(gEmail && gToken), google_signup_token: gToken, otp: "",
+    account_type: params.get("join") === "customer" ? "customer" : "homegenie",   // decision 5
   });
+  const sendCode = async () => {
+    if (!/^[6-9]\d{9}$/.test(form.mobile.trim())) return toast.error("Enter a valid 10-digit mobile number.");
+    try { const { data } = await API.post("/auth/register-request/send-otp", { mobile: form.mobile.trim() }); setOtpSent(true); toast.success(data.message); }
+    catch (err) { toast.error(apiError(err)); }
+  };
 
   const googleSignup = () => {
     // REMINDER: DO NOT HARDCODE THE URL, OR ADD ANY FALLBACKS OR REDIRECT URLS, THIS BREAKS THE AUTH
@@ -80,6 +90,7 @@ export default function Register() {
       if (form.password !== form.confirm_password) return toast.error("Passwords do not match.");
     }
     if (!form.state || !form.city || !form.pincode.trim()) return toast.error("State, City and Pincode are required.");
+    if (smsOtp && form.otp.length !== 6) return toast.error("Enter the 6-digit code sent to your mobile.");
     setLoading(true);
     try {
       const { data } = await API.post("/auth/register-request", form);
@@ -147,10 +158,26 @@ export default function Register() {
               )}
 
               <form onSubmit={submit} className="mt-5 space-y-4" data-testid="register-form">
+                <div role="radiogroup" aria-label="Account type" className="grid grid-cols-2 gap-2" data-testid="reg-account-type">
+                  {[["customer", "Shop as a customer", "Buy products, track orders and returns."], ["homegenie", "Join as a HomeGenie", "Recommend products and earn on genuine sales."]].map(([v, title, sub]) => (
+                    <button key={v} type="button" role="radio" aria-checked={form.account_type === v} onClick={() => setForm((f) => ({ ...f, account_type: v }))}
+                      data-testid={`reg-type-${v}`}
+                      className={`rounded-2xl p-3 text-left ring-1 transition ${form.account_type === v ? "bg-hg-gold/10 ring-hg-gold" : "ring-brand-50 hover:bg-brand-50"}`}>
+                      <span className="block text-sm font-semibold text-ink">{title}</span>
+                      <span className="mt-0.5 block text-xs text-muted2">{sub}</span>
+                    </button>
+                  ))}
+                </div>
                 <Section icon={UserRound}>
                   <Field label={t("auth.fullName")} value={form.full_name} onChange={set("full_name")} required testid="reg-fullname" />
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                     <Field label={t("auth.mobile")} value={form.mobile} onChange={set("mobile")} required testid="reg-mobile" />
+                    {smsOtp && (
+                      <div className="flex flex-wrap items-end gap-2" data-testid="reg-otp-block">
+                        <Field label="Code sent to this mobile" value={form.otp} onChange={(e) => setForm((f) => ({ ...f, otp: e.target.value.replace(/\D/g, "").slice(0, 6) }))} testid="reg-otp" />
+                        <Button type="button" variant="outline" onClick={sendCode} className="h-11 rounded-full px-4" data-testid="reg-send-otp">{otpSent ? "Send again" : "Send code"}</Button>
+                      </div>
+                    )}
                     <div className="min-w-0">
                       <Label className="text-sm text-ink">{t("auth.email")}</Label>
                       <Input type="email" value={form.email} onChange={set("email")} required readOnly={form.google_verified}

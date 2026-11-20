@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { API } from "@/lib/api";
+import { clearSellerRef } from "@/lib/sellerRef";
 
 const AuthContext = createContext(null);
 
@@ -35,6 +36,7 @@ export function AuthProvider({ children }) {
   const logout = async () => {
     try { await API.post("/auth/logout"); } catch (e) { console.error("logout error", e); }
     localStorage.removeItem("anj_token");
+    clearSellerRef();
     setUser(false);
   };
 

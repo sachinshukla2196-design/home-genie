@@ -422,6 +422,53 @@ async def expire_one(order_id: str) -> bool:
     return True
 
 
+UPI_CLAIM_EXPIRED = "upi_claim_expired"
+
+
+async def expire_upi_claim(order_id: str, hours: float) -> bool:
+    """Decision 9: an unverified UPI claim older than `hours` expires. Atomic and race-safe: a finance confirmation that lands
+    first wins (the claim must still be "claimed"); once expired, a confirmation is refused. Stock comes back exactly once."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    now = now_iso()
+    claim = await db.orders.update_one(
+        {"id": order_id, "payment_status": "claimed", "status": {"$ne": "cancelled"},
+         "$or": [{"claimed_at": {"$lt": cutoff}}, {"claimed_at": {"$exists": False}, "updated_at": {"$lt": cutoff}}]},
+        {"$set": {"status": "cancelled", "payment_status": "claim_expired", "cancel_reason": UPI_CLAIM_EXPIRED,
+                  "cancelled_at": now, "updated_at": now}})
+    if claim.modified_count != 1:
+        return False
+    o = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    await release_stock(order_id, "upi_claim_expired", "system")
+    # Vendors never see an unverified claim (FIN-02), so no fulfilment has started: all of them are cancelled.
+    fl = [{**f, "status": "cancelled", "events": [*f.get("events", []),
+           {"status": "cancelled", "at": now, "by": "system", "note": "UPI payment was not verified in time"}]}
+          for f in o.get("fulfilments", [])]
+    if fl:
+        await db.orders.update_one({"id": order_id}, {"$set": {"fulfilments": fl}})
+    await log_audit(SYSTEM, "upi_claim_expired", "order", order_id, old_value={"payment_status": "claimed"},
+                    new_value={"payment_status": "claim_expired", "status": "cancelled", "after_hours": hours})
+    await create_notification(o["user_id"], "order", "Order cancelled",
+                              f"Order {o.get('order_number')} was cancelled because your UPI payment could not be verified within "
+                              f"{int(hours)} hours. If money left your account, contact support with the UTR.",
+                              meta={"order_id": order_id})
+    return True
+
+
+async def expire_upi_claims(limit: int = 100) -> int:
+    from core import get_settings
+    hours = float((await get_settings()).get("upi_claim_expiry_hours") or 24)
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    ids = [o["id"] for o in await db.orders.find(
+        {"payment_status": "claimed", "status": {"$ne": "cancelled"},
+         "$or": [{"claimed_at": {"$lt": cutoff}}, {"claimed_at": {"$exists": False}, "updated_at": {"$lt": cutoff}}]},
+        {"_id": 0, "id": 1}).limit(limit).to_list(limit)]
+    n = 0
+    for oid in ids:
+        if await expire_upi_claim(oid, hours):
+            n += 1
+    return n
+
+
 async def expire_pending_online_orders(limit: int = 100) -> int:
     """Sweep: expire overdue unpaid online orders, finish interrupted expiries, and run crash recovery."""
     ids = [o["id"] for o in await db.orders.find(
@@ -431,9 +478,11 @@ async def expire_pending_online_orders(limit: int = 100) -> int:
     for oid in ids:
         if await expire_one(oid):
             n += 1
+    n += await expire_upi_claims(limit)
     # Self-heal: cancelled by expiry but interrupted before the stock was returned (e.g. a function timeout).
     stuck = await db.orders.find(
-        {"cancel_reason": EXPIRY_REASON, "payment_status": "pending", "stock_reserved": True,
+        {"$or": [{"cancel_reason": EXPIRY_REASON, "payment_status": "pending"},
+                 {"cancel_reason": UPI_CLAIM_EXPIRED, "payment_status": "claim_expired"}], "stock_reserved": True,
          "items": {"$elemMatch": {"stock_released": {"$ne": True}}}}, {"_id": 0, "id": 1}).limit(limit).to_list(limit)
     for o in stuck:
         if await release_stock(o["id"], "order_payment_timeout", "system"):

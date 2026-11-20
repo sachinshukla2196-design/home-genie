@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { PageHeader, SectionCard } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
 import { useI18n } from "@/context/I18nContext";
+import { useAuth } from "@/context/AuthContext";
 import { API, apiError } from "@/lib/api";
 
 const STATUSES = ["payment_pending", "paid", "processing", "packed", "shipped", "delivered", "cancelled", "refunded"];
@@ -36,12 +37,15 @@ function OrderTab({ on, onClick, testid, children }) {
 
 export default function AdminOrders() {
   const { t } = useI18n();
+  const { user } = useAuth();
+  const isFinance = ["super_admin", "accounts_admin"].includes(user?.role);   // decision 4; the server enforces it
   const [orders, setOrders] = useState(null);
   const [tab, setTab] = useState("all");
   const [confirmFor, setConfirmFor] = useState(null);
   const [reference, setReference] = useState("");
+  const [confirmAmount, setConfirmAmount] = useState("");
   const [saving, setSaving] = useState(false);
-  const [manual, setManual] = useState({ distributor_id: "", reference: "", note: "" });
+  const [manual, setManual] = useState({ distributor_id: "", reference: "", amount: "", note: "" });
   const [manualBusy, setManualBusy] = useState(false);
   const money = (v) => `₹${Number(v).toLocaleString("en-IN")}`;
 
@@ -107,22 +111,30 @@ export default function AdminOrders() {
   };
 
   const deleteOrder = async (o) => {
-    if (!window.confirm(`Permanently DELETE order ${o.order_number} (${money(o.total)})? This cannot be undone.`)) return;
+    if (!window.confirm(`Remove abandoned order ${o.order_number} (${money(o.total)})? It is cancelled and archived (its reserved stock comes back); the record is kept. Only never-paid orders can be removed.`)) return;
     try {
       await API.delete(`/admin/orders/${o.id}`);
       setOrders((list) => list.filter((x) => x.id !== o.id));
-      toast.success("Order deleted");
+      toast.success("Order removed and archived");
     } catch (e) { toast.error(apiError(e)); }
+  };
+
+  const rejectUpi = async (o) => {
+    const reason = window.prompt(`Reject the UPI payment submitted for ${o.order_number}? Give the reason the customer will see (at least 5 characters):`, "Payment not found in our bank statement");
+    if (reason === null) return;
+    try { await API.put(`/admin/payments/upi-reject/${o.id}`, { reason }); toast.success("UPI claim rejected; the order is unpaid again"); load(); }
+    catch (e) { toast.error(apiError(e)); }
   };
 
   const submitConfirm = async () => {
     const ref = reference.trim();
     if (!ref) { toast.error("Reference ID is mandatory"); return; }
+    if (!(Number(confirmAmount) > 0)) { toast.error("Enter the amount you received"); return; }
     setSaving(true);
     try {
-      await API.put(`/admin/payments/upi-confirm/${confirmFor.id}`, { reference: ref });
-      toast.success(`Payment confirmed & activated · Ref ${ref}`);
-      setConfirmFor(null); setReference(""); load();
+      await API.put(`/admin/payments/upi-confirm/${confirmFor.id}`, { reference: ref, amount: Number(confirmAmount) });
+      toast.success(`Payment confirmed · Ref ${ref}`);
+      setConfirmFor(null); setReference(""); setConfirmAmount(""); load();
     } catch (e) { toast.error(apiError(e)); } finally { setSaving(false); }
   };
 
@@ -130,12 +142,13 @@ export default function AdminOrders() {
     const did = manual.distributor_id.trim().toUpperCase();
     const ref = manual.reference.trim();
     if (!did) { toast.error("Enter a HomeGenie ID"); return; }
-    if (!ref) { toast.error("Enter a payment reference / reason"); return; }
+    if (!ref) { toast.error("Enter the payment reference (UTR / transaction id)"); return; }
+    if (!(Number(manual.amount) > 0)) { toast.error("Enter the amount you received"); return; }
     setManualBusy(true);
     try {
-      const { data } = await API.post("/admin/payments/manual", { distributor_id: did, reference: ref, note: manual.note.trim() });
+      const { data } = await API.post("/admin/payments/manual", { distributor_id: did, reference: ref, amount: Number(manual.amount), note: manual.note.trim() });
       toast.success(data.message || "Payment recorded");
-      setManual({ distributor_id: "", reference: "", note: "" });
+      setManual({ distributor_id: "", reference: "", amount: "", note: "" });
       setTab("paid");
       load();
     } catch (e) { toast.error(apiError(e)); } finally { setManualBusy(false); }
@@ -162,8 +175,8 @@ export default function AdminOrders() {
         <StatCard testid="stat-upi-collected" icon={IndianRupee} accent="success" label="Total collected" value={money(upiCollected)} index={1} />
       </div>
 
-      {/* Manual payment by HomeGenie ID */}
-      <SectionCard testid="manual-payment-card">
+      {/* Manual payment by HomeGenie ID (finance roles only) */}
+      {isFinance && <SectionCard testid="manual-payment-card">
         <div className="flex items-start gap-3">
           <span className="hg-icon-chip !h-10 !w-10 shrink-0 !rounded-xl"><BadgeIndianRupee size={20} /></span>
           <div className="min-w-0">
@@ -171,14 +184,18 @@ export default function AdminOrders() {
             <p className="mt-0.5 text-sm text-muted2">Enter an existing HomeGenie ID to mark the payment as PAID (admin/manual). Recorded &amp; audited.</p>
           </div>
         </div>
-        <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
           <div>
             <Label className="text-sm text-ink">HomeGenie ID</Label>
             <Input value={manual.distributor_id} onChange={(e) => setManual((m) => ({ ...m, distributor_id: e.target.value }))} placeholder="HG000123" className="mt-1.5 font-mono uppercase" data-testid="manual-distributor-id" />
           </div>
           <div>
             <Label className="text-sm text-ink">Reference / UTR</Label>
-            <Input value={manual.reference} onChange={(e) => setManual((m) => ({ ...m, reference: e.target.value }))} placeholder="e.g. 4123XXXX / cash" className="mt-1.5 font-mono" data-testid="manual-reference" />
+            <Input value={manual.reference} onChange={(e) => setManual((m) => ({ ...m, reference: e.target.value }))} placeholder="e.g. 412345678901" className="mt-1.5 font-mono" data-testid="manual-reference" />
+          </div>
+          <div>
+            <Label className="text-sm text-ink">Amount received (₹)</Label>
+            <Input type="number" min="0" step="0.01" value={manual.amount} onChange={(e) => setManual((m) => ({ ...m, amount: e.target.value }))} placeholder="must equal the order total" className="mt-1.5" data-testid="manual-amount" />
           </div>
           <div>
             <Label className="text-sm text-ink">Note (optional)</Label>
@@ -188,7 +205,7 @@ export default function AdminOrders() {
             <Button onClick={recordManual} disabled={manualBusy} className="hg-btn h-11 w-full rounded-full px-6" data-testid="manual-record-btn">{manualBusy ? "Recording…" : "Mark Paid"}</Button>
           </div>
         </div>
-      </SectionCard>
+      </SectionCard>}
 
       {/* Tabs */}
       <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0">
@@ -219,7 +236,8 @@ export default function AdminOrders() {
                   <div className="flex flex-wrap items-center gap-2">
                     <span className={`whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ${PAY_PILL(o.payment_status)}`}>{o.payment_status}</span>
                     {o.payment_method === "cod" && o.payment_status === "cod_pending" && <button onClick={() => openCod(o)} className="whitespace-nowrap rounded-full bg-hg-gold px-3 py-1 text-xs font-semibold text-hg-bg transition-transform hover:-translate-y-0.5" data-testid={`cod-collect-${o.order_number}`}>Cash collected</button>}
-                    {o.payment_status === "claimed" && <button onClick={() => { setConfirmFor(o); setReference(o.upi_reference || ""); }} className="hg-btn whitespace-nowrap rounded-full px-3 py-1 text-xs font-semibold text-white transition-transform hover:-translate-y-0.5" data-testid={`upi-confirm-${o.order_number}`}>Confirm UPI</button>}
+                    {isFinance && o.payment_status === "claimed" && <button onClick={() => rejectUpi(o)} className="whitespace-nowrap rounded-full border border-danger/40 px-3 py-1 text-xs font-semibold text-danger hover:bg-danger/10" data-testid={`upi-reject-${o.order_number}`}>Reject UPI</button>}
+                    {isFinance && o.payment_status === "claimed" && <button onClick={() => { setConfirmFor(o); setReference(o.upi_reference || ""); setConfirmAmount(""); }} className="hg-btn whitespace-nowrap rounded-full px-3 py-1 text-xs font-semibold text-white transition-transform hover:-translate-y-0.5" data-testid={`upi-confirm-${o.order_number}`}>Confirm UPI</button>}
                   </div>
                 </td>
                 <td className="px-4 py-3 text-xs uppercase text-muted2">{o.payment_method || "—"}</td>
@@ -237,9 +255,9 @@ export default function AdminOrders() {
                       Refund{o.refunded_amount ? ` (₹${o.refunded_amount} done)` : ""}
                     </button>
                   )}
-                  {o.payment_status !== "paid" && o.payment_status !== "partially_refunded" && o.payment_status !== "refunded" && (
+                  {o.payment_method !== "cod" && ["pending", "failed"].includes(o.payment_status) && !o.archived && (
                   <button onClick={() => deleteOrder(o)} className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border border-danger/40 px-3 py-1.5 text-xs font-semibold text-danger transition-colors hover:bg-danger/10" data-testid={`delete-order-${o.order_number}`}>
-                    <Trash2 size={13} /> Delete
+                    <Trash2 size={13} /> Remove
                   </button>
                   )}
                 </td>
@@ -272,10 +290,14 @@ export default function AdminOrders() {
                 <Input autoFocus value={reference} onChange={(e) => setReference(e.target.value)} placeholder="e.g. 412345678901"
                   className="mt-1.5 font-mono" data-testid="upi-reference-input"
                   onKeyDown={(e) => e.key === "Enter" && submitConfirm()} />
+                <Label className="mt-4 block text-sm text-ink">Amount received (₹) <span className="text-danger">*</span></Label>
+                <Input type="number" min="0" step="0.01" value={confirmAmount} onChange={(e) => setConfirmAmount(e.target.value)} placeholder="as shown in your bank statement"
+                  className="mt-1.5" data-testid="upi-amount-input" />
+                <p className="mt-1 text-xs text-muted2">Must equal the order total exactly. One reference can confirm only one order.</p>
               </div>
               <div className="mt-6 flex flex-wrap gap-3">
                 <Button variant="outline" onClick={() => setConfirmFor(null)} className="h-11 flex-1 rounded-full border-brand-50 bg-transparent" data-testid="cancel-confirm-btn">Cancel</Button>
-                <Button onClick={submitConfirm} disabled={saving || !reference.trim()} className="hg-btn h-11 flex-1 rounded-full" data-testid="submit-confirm-btn">{saving ? "Confirming…" : "Confirm & Activate"}</Button>
+                <Button onClick={submitConfirm} disabled={saving || !reference.trim() || !(Number(confirmAmount) > 0)} className="hg-btn h-11 flex-1 rounded-full" data-testid="submit-confirm-btn">{saving ? "Confirming…" : "Confirm payment"}</Button>
               </div>
             </motion.div>
           </motion.div>

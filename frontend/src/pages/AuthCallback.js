@@ -46,7 +46,7 @@ export default function AuthCallback() {
         const { data } = await API.post("/auth/google/session", { session_id: sessionId });
         if (data.mode === "register") {
           toast.message("Let's finish your registration");
-          navigate("/register", { replace: true, state: { googleEmail: data.email, googleName: data.name } });
+          navigate("/register", { replace: true, state: { googleEmail: data.email, googleName: data.name, googleSignupToken: data.google_signup_token } });
           return;
         }
         applyAuth(data);

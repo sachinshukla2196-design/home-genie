@@ -285,7 +285,7 @@ def test_change_password_revokes_old_sessions_and_enforces_strength(c):
     assert c.get("/api/auth/me", headers=h).status_code == 401                                                                   # the old session is signed out
     assert c.get("/api/auth/me", headers={"Authorization": f"Bearer {r.json()['token']}"}).status_code == 200                    # the fresh one works
     assert login(PW).status_code == 401 and login("New-Pass-456x").status_code == 200
-    adm = c.post("/api/auth/login", json={"email": "9100000903", "password": PW}).json()["token"]
+    adm = create_token(S["adm"]["id"])           # Batch 4 (SEC-11): admins no longer sign in through the member login
     weak = c.put("/api/auth/change-password", headers={"Authorization": f"Bearer {adm}"}, json={"current_password": PW, "new_password": "Simple-Pass-1"})
     assert weak.status_code == 400 and "14" in weak.json()["detail"]                                                              # admins need strong passwords
 

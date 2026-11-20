@@ -26,6 +26,16 @@ def new_token() -> tuple:
     return token, hash_token(token), datetime.now(timezone.utc) + timedelta(hours=INVITE_HOURS)
 
 
+def frontend_origin() -> str:
+    """Public address of the web app for links in emails: FRONTEND_PUBLIC_URL, else the first allowed CORS origin."""
+    import os
+    url = (os.environ.get("FRONTEND_PUBLIC_URL") or "").strip()
+    if not url:
+        url = next((o.strip() for o in (os.environ.get("CORS_ORIGINS") or os.environ.get("CORS_ALLOWED_ORIGINS") or "").split(",")
+                    if o.strip().startswith("https://")), "")
+    return url.rstrip("/")
+
+
 async def issue(user: dict, vendor: dict, admin: dict, request=None) -> dict:
     """Create a fresh owner invitation and revoke any earlier pending one. Returns the token once, with delivery status."""
     token, digest, expires = new_token()
@@ -36,7 +46,7 @@ async def issue(user: dict, vendor: dict, admin: dict, request=None) -> dict:
                                              "created_by": admin["id"], "created_at": now_iso()})
     delivered = False
     if EMAIL_KEY and user.get("email"):
-        link = f"/vendor/owner-invite?token={token}"          # the front-end origin is added by the sender configuration
+        link = f"{frontend_origin()}/vendor/owner-invite?token={token}"     # VEN-01: an absolute link the owner can open
         delivered = await send_email(user["email"], "Set up your HOME GENIES vendor account",
                                      f"<p>Open this link within {INVITE_HOURS} hours to set your password: {link}</p>")
     await log_audit(admin, "vendor_owner_invitation_issued", "vendor", vendor["id"], new_value={"expires_at": expires.isoformat(), "emailed": delivered}, request=request)

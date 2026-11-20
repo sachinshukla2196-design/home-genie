@@ -38,6 +38,7 @@ def _paid_order(vid, pid, total_paise, paid_day=0, status="delivered"):
     line = {"product_id": pid, "name": "Commercial item", "sku": "COM", "vendor_id": vid, "quantity": 1, "total_paise": total_paise, "total": total_paise / 100}
     return {"id": new_id(), "order_number": "COM" + new_id()[:8].upper(), "user_id": new_id(), "payment_method": "online", "payment_status": "paid",
             "status": status, "created_at": paid_at, "paid_at": paid_at, "total_paise": total_paise, "total": total_paise / 100,
+            **({"delivered_at": (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()} if status == "delivered" else {}),
             "items": [line], "fulfilments": [{"vendor_id": vid, "status": status, "events": []}], "address": ADDR, "needs_refund": False}
 
 

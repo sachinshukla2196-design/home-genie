@@ -136,7 +136,7 @@ def _clawbacks(c, oid):
 @pytest.mark.parametrize("round_", range(5))
 def test_d1_two_finance_users_confirming_with_different_references_refund_once(c, round_):
     o, case = _open_case(c, 30000)
-    assert _act(c, "fin", case["id"], "initiate").status_code == 200
+    assert _act(c, "adm", case["id"], "initiate").status_code == 200
     out = []
     ts = [threading.Thread(target=lambda who=who, ref=ref: out.append(_act(c, who, case["id"], "confirm", **_confirm_body(ref)).status_code))
           for who, ref in (("fin", "UTR-A-" + o["id"][:6]), ("fin2", "UTR-B-" + o["id"][:6]))]
@@ -150,7 +150,7 @@ def test_d1_two_finance_users_confirming_with_different_references_refund_once(c
 
 def test_d1_the_same_user_double_submitting_refunds_once(c):
     o, case = _open_case(c, 20000)
-    _act(c, "fin", case["id"], "initiate")
+    _act(c, "adm", case["id"], "initiate")
     out = []
     ref = "UTR-DBL-" + o["id"][:6]
     ts = [threading.Thread(target=lambda: out.append(_act(c, "fin", case["id"], "confirm", **_confirm_body(ref)).status_code)) for _ in range(3)]
@@ -161,7 +161,7 @@ def test_d1_the_same_user_double_submitting_refunds_once(c):
 
 def test_d1_a_crash_after_the_claim_resumes_only_with_the_same_reference(c):
     o, case = _open_case(c, 10000)
-    _act(c, "fin", case["id"], "initiate")
+    _act(c, "adm", case["id"], "initiate")
     ref = "UTR-CLAIM-" + o["id"][:6]
     _run(c, lambda: db.refund_cases.update_one({"id": case["id"]}, {"$set": {"confirming_reference": ref, "confirming_by": S["fin"]["id"]}}))
     assert _act(c, "fin2", case["id"], "confirm", **_confirm_body("UTR-OTHER-" + o["id"][:6])).status_code == 409
@@ -172,7 +172,7 @@ def test_d1_a_crash_after_the_claim_resumes_only_with_the_same_reference(c):
 
 def test_d1_a_crash_after_the_money_moved_finishes_with_the_same_reference_and_cannot_be_abandoned(c):
     o, case = _open_case(c, 10000)
-    _act(c, "fin", case["id"], "initiate")
+    _act(c, "adm", case["id"], "initiate")
     ref = "UTR-MOVED-" + o["id"][:6]
     _run(c, lambda: db.refund_cases.update_one({"id": case["id"]}, {"$set": {"confirming_reference": ref}}))
     _run(c, lambda: shop_routes.reverse_order_financials(o["id"], {"id": S["fin"]["id"]}, None, 100.0, ref, "t", case_id=case["id"]))
@@ -184,7 +184,7 @@ def test_d1_a_crash_after_the_money_moved_finishes_with_the_same_reference_and_c
 
 def test_d1_a_claim_whose_money_never_moved_can_be_failed_and_retried(c):
     o, case = _open_case(c, 10000)
-    _act(c, "fin", case["id"], "initiate")
+    _act(c, "adm", case["id"], "initiate")
     _run(c, lambda: db.refund_cases.update_one({"id": case["id"]}, {"$set": {"confirming_reference": "UTR-NEVER"}}))
     assert _act(c, "fin", case["id"], "fail", note="Transfer never left the bank").status_code == 200
     assert "confirming_reference" not in _run(c, lambda: db.refund_cases.find_one({"id": case["id"]}))
@@ -310,9 +310,10 @@ def test_g1_admin_cancellation_of_a_paid_order_opens_one_refund_case_and_holds_c
     assert len(cases) == 1 and cases[0]["kind"] == "cancellation" and cases[0]["amount_paise"] == o["total_paise"]
     assert len(_ledger(c, o["id"], "SALE_REVERSAL")) == 1 and "refund_due_cancel" not in _get(c, o["id"])
     _run(c, lambda: db.commissions.update_many({"order_id": o["id"]}, {"$set": {"created_at": OLD}}))
+    _run(c, lambda: db.orders.update_one({"id": o["id"]}, {"$set": {"delivered_at": OLD, "status": "delivered"}}))   # decision 2
     _run(c, release_due_points)
     assert all(x["released_at"] is None for x in _comms(c, o["id"]))
-    assert _act(c, "fin", cases[0]["id"], "initiate").status_code == 200
+    assert _act(c, "adm", cases[0]["id"], "initiate").status_code == 200
     assert _act(c, "fin2", cases[0]["id"], "confirm", **_confirm_body("UTR-G1-" + o["id"][:6])).status_code == 200
     got = _get(c, o["id"])
     assert got["payment_status"] == "refunded" and _events(c, o["id"]) == 1
@@ -344,23 +345,25 @@ def _reject(c, vendor, oid):
 
 def test_g2_a_partial_rejection_refunds_only_that_vendors_lines_and_holds_commission(c):
     pa, pb = _product(c, "va", 1000), _product(c, "vb", 500)
-    o = _paid_order(c, [(pa, 1), (pb, 2)])                                    # subtotal 2,000, GST 100, total 2,100
+    o = _paid_order(c, [(pa, 1), (pb, 2)])                                    # total 2,000 incl. GST (decision 1)
     assert _reject(c, "va", o["id"]).status_code == 200
     cases = _cases(c, o["id"])
     assert len(cases) == 1 and cases[0]["kind"] == "vendor_rejection" and cases[0]["vendor_id"] == S["va"]["id"]
-    assert cases[0]["amount_paise"] == 105000                                 # 1,000 + its 50.00 share of GST
+    assert cases[0]["amount_paise"] == 100000                                 # the 1,000 line already includes its GST
     got = _get(c, o["id"])
     assert got["status"] == "processing" and not any(f.get("refund_due") for f in got["fulfilments"])
     assert {e["vendor_id"] for e in _ledger(c, o["id"], "SALE_REVERSAL")} == {S["va"]["id"]}
     _run(c, lambda: db.commissions.update_many({"order_id": o["id"]}, {"$set": {"created_at": OLD}}))
+    _run(c, lambda: db.orders.update_one({"id": o["id"]}, {"$set": {"delivered_at": OLD, "status": "delivered"}}))   # decision 2
     _run(c, release_due_points)
     assert all(x["released_at"] is None for x in _comms(c, o["id"]))          # held while the refund case is open
-    _act(c, "fin", cases[0]["id"], "initiate")
+    _act(c, "adm", cases[0]["id"], "initiate")
     assert _act(c, "fin2", cases[0]["id"], "confirm", **_confirm_body("UTR-G2-" + o["id"][:6])).status_code == 200
     got = _get(c, o["id"])
-    assert got["payment_status"] == "partially_refunded" and got["refunded_paise"] == 105000
+    assert got["payment_status"] == "partially_refunded" and got["refunded_paise"] == 100000
     cm = _comms(c, o["id"])[0]
-    assert cm["reversed_paise"] == cm["amount_paise"] * 105000 // 210000 and cm["status"] == "PARTIALLY_REVERSED"
+    # refund 1,000 of a 2,000 order (GST-inclusive): half the commission, an odd paisa rounding half-up
+    assert abs(cm["reversed_paise"] - cm["amount_paise"] * 100000 / 200000) <= 0.5 and cm["status"] == "PARTIALLY_REVERSED"
     assert _ledger(c, o["id"], "REFUND") == [] and _wallet_ok(c)              # vendor A's sale was already reversed; B untouched
 
 
@@ -389,14 +392,16 @@ def test_g2_an_already_released_commission_is_clawed_back_proportionally(c):
     pa, pb = _product(c, "va", 1000), _product(c, "vb", 1000)
     o = _paid_order(c, [(pa, 1), (pb, 1)])
     _run(c, lambda: db.commissions.update_many({"order_id": o["id"]}, {"$set": {"created_at": OLD}}))
+    _run(c, lambda: db.orders.update_one({"id": o["id"]}, {"$set": {"delivered_at": OLD, "status": "delivered"}}))   # decision 2
     _run(c, release_due_points)
     assert all(x["released_at"] for x in _comms(c, o["id"]))
     _reject(c, "vb", o["id"])                                                  # (the fulfilment is still 'new')
     case = _cases(c, o["id"])[0]
-    _act(c, "fin", case["id"], "initiate")
+    _act(c, "adm", case["id"], "initiate")
     assert _act(c, "sup", case["id"], "confirm", **_confirm_body("UTR-G2R-" + o["id"][:6])).status_code == 200
     cm = _comms(c, o["id"])[0]
-    assert cm["reversed_paise"] == cm["amount_paise"] // 2 and len(cm["reversal_records"]) == 1 and _wallet_ok(c)
+    half = cm["amount_paise"] / 2                                              # proportional; an odd paisa rounds half-up
+    assert abs(cm["reversed_paise"] - half) <= 0.5 and len(cm["reversal_records"]) == 1 and _wallet_ok(c)
 
 
 def test_g2_an_unpaid_cod_rejection_opens_no_refund_case(c):
@@ -416,7 +421,7 @@ def _snapshot(c, oid):
 def test_d3_only_finance_can_refund_confirm_or_close_a_refund(c, who, ok):
     o, case = _open_case(c, 10000)
     o2, case2 = _open_case(c, 10000)
-    assert _act(c, "fin", case["id"], "initiate").status_code == 200
+    assert _act(c, "adm", case["id"], "initiate").status_code == 200
     before = _snapshot(c, o["id"])
     r1 = c.post(f"/api/admin/orders/{o['id']}/refund", headers=_hdr(S[who]["id"]), json={"reference": "UTR-ONE-" + who, "amount": 1.0})
     r2 = _act(c, who, case["id"], "confirm", **_confirm_body("UTR-D3-" + who + o["id"][:4]))

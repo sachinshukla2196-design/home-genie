@@ -95,6 +95,7 @@ def _plan(c, oid):
 
 def _age(c, oid):
     _run(c, lambda: db.commissions.update_many({"order_id": oid}, {"$set": {"created_at": OLD}}))
+    _run(c, lambda: db.orders.update_one({"id": oid}, {"$set": {"status": "delivered", "delivered_at": OLD}}))   # decision 2
 
 
 # ================================================================ the formula itself is unchanged

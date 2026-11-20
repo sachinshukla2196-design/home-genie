@@ -59,6 +59,17 @@ def _public_url(request: Request, path: str) -> str:
     return f"{scheme}://{host}/api/files/{path}"
 
 
+def sniff_image_type(data: bytes) -> str:
+    """CAT-08: the real type from the file's first bytes. The browser's Content-Type header is not trusted."""
+    if data[:3] == b"\xff\xd8\xff":
+        return "image/jpeg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return "image/png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return ""
+
+
 async def _upload_image(request: Request, file: UploadFile, folder: str, owner_id: str) -> str:
     ctype = (file.content_type or "").lower()
     if ctype not in ALLOWED:
@@ -68,6 +79,10 @@ async def _upload_image(request: Request, file: UploadFile, folder: str, owner_i
         raise HTTPException(status_code=400, detail="Image too large. Maximum size is 5 MB.")
     if not data:
         raise HTTPException(status_code=400, detail="Empty file.")
+    real = sniff_image_type(data)
+    if not real:
+        raise HTTPException(status_code=400, detail="This file is not a real JPG, PNG or WebP image.")
+    ctype = real                        # store and serve it as what it really is
     path = f"{APP_NAME}/{folder}/{owner_id}/{uuid.uuid4()}.{ALLOWED[ctype]}"
     try:
         result = await asyncio.to_thread(_put, path, data, ctype)

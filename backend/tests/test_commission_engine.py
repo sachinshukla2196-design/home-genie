@@ -55,6 +55,8 @@ async def main():
 
     await db.commissions.update_many({"order_id": order["id"]},
                                      {"$set": {"created_at": "2020-01-01T00:00:00+00:00"}})
+    # owner decision 2: commission is payable after DELIVERY plus the return window
+    await db.orders.update_one({"id": order["id"]}, {"$set": {"status": "delivered", "delivered_at": "2020-01-01T00:00:00+00:00"}})
     assert (await release_due_points())["released"] == 3
     s = await w(seller)
     assert (s['available_balance'], s['pending_balance']) == (300, 0), "release failed"

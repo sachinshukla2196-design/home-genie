@@ -5,7 +5,7 @@ import csv
 import math
 import re
 import secrets
-from core import hash_password, next_distributor_id, get_or_create_wallet
+from core import hash_password, next_distributor_id, get_or_create_wallet, next_sequence
 from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
@@ -43,6 +43,25 @@ def _mask_ifsc(i: str) -> str:
     if len(i) <= 4:
         return "*" * len(i)
     return i[:4] + "*" * (len(i) - 4)  # keep bank code, hide branch
+
+
+# ---------------- Protected accounts (SEC-01 / SEC-03) ----------------
+# Who may act on whom through the user-management endpoints (reset password, edit profile/contact, block/unblock):
+#   * a super_admin account:            nobody here. Its credential is managed through the environment (deploy/ENVIRONMENT.md).
+#   * admin / accounts_admin / support_admin accounts: only a super_admin.
+#   * every other account (members, vendors, vendor staff): any admin role, as before.
+#   * an admin never acts on their own account here; they use "change password" instead.
+ADMIN_TARGET_ROLES = ("super_admin", "admin", "accounts_admin", "support_admin")
+
+
+def _guard_target(actor: dict, target: dict, what: str) -> None:
+    if target.get("id") == actor.get("id"):
+        raise HTTPException(status_code=403, detail=f"You cannot {what} your own account here.")
+    role = target.get("role")
+    if role == "super_admin":
+        raise HTTPException(status_code=403, detail=f"The super admin account is protected; you cannot {what} it here.")
+    if role in ADMIN_TARGET_ROLES and actor.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail=f"Only the super admin can {what} an admin account.")
 
 
 # ---------------- Dashboard ----------------
@@ -89,7 +108,7 @@ async def admin_users(status: Optional[str] = None, admin: dict = Depends(requir
     q = {"role": {"$in": ["distributor", "customer", "vendor"]}}
     if status:
         q["status"] = status
-    users = await db.users.find(q, {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(1000)
+    users = await db.users.find(q, {"_id": 0, "password_hash": 0, "env_credential_marker": 0}).sort("created_at", -1).to_list(1000)
     for u in users:
         if u.get("aadhaar_number"):
             u["aadhaar_masked"] = mask_aadhaar(u["aadhaar_number"])
@@ -99,7 +118,7 @@ async def admin_users(status: Optional[str] = None, admin: dict = Depends(requir
 
 @router.get("/users/{user_id}")
 async def admin_user_detail(user_id: str, admin: dict = Depends(require_admin)):
-    u = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    u = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0, "env_credential_marker": 0})
     if not u:
         raise HTTPException(status_code=404, detail="User not found.")
     if u.get("aadhaar_number"):
@@ -116,30 +135,114 @@ VENDOR_PRODUCT_MSG = "This is a vendor's product. The vendor edits it and HOME G
 
 
 class ProductBody(BaseModel):
+    """HOME GENIES-owned products (CAT-06). Vendor products never go through this model."""
     sku: str
-    name: str
-    name_hi: str = ""
-    description: str = ""
-    description_hi: str = ""
+    name: str = Field(min_length=2, max_length=160)
+    name_hi: str = Field(default="", max_length=160)
+    description: str = Field(default="", max_length=4000)
+    description_hi: str = Field(default="", max_length=4000)
     images: List[str] = []
-    mrp: float
-    selling_price: float
-    gst_percent: float = 5.0
-    stock: int = 100
+    mrp: float = Field(gt=0, le=10_000_000)
+    selling_price: float = Field(gt=0, le=10_000_000)
+    gst_percent: float = Field(default=5.0, ge=0, le=28)
+    hsn_code: str = Field(default="", max_length=8)
+    stock: int = Field(default=0, ge=0, le=1_000_000)   # opening stock on CREATE only; later changes go through /stock
     category: str = "Household Essentials"
     is_active: bool = True
     # Optional purchase options, e.g. [{"name": "Size", "values": ["Free Size"]},
     #                                  {"name": "Shade", "values": ["Maroon", "Gold"]}]
     options: List[dict] = []
 
+    @field_validator("sku")
+    @classmethod
+    def _sku(cls, v):
+        v = (v or "").strip().upper()
+        if not re.fullmatch(r"[A-Z0-9][A-Z0-9._-]{1,39}", v):
+            raise ValueError("SKU: 2 to 40 letters, digits, dot, dash or underscore.")
+        return v
+
+    @field_validator("category")
+    @classmethod
+    def _category(cls, v):
+        from catalogue import PILLARS
+        if v not in PILLARS:
+            raise ValueError("Category must be one of: " + ", ".join(PILLARS) + ".")
+        return v
+
+    @field_validator("hsn_code")
+    @classmethod
+    def _hsn(cls, v):
+        v = (v or "").strip()
+        if v and not re.fullmatch(r"\d{4}|\d{6}|\d{8}", v):
+            raise ValueError("HSN code must be 4, 6 or 8 digits.")
+        return v
+
+    @field_validator("images")
+    @classmethod
+    def _images(cls, v):
+        from validators import safe_image_refs
+        return safe_image_refs(v)
+
+    @field_validator("options")
+    @classmethod
+    def _options(cls, v):
+        if len(v) > 5:
+            raise ValueError("At most 5 options.")
+        for o in v:
+            if not isinstance(o, dict) or not str(o.get("name", "")).strip() or not isinstance(o.get("values", []), list) \
+                    or len(o.get("values", [])) > 30 or any(len(str(x)) > 60 for x in o.get("values", [])):
+                raise ValueError("Each option needs a name and up to 30 short values.")
+        return v
+
+    def check_prices(self):
+        if self.selling_price > self.mrp:
+            raise HTTPException(status_code=400, detail="Selling price cannot be higher than the MRP.")
+
+
+async def _sku_taken(sku: str, exclude_id: str = "") -> bool:
+    """Case-insensitive, across product SKUs AND variant SKUs (CAT-07)."""
+    rx = {"$regex": f"^{re.escape(sku)}$", "$options": "i"}
+    return bool(await db.products.find_one({"id": {"$ne": exclude_id}, "$or": [{"sku": rx}, {"variants.sku": rx}]}, {"_id": 1}))
+
+
+@router.get("/products")
+async def admin_list_products(q: str = "", category: str = "", status: str = "", owner: str = "", page: int = 1, page_size: int = 50,
+                              admin: dict = Depends(require_admin)):
+    """The admin catalogue list (replaces the public /products?active=false the screen used before). Paginated."""
+    page, page_size = clamp_page(page, page_size)
+    flt = {}
+    if q.strip():
+        rx = {"$regex": re.escape(q.strip()), "$options": "i"}
+        flt["$or"] = [{"name": rx}, {"sku": rx}]
+    if category:
+        flt["category"] = category
+    if status == "active":
+        flt["is_active"] = True
+    elif status == "inactive":
+        flt["is_active"] = {"$ne": True}
+    if owner == "platform":
+        flt["vendor_id"] = None
+    elif owner == "vendor":
+        flt["vendor_id"] = {"$ne": None}
+    total = await db.products.count_documents(flt)
+    rows = await db.products.find(flt, P_PUBLIC).sort("created_at", -1).skip((page - 1) * page_size).limit(page_size).to_list(page_size)
+    return {"items": rows, **page_meta(total, page, page_size)}
+
 
 @router.post("/products")
 async def create_product(body: ProductBody, request: Request, admin: dict = Depends(require_admin)):
-    if await db.products.find_one({"sku": body.sku}):
+    body.check_prices()
+    if await _sku_taken(body.sku):
         raise HTTPException(status_code=400, detail="A product with this SKU already exists.")
     p = body.model_dump()
     p.update({"id": new_id(), "created_at": now_iso(), "updated_at": now_iso()})
-    await db.products.insert_one(dict(p))
+    try:
+        await db.products.insert_one(dict(p))
+    except DuplicateKeyError:
+        raise HTTPException(status_code=400, detail="A product with this SKU already exists.")
+    if p["stock"]:
+        await db.stock_movements.insert_one({"id": new_id(), "product_id": p["id"], "delta": p["stock"], "reason": "initial_stock",
+                                             "actor_id": admin["id"], "created_at": now_iso()})
     await log_audit(admin, "product_created", "product", p["id"], new_value={"sku": p["sku"]}, request=request)
     p.pop("_id", None)
     return p
@@ -147,6 +250,8 @@ async def create_product(body: ProductBody, request: Request, admin: dict = Depe
 
 @router.put("/products/{product_id}")
 async def update_product(product_id: str, body: ProductBody, request: Request, admin: dict = Depends(require_admin)):
+    """Edits everything EXCEPT stock (CAT-03): the form sends the number it loaded, and writing it back would undo orders
+    placed since. Stock changes go through POST /admin/products/{id}/stock (atomic, journaled)."""
     existing = await db.products.find_one({"id": product_id}, P_PUBLIC)
     if not existing:
         raise HTTPException(status_code=404, detail="Product not found.")
@@ -154,21 +259,77 @@ async def update_product(product_id: str, body: ProductBody, request: Request, a
         # Vendor V1.1: a vendor's product changes only through the vendor's own edit and the admin approval decision, so the
         # review trail and suspension rules cannot be bypassed from the general catalogue screen.
         raise HTTPException(status_code=409, detail=VENDOR_PRODUCT_MSG)
+    body.check_prices()
+    if body.sku != (existing.get("sku") or "").upper() and await _sku_taken(body.sku, exclude_id=product_id):
+        raise HTTPException(status_code=400, detail="A product with this SKU already exists.")
     upd = body.model_dump()
+    upd.pop("stock", None)
+    if (existing.get("sku") or "").upper() == body.sku:
+        upd["sku"] = existing.get("sku")          # a legacy lower-case SKU is not rewritten by an unrelated edit
     upd["updated_at"] = now_iso()
-    await db.products.update_one({"id": product_id}, {"$set": upd})
+    try:
+        await db.products.update_one({"id": product_id}, {"$set": upd})
+    except DuplicateKeyError:
+        raise HTTPException(status_code=400, detail="A product with this SKU already exists.")
     await log_audit(admin, "product_updated", "product", product_id, old_value=existing, new_value=upd, request=request)
     return {**existing, **upd}
 
 
+class AdminStockIn(BaseModel):
+    delta: int = Field(ge=-1_000_000, le=1_000_000)
+    reason: str = Field(min_length=3, max_length=120)
+
+
+@router.post("/products/{product_id}/stock")
+async def adjust_platform_stock(product_id: str, body: AdminStockIn, request: Request, admin: dict = Depends(require_admin)):
+    """CAT-03: atomic, journaled stock adjustment for HOME GENIES products. Never lets stock go below zero."""
+    if body.delta == 0:
+        raise HTTPException(status_code=400, detail="Enter a non-zero change.")
+    p = await db.products.find_one({"id": product_id}, {"_id": 0, "id": 1, "vendor_id": 1})
+    if p is None:
+        raise HTTPException(status_code=404, detail="Product not found.")
+    if p.get("vendor_id"):
+        raise HTTPException(status_code=409, detail="Vendor stock is managed by the vendor in their inventory screen.")
+    flt = {"id": product_id} if body.delta > 0 else {"id": product_id, "stock": {"$gte": -body.delta}}
+    r = await db.products.find_one_and_update(flt, {"$inc": {"stock": body.delta}, "$set": {"updated_at": now_iso()}},
+                                              projection={"_id": 0, "stock": 1}, return_document=True)
+    if not r:
+        raise HTTPException(status_code=409, detail="Not enough stock to remove that many units.")
+    await db.stock_movements.insert_one({"id": new_id(), "product_id": product_id, "delta": body.delta, "reason": body.reason.strip(),
+                                         "actor_id": admin["id"], "created_at": now_iso()})
+    await log_audit(admin, "product_stock_adjusted", "product", product_id, new_value={"delta": body.delta, "stock": r["stock"],
+                                                                                       "reason": body.reason.strip()}, request=request)
+    return {"ok": True, "stock": r["stock"]}
+
+
 @router.delete("/products/{product_id}")
-async def deactivate_product(product_id: str, request: Request, admin: dict = Depends(require_admin)):
-    p = await db.products.find_one({"id": product_id}, {"_id": 0, "vendor_id": 1})
-    if p and p.get("vendor_id") and admin.get("role") not in VENDOR_ADMIN_ROLES:
+async def deactivate_product(product_id: str, request: Request, reason: str = "", admin: dict = Depends(require_admin)):
+    """Take a product off sale. For a VENDOR product this is an admin takedown that the vendor cannot undo by re-listing
+    (CAT-05); only a super admin or admin can lift it (POST /admin/products/{id}/takedown/lift)."""
+    p = await db.products.find_one({"id": product_id}, {"_id": 0, "id": 1, "vendor_id": 1})
+    if p is None:
+        raise HTTPException(status_code=404, detail="Product not found.")
+    if p.get("vendor_id") and admin.get("role") not in VENDOR_ADMIN_ROLES:
         raise HTTPException(status_code=403, detail="Only a super admin or admin can take down a vendor's product.")
-    await db.products.update_one({"id": product_id}, {"$set": {"is_active": False, "updated_at": now_iso()}})
-    await log_audit(admin, "product_deactivated", "product", product_id, request=request)
+    sets = {"is_active": False, "updated_at": now_iso()}
+    if p.get("vendor_id"):
+        sets["admin_takedown"] = {"by": admin["id"], "at": now_iso(), "reason": (reason or "").strip()[:300]}
+    await db.products.update_one({"id": product_id}, {"$set": sets})
+    await log_audit(admin, "product_deactivated", "product", product_id, new_value={"takedown": bool(p.get("vendor_id")),
+                                                                                    "reason": (reason or "").strip()[:300]}, request=request)
     return {"ok": True}
+
+
+@router.post("/products/{product_id}/takedown/lift")
+async def lift_takedown(product_id: str, request: Request, admin: dict = Depends(require_admin)):
+    if admin.get("role") not in VENDOR_ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail="Only a super admin or admin can lift a takedown.")
+    r = await db.products.update_one({"id": product_id, "admin_takedown": {"$exists": True}},
+                                     {"$unset": {"admin_takedown": ""}, "$set": {"updated_at": now_iso()}})
+    if not r.modified_count:
+        raise HTTPException(status_code=404, detail="This product has no admin takedown.")
+    await log_audit(admin, "product_takedown_lifted", "product", product_id, request=request)
+    return {"ok": True, "note": "The vendor can list the product again (it stays unlisted until they do)."}
 
 
 @router.delete("/products/{product_id}/permanent")
@@ -236,7 +397,13 @@ async def update_order_status(order_id: str, body: OrderStatusBody, request: Req
         if unpaid_online and body.status in ("processing", "packed", "shipped", "delivered"):
             raise HTTPException(status_code=409, detail="This order is not paid yet, so it cannot move into fulfilment.")
     upd = {"$set": {"status": body.status, "updated_at": now_iso()}}
+    if body.status == "delivered" and current != "delivered":
+        upd["$set"]["delivered_at"] = now_iso()       # decisions 2/3: the return window and the earning clocks start here
     cancelling = body.status == "cancelled" and o.get("status") != "cancelled"
+    # FIN-15: cancelling an order whose money is in (or cash is due) reverses vendor sales and opens a refund case. That is
+    # an operations decision for super_admin / admin, not for support or finance-only roles.
+    if cancelling and o.get("payment_status") in MONEY_IN_PAYMENT and admin.get("role") not in CANCEL_PAID_ROLES:
+        raise HTTPException(status_code=403, detail="Only the super admin or an admin can cancel an order that has been paid or is awaiting cash collection.")
     if cancelling:   # the restock decision is stored atomically with the status change; recovery replays it if interrupted
         upd["$push"] = {"restock_intents": intent("admin_cancel", admin["id"], prev_status=o.get("status", ""))}
         if o.get("payment_status") in ("paid", "partially_refunded") and not o.get("needs_refund"):
@@ -331,19 +498,45 @@ async def refund_queue(state: str = "open", page: int = 1, page_size: int = 25, 
     return {"items": rows, **page_meta(total, page, page_size), "open_count": await db.orders.count_documents(open_q)}
 
 
+MONEY_IN_PAYMENT = ("paid", "partially_refunded", "cod_pending", "cod_discrepancy", "claimed")
+CANCEL_PAID_ROLES = ("super_admin", "admin")
+REMOVABLE_PAYMENT = ("pending", "failed")
+
+
 @router.delete("/orders/{order_id}")
 async def delete_order(order_id: str, request: Request, admin: dict = Depends(require_admin)):
-    """Permanently delete an order and its related payment transactions."""
+    """FIN-07: "Remove" an abandoned order. NOTHING is erased any more: the order is cancelled through the normal stock path
+    (its reserved stock comes back) and archived, and its payment records stay. Only an online order that was never paid,
+    never claimed, has no payment attempt and has not entered fulfilment can be removed; everything else is cancelled or
+    refunded through its own workflow. super_admin / admin only."""
+    if admin.get("role") not in CANCEL_PAID_ROLES:
+        raise HTTPException(status_code=403, detail="Only the super admin or an admin can remove an order.")
     o = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not o:
         raise HTTPException(status_code=404, detail="Order not found.")
-    if o.get("payment_status") in ("paid", "partially_refunded", "refunded") or await db.commissions.count_documents({"reference_order_id": order_id}):
-        raise HTTPException(status_code=400, detail="Paid orders with financial history cannot be deleted. Use Refund to reverse it; the record stays for audit.")
-    await db.orders.delete_one({"id": order_id})
-    await db.payment_transactions.delete_many({"order_id": order_id})
-    await log_audit(admin, "order_deleted", "order", order_id,
-                    old_value={"order_number": o.get("order_number"), "total": o.get("total")}, request=request)
-    return {"ok": True}
+    if o.get("archived"):
+        return {"ok": True, "already_removed": True}
+    blocked = (o.get("payment_method") == "cod" or o.get("payment_status") not in REMOVABLE_PAYMENT
+               or any(f.get("status") != "new" for f in o.get("fulfilments") or [])
+               or await db.payment_transactions.count_documents({"order_id": order_id, "payment_status": "paid"})
+               or await db.commissions.count_documents({"reference_order_id": order_id}))
+    if blocked:
+        raise HTTPException(status_code=409, detail="This order has payment or fulfilment history and cannot be removed. "
+                                                    "Cancel it, or refund it, through its normal workflow; the record stays for audit.")
+    now = now_iso()
+    upd = {"$set": {"archived": True, "archived_at": now, "archived_by": admin["id"], "updated_at": now}}
+    cancelling = o.get("status") != "cancelled"
+    if cancelling:
+        upd["$set"].update({"status": "cancelled", "cancel_reason": "removed_by_admin"})
+        upd["$push"] = {"restock_intents": intent("admin_cancel", admin["id"], prev_status=o.get("status", ""))}
+    r = await db.orders.update_one({"id": order_id, "status": o.get("status"), "payment_status": {"$in": list(REMOVABLE_PAYMENT)}}, upd)
+    if r.matched_count != 1:
+        raise HTTPException(status_code=409, detail="This order was just updated. Refresh and try again.")
+    restocked = await run_intents(order_id) if cancelling else []
+    await log_audit(admin, "order_removed", "order", order_id,
+                    old_value={"order_number": o.get("order_number"), "status": o.get("status"), "payment_status": o.get("payment_status")},
+                    new_value={"status": "cancelled", "archived": True, "restocked_lines": restocked}, request=request)
+    return {"ok": True, "archived": True, "restocked_lines": restocked}
 
 
 # ---------------- Payments ----------------
@@ -422,6 +615,8 @@ async def admin_kyc(status: Optional[str] = None, admin: dict = Depends(require_
 class KycReview(BaseModel):
     action: str  # verify / reject
     reason: Optional[str] = ""
+    # The record version the reviewer looked at (GET /admin/kyc returns it). If the record changed since, the review is refused.
+    expected_version: Optional[int] = None
 
 
 class KycEditBody(BaseModel):
@@ -432,28 +627,68 @@ class KycEditBody(BaseModel):
     bank_name: Optional[str] = None
 
 
+KYC_EDIT_FIELDS = ("pan", "account_holder_name", "bank_account", "ifsc", "bank_name")
+_KYC_MASK = {"pan": _mask_pan, "bank_account": _mask_acct, "ifsc": _mask_ifsc}
+
+
+def _kyc_audit_value(field: str, value) -> str:
+    """Audit-safe rendering: PAN, account number and IFSC are masked; names are kept so the change stays traceable."""
+    return _KYC_MASK.get(field, lambda v: str(v or ""))(value) if value else ""
+
+
 @router.put("/kyc/{user_id}/edit")
-async def admin_edit_kyc(user_id: str, body: KycEditBody, request: Request, admin: dict = Depends(require_admin)):
-    """Admin completes/corrects a member's identity details. Saved to the real DB, audited."""
+async def admin_edit_kyc(user_id: str, body: KycEditBody, request: Request, admin: dict = Depends(require_money_admin)):
+    """FINANCE ROLES ONLY (super_admin, accounts_admin): complete or correct a member's PAN and payout bank details.
+    Any real change to a verified (or rejected) record sends it back to "pending": the old verification covered the old
+    details, not the new ones. The audit keeps masked old and new values, never the full PAN or account number."""
     upd = {k: (v.strip() if isinstance(v, str) else v) for k, v in body.model_dump().items() if v is not None}
     if "pan" in upd:
         upd["pan"] = upd["pan"].upper()
+        if upd["pan"] and not re.fullmatch(r"[A-Z]{5}\d{4}[A-Z]", upd["pan"]):
+            raise HTTPException(status_code=400, detail="Enter a valid 10-character PAN.")
     if "ifsc" in upd:
         upd["ifsc"] = upd["ifsc"].upper()
-    upd["updated_at"] = now_iso()
+        if upd["ifsc"] and not re.fullmatch(r"[A-Z]{4}0[A-Z0-9]{6}", upd["ifsc"]):
+            raise HTTPException(status_code=400, detail="Enter a valid 11-character IFSC.")
+    if upd.get("bank_account") and not re.fullmatch(r"\d{6,18}", upd["bank_account"]):
+        raise HTTPException(status_code=400, detail="Enter a valid bank account number (6 to 18 digits).")
+    now = now_iso()
     existing = await db.kyc_records.find_one({"user_id": user_id})
     if existing:
-        await db.kyc_records.update_one({"user_id": user_id}, {"$set": upd})
-    else:
-        u = await db.users.find_one({"id": user_id})
-        if not u:
-            raise HTTPException(status_code=404, detail="Distributor not found.")
-        upd.update({"id": new_id(), "user_id": user_id, "distributor_id": u.get("distributor_id"),
-                    "status": "pending", "aadhaar": "", "created_at": now_iso(), "submitted_at": now_iso()})
-        await db.kyc_records.insert_one(upd)
-        await db.users.update_one({"id": user_id}, {"$set": {"kyc_status": "pending"}})
-    await log_audit(admin, "kyc_edited_by_admin", "kyc", user_id, new_value=list(upd.keys()), request=request)
-    return {"ok": True}
+        changed = [k for k in KYC_EDIT_FIELDS if k in upd and str(upd[k] or "") != str(existing.get(k) or "")]
+        if not changed:
+            return {"ok": True, "changed": [], "status": existing.get("status")}
+        old_status = existing.get("status")
+        sets = {k: upd[k] for k in changed}
+        sets.update({"updated_at": now, "last_edited_by": admin["id"], "last_edited_at": now})
+        reset = old_status != "pending"
+        if reset:
+            sets.update({"status": "pending", "verification_reset_at": now, "verification_reset_by": admin["id"],
+                         "rejection_reason": None})
+        await db.kyc_records.update_one({"user_id": user_id}, {"$set": sets, "$inc": {"version": 1}})
+        if reset:
+            await db.users.update_one({"id": user_id}, {"$set": {"kyc_status": "pending", "updated_at": now}})
+            await create_notification(user_id, "kyc", "KYC details updated",
+                                      "HOME GENIES updated your KYC details. They will be verified again before your next withdrawal.",
+                                      "केवाईसी विवरण अपडेट", "HOME GENIES ने आपके केवाईसी विवरण अपडेट किए हैं। अगली निकासी से पहले इनका फिर से सत्यापन होगा।")
+        await log_audit(admin, "kyc_edited_by_admin", "kyc", user_id,
+                        old_value={"status": old_status, **{k: _kyc_audit_value(k, existing.get(k)) for k in changed}},
+                        new_value={"status": "pending" if reset else old_status, **{k: _kyc_audit_value(k, upd[k]) for k in changed}},
+                        request=request)
+        return {"ok": True, "changed": changed, "status": "pending" if reset else old_status, "verification_reset": reset}
+    u = await db.users.find_one({"id": user_id})
+    if not u:
+        raise HTTPException(status_code=404, detail="Distributor not found.")
+    doc = {k: upd[k] for k in KYC_EDIT_FIELDS if k in upd}
+    doc.update({"id": new_id(), "user_id": user_id, "distributor_id": u.get("distributor_id"), "status": "pending", "version": 1,
+                "aadhaar": "", "created_at": now, "submitted_at": now, "updated_at": now,
+                "last_edited_by": admin["id"], "last_edited_at": now})
+    await db.kyc_records.insert_one(doc)
+    await db.users.update_one({"id": user_id}, {"$set": {"kyc_status": "pending"}})
+    await log_audit(admin, "kyc_edited_by_admin", "kyc", user_id, old_value=None,
+                    new_value={"status": "pending", **{k: _kyc_audit_value(k, doc.get(k)) for k in KYC_EDIT_FIELDS if k in doc}},
+                    request=request)
+    return {"ok": True, "changed": [k for k in KYC_EDIT_FIELDS if k in doc], "status": "pending", "verification_reset": False}
 
 
 @router.put("/kyc/{user_id}")
@@ -468,9 +703,21 @@ async def review_kyc(user_id: str, body: KycReview, request: Request, admin: dic
         new_status = "rejected"
     else:
         raise HTTPException(status_code=400, detail="Invalid action.")
-    await db.kyc_records.update_one({"user_id": user_id},
-                                    {"$set": {"status": new_status, "rejection_reason": body.reason,
-                                              "updated_at": now_iso()}})
+    stale = HTTPException(status_code=409, detail="These KYC details changed after you opened them. Reload and review the latest details.")
+    if new_status == "verified" and k.get("last_edited_by") and k["last_edited_by"] == admin["id"]:
+        # Decision 8: material KYC changes need an independent second person; the editor cannot verify their own change.
+        raise HTTPException(status_code=403, detail="You changed these KYC details, so another administrator must verify them.")
+    version = k.get("version")
+    if body.expected_version is not None and body.expected_version != (version or 0):
+        raise stale
+    # Atomic: the decision applies only to exactly the record that was read (same version AND same status). An edit or a
+    # resubmission in between bumps the version, so a stale "verify" can never mark new bank/PAN details verified.
+    r = await db.kyc_records.update_one({"user_id": user_id, "status": k.get("status"), "version": version},
+                                        {"$set": {"status": new_status, "rejection_reason": body.reason, "updated_at": now_iso(),
+                                                  "reviewed_by": admin["id"], "reviewed_at": now_iso()},
+                                         "$inc": {"version": 1}})
+    if not r.modified_count:
+        raise stale
     await db.users.update_one({"id": user_id}, {"$set": {"kyc_status": new_status, "updated_at": now_iso()}})
     await create_notification(user_id, "kyc",
                               "KYC verified" if new_status == "verified" else "KYC rejected",
@@ -747,7 +994,12 @@ class ResetBody(BaseModel):
 
 @router.get("/registration-requests")
 async def list_registration_requests(admin: dict = Depends(require_admin)):
-    return await db.registration_requests.find({}, {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(500)
+    rows = await db.registration_requests.find({}, {"_id": 0, "password_hash": 0, "env_credential_marker": 0}).sort("created_at", -1).to_list(500)
+    for r in rows:                                   # never send the raw Aadhaar number to the admin panel
+        a = r.pop("aadhaar_number", None)
+        if a:
+            r["aadhaar_masked"] = mask_aadhaar(a)
+    return rows
 
 
 async def activate_registration(r: dict, approver: Optional[dict] = None) -> str:
@@ -758,14 +1010,18 @@ async def activate_registration(r: dict, approver: Optional[dict] = None) -> str
     if existing:
         did = existing.get("distributor_id")
     else:
-        did = await next_distributor_id()
+        # Decision 5: a CUSTOMER only shops. It gets its own role and id prefix, no sponsor link and no earning capability.
+        # Every other request (the existing sign-up) still creates a RED distributor, exactly as before.
+        is_customer = r.get("account_type") == "customer"
+        did = await next_sequence("customer", "CU", 6) if is_customer else await next_distributor_id()
         user = {
             "id": new_id(), "distributor_id": did, "full_name": r["full_name"],
             "email": r.get("email") or None, "mobile": r["mobile"], "password_hash": r["password_hash"],
-            "role": "distributor", "status": "red", "account_status": "active",
-            "mobile_verified": False, "email_verified": bool(r.get("email_verified")),
+            "role": "customer" if is_customer else "distributor", "status": "customer" if is_customer else "red",
+            "account_status": "active",
+            "mobile_verified": bool(r.get("mobile_verified")), "email_verified": bool(r.get("email_verified")),
             "google_linked": bool(r.get("google_linked")),
-            "sponsor_id": r.get("sponsor_id") or None, "sponsor_user_id": None,
+            "sponsor_id": None if is_customer else (r.get("sponsor_id") or None), "sponsor_user_id": None,
             "address": r.get("address", ""), "state": r.get("state", ""), "city": r.get("city", ""),
             "pincode": r.get("pincode", ""), "aadhaar_number": r.get("aadhaar_number", ""), "kyc_status": "not_started",
             "profile_complete": bool(r.get("email")), "created_at": now_iso(), "updated_at": now_iso(),
@@ -775,8 +1031,8 @@ async def activate_registration(r: dict, approver: Optional[dict] = None) -> str
         except Exception:
             raise HTTPException(status_code=400, detail="Could not create distributor (possibly a duplicate email or mobile). Please check and try again.")
         await get_or_create_wallet(user["id"])
-        # HOME GENIES: approval records the sponsor link only. No reward is paid.
-        sp_did = r.get("sponsor_id")
+        # HOME GENIES: approval records the sponsor link only. No reward is paid. Customers never get a sponsor link.
+        sp_did = None if is_customer else r.get("sponsor_id")
         if sp_did:
             rc = await db.referral_codes.find_one({"code": sp_did, "active": True})
             if rc:
@@ -854,15 +1110,76 @@ class BlockBody(BaseModel):
     blocked: bool
 
 
+_NO_PREV = object()
+_NOT_DELETED = {"deleted_at": None, "deleted_by": None}   # write-time guard: missing or null deletion markers only
+
+
+def _deletion_marked(u: dict) -> bool:
+    """A deactivation marker wins over everything else. Before Batch 0, blocking a deactivated account overwrote
+    account_status "deleted" with "blocked" but left deleted_at / deleted_by behind, so the status alone is not enough."""
+    return u.get("account_status") == "deleted" or bool(u.get("deleted_at")) or bool(u.get("deleted_by"))
+
+
+async def _status_before_legacy_block(u: dict) -> str:
+    """For an account blocked before the previous status was recorded (never called for deletion-marked accounts).
+    Members, staff and admins had no activation gate, so they return to "active". A vendor owner returns to "active" only
+    with evidence that the owner account was activated: users.activated_at (direct activation), users.invite_accepted_at
+    (owner invitation accepted) or vendors.owner_activation == "active". An invitation that was only SENT restores
+    "invited"; anything else restores "pending_approval". A vendor record existing is never evidence of activation."""
+    if u.get("role") != "vendor":
+        return "active"
+    if u.get("activated_at") or u.get("invite_accepted_at"):
+        return "active"
+    v = await db.vendors.find_one({"user_id": u["id"]}, {"_id": 0, "owner_activation": 1})
+    act = (v or {}).get("owner_activation")
+    if act == "active":
+        return "active"
+    return "invited" if act == "invited" else "pending_approval"
+
+
 @router.put("/users/{user_id}/block")
 async def block_user(user_id: str, body: BlockBody, request: Request, admin: dict = Depends(require_admin)):
+    """Block keeps the account's real status in `pre_block_status`; unblock puts exactly that status back. Unblocking never
+    activates an account: a vendor owner awaiting approval or an invitation stays not-activated, and a deactivated
+    (deleted) account cannot be blocked or unblocked at all."""
     u = await db.users.find_one({"id": user_id})
     if not u:
         raise HTTPException(status_code=404, detail="User not found.")
-    await db.users.update_one({"id": user_id}, {"$set": {"blocked": body.blocked,
-        "account_status": "blocked" if body.blocked else "active", "updated_at": now_iso()}})
-    await log_audit(admin, "user_blocked" if body.blocked else "user_unblocked", "user", user_id, request=request)
-    return {"ok": True, "blocked": body.blocked}
+    _guard_target(admin, u, "block or unblock")
+    status = u.get("account_status")
+    if _deletion_marked(u):
+        raise HTTPException(status_code=409, detail="This account is deactivated. It cannot be blocked or unblocked.")
+    is_blocked = bool(u.get("blocked")) or status == "blocked"
+    now = now_iso()
+    if body.blocked:
+        if is_blocked:
+            return {"ok": True, "blocked": True, "account_status": status, "unchanged": True}
+        r = await db.users.update_one({"id": user_id, "account_status": status, "blocked": {"$ne": True}, **_NOT_DELETED},
+                                      {"$set": {"blocked": True, "account_status": "blocked", "pre_block_status": status,
+                                                "blocked_at": now, "blocked_by": admin["id"], "updated_at": now}})
+        if not r.modified_count:
+            raise HTTPException(status_code=409, detail="The account changed while you were blocking it. Please reload.")
+        await log_audit(admin, "user_blocked", "user", user_id, old_value={"account_status": status},
+                        new_value={"account_status": "blocked"}, request=request)
+        return {"ok": True, "blocked": True, "account_status": "blocked"}
+    if not is_blocked:
+        return {"ok": True, "blocked": False, "account_status": status, "unchanged": True}
+    prev = u.get("pre_block_status", _NO_PREV)
+    if prev is _NO_PREV:                                   # blocked before the previous status was recorded
+        prev = await _status_before_legacy_block(u) if status == "blocked" else status
+    if prev == "deleted":
+        raise HTTPException(status_code=409, detail="This account is deactivated. It cannot be unblocked.")
+    if prev in (None, "", "blocked"):
+        prev = "active" if u.get("role") != "vendor" else await _status_before_legacy_block(u)
+    r = await db.users.update_one({"id": user_id, "account_status": status, **_NOT_DELETED},
+                                  {"$set": {"blocked": False, "account_status": prev, "unblocked_at": now,
+                                            "unblocked_by": admin["id"], "updated_at": now},
+                                   "$unset": {"pre_block_status": ""}})
+    if not r.modified_count:
+        raise HTTPException(status_code=409, detail="The account changed while you were unblocking it. Please reload.")
+    await log_audit(admin, "user_unblocked", "user", user_id, old_value={"account_status": status},
+                    new_value={"account_status": prev}, request=request)
+    return {"ok": True, "blocked": False, "account_status": prev}
 
 
 @router.delete("/users/{user_id}")
@@ -900,23 +1217,47 @@ class AdminUserUpdate(BaseModel):
 
 @router.put("/users/{user_id}")
 async def admin_update_user(user_id: str, body: AdminUserUpdate, request: Request, admin: dict = Depends(require_admin)):
-    """Admin completes/corrects a distributor's profile."""
+    """Admin completes/corrects a member's profile. Admin accounts can be edited only by the super admin, and the super admin
+    account not at all (see _guard_target). Name/address/Aadhaar changes apply at once. A mobile or email change is only
+    PROPOSED (contact_change.py): the live contact stays the trusted one until the account holder confirms with a code sent to
+    that trusted mobile, or a super admin who did not propose it approves a reviewed recovery. So an admin can never point an
+    account's OTP/Google login or recovery at a contact they control."""
     u = await db.users.find_one({"id": user_id})
     if not u:
         raise HTTPException(status_code=404, detail="User not found.")
+    _guard_target(admin, u, "edit")
     upd = {k: (v.strip() if isinstance(v, str) else v) for k, v in body.model_dump().items() if v is not None}
     if "email" in upd:
         upd["email"] = upd["email"].lower() or None
-    try:
+        if upd["email"] and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", upd["email"]):
+            raise HTTPException(status_code=400, detail="Enter a valid email address, or leave it blank.")
+    if "mobile" in upd and not re.fullmatch(r"[6-9]\d{9}", upd["mobile"] or ""):
+        raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number.")
+    if upd.get("aadhaar_number") and not re.fullmatch(r"\d{12}", upd["aadhaar_number"]):
+        raise HTTPException(status_code=400, detail="Enter a valid 12-digit Aadhaar number.")
+    if upd.get("aadhaar_number") == "":
+        upd.pop("aadhaar_number")                       # blank means "leave unchanged", never "erase"
+    proposed = {k: upd.pop(k) for k in ("email", "mobile") if k in upd}
+    proposed = {k: v for k, v in proposed.items() if (v or None) != (u.get(k) or None)}
+    for k, v in proposed.items():
+        if v and await db.users.find_one({k: v, "id": {"$ne": user_id}}, {"_id": 1}):
+            raise HTTPException(status_code=409, detail=f"This {k} is already used by another account.")
+    if upd:
         await db.users.update_one({"id": user_id}, {"$set": {**upd, "updated_at": now_iso()}})
-    except Exception:
-        raise HTTPException(status_code=400, detail="Could not update (email or mobile may already be in use).")
-    await log_audit(admin, "user_profile_updated", "user", user_id, new_value=list(upd.keys()), request=request)
-    updated = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+        aadhaar_changed = "aadhaar_number" in upd and upd["aadhaar_number"] != u.get("aadhaar_number")
+        await log_audit(admin, "user_profile_updated", "user", user_id,
+                        old_value={"aadhaar_number": mask_aadhaar(u.get("aadhaar_number"))} if aadhaar_changed else None,
+                        new_value={"fields": sorted(upd), **({"aadhaar_number": mask_aadhaar(upd["aadhaar_number"])} if aadhaar_changed else {})},
+                        request=request)
+    contact_change = None
+    if proposed:
+        from contact_change import propose_contact_change
+        contact_change = await propose_contact_change(admin, u, proposed, request)
+    updated = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0, "env_credential_marker": 0})
     if updated.get("aadhaar_number"):
         updated["aadhaar_masked"] = mask_aadhaar(updated["aadhaar_number"])
         updated.pop("aadhaar_number", None)
-    return updated
+    return {**updated, "contact_change": contact_change}
 
 
 class WalletCreditBody(BaseModel):
@@ -952,6 +1293,17 @@ class WalletCreditBody(BaseModel):
 
 @router.post("/wallet/credit")
 async def admin_wallet_credit(body: WalletCreditBody, request: Request, admin: dict = Depends(require_money_admin)):
+    """Decision 4 (maker-checker): a manual credit is only REQUESTED here; a different finance admin approves it
+    (POST /api/admin/finance/approvals/{id}/approve), which runs `apply_wallet_credit`."""
+    did = (body.distributor_id or "").strip().upper()
+    if not await db.users.find_one({"distributor_id": did}, {"_id": 1}):
+        raise HTTPException(status_code=404, detail=f"Distributor {did} not found.")
+    from financial_approvals import submit
+    return await submit("wallet_credit", body.request_id, body.model_dump(), admin, body.reason, request,
+                        summary={"distributor_id": did, "amount": body.amount})
+
+
+async def apply_wallet_credit(body: WalletCreditBody, request: Optional[Request], admin: dict):
     """Manual points credit. Finance administrators only; exact amount, mandatory reason and idempotency key; one ledger row and
     one wallet move per key (the same pattern as commission release); audited. A repeated key returns the original credit."""
     did = (body.distributor_id or "").strip().upper()
@@ -983,29 +1335,51 @@ async def admin_wallet_credit(body: WalletCreditBody, request: Request, admin: d
 
 
 class AdminPwBody(BaseModel):
-    password: Optional[str] = None
+    # The admin chooses a TEMPORARY password and gives it to the member through their own trusted channel. The server never
+    # generates or returns a password. The member must choose a new password at the next sign-in (core.PASSWORD_CHANGE_PATHS).
+    temporary_password: str = Field(default="", max_length=128)
+    reason: str = Field(default="", max_length=300)
 
 
 @router.post("/users/{user_id}/reset-password")
 async def admin_reset_password(user_id: str, body: AdminPwBody, request: Request, admin: dict = Depends(require_admin)):
+    """Forced password change. Rules: super_admin accounts cannot be reset here; other admin accounts only by the super
+    admin; an admin never resets their own account here; not-activated vendor owners are activated only by invitation and
+    deactivated accounts are not reset. Every existing session of the member stops working at once. The response and the
+    audit trail never contain the password."""
     u = await db.users.find_one({"id": user_id})
     if not u:
         raise HTTPException(status_code=404, detail="User not found.")
+    _guard_target(admin, u, "reset the password of")
+    if admin.get("role") not in ("super_admin", "admin"):      # Decision 10: support / finance roles never reset credentials
+        raise HTTPException(status_code=403, detail="Only the super admin or an admin can reset a password.")
     from core import not_activated
     if not_activated(u):      # a vendor owner gets access ONLY through the owner invitation issued at final approval
         raise HTTPException(status_code=409, detail="This account is not activated yet. It is activated through the vendor owner invitation, not a password reset.")
-    # Generated default: 12 random chars (letters + digits), not a guessable prefix + 5 digits.
-    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789"
-    new_pw = (body.password or "").strip() or ("".join(secrets.choice(alphabet) for _ in range(12)))
-    if len(new_pw) < 8:
-        raise HTTPException(status_code=400, detail="Password must be at least 8 characters.")
-    # Changing the password also signs the user out everywhere (older sessions are revoked).
-    await db.users.update_one({"id": user_id}, {"$set": {**password_update(new_pw), "updated_at": now_iso()}})
+    if u.get("account_status") == "deleted":
+        raise HTTPException(status_code=409, detail="This account is deactivated. Its password cannot be reset.")
+    reason = (body.reason or "").strip()
+    if len(reason) < 5:
+        raise HTTPException(status_code=400, detail="Give a reason for the reset (at least 5 characters).")
+    temp = body.temporary_password or ""
+    if len(temp) < 10 or not re.search(r"[A-Za-z]", temp) or not re.search(r"\d", temp):
+        raise HTTPException(status_code=400, detail="The temporary password needs at least 10 characters with letters and numbers.")
+    now = now_iso()
+    # password_update stamps password_changed_at, so every session issued before now is refused (core.get_current_user).
+    await db.users.update_one({"id": user_id}, {"$set": {**password_update(temp), "must_change_password": True,
+                                                         "password_reset_by": admin["id"], "password_reset_at": now,
+                                                         "updated_at": now}})
     await db.password_reset_requests.update_many({"user_id": user_id, "status": "pending"},
-        {"$set": {"status": "resolved", "resolved_by": admin["id"], "resolved_at": now_iso()}})
-    await log_audit(admin, "admin_reset_password", "user", user_id, request=request)
-    return {"message": "Password reset successfully.", "password": new_pw,
-            "distributor_id": u.get("distributor_id"), "email": u.get("email"), "full_name": u.get("full_name")}
+        {"$set": {"status": "resolved", "resolved_by": admin["id"], "resolved_at": now}})
+    await log_audit(admin, "admin_reset_password", "user", user_id,
+                    new_value={"target_role": u.get("role"), "reason": reason, "must_change_password": True,
+                               "sessions_revoked": True}, request=request)
+    await create_notification(user_id, "security", "Your password was reset",
+                              "HOME GENIES reset your password. Sign in with the temporary password you were given; you will be asked to choose a new one.",
+                              "आपका पासवर्ड रीसेट किया गया", "HOME GENIES ने आपका पासवर्ड रीसेट किया है। दिए गए अस्थायी पासवर्ड से साइन इन करें; फिर नया पासवर्ड चुनना होगा।")
+    return {"ok": True, "must_change_password": True, "sessions_revoked": True,
+            "message": "Temporary password set. The member must choose a new password when they next sign in. All their existing sessions were signed out.",
+            "distributor_id": u.get("distributor_id"), "full_name": u.get("full_name")}
 
 
 @router.get("/password-reset-requests")
@@ -1028,19 +1402,10 @@ async def admin_audit(admin: dict = Depends(require_admin)):
 
 @router.delete("/audit-logs")
 async def clear_audit_logs(request: Request, admin: dict = Depends(require_admin)):
-    """SUPER ADMIN only: permanently clears audit history and records one
-    immutable system event noting the deletion."""
-    if admin.get("role") != "super_admin":
-        raise HTTPException(status_code=403, detail="Only the super admin can delete audit logs.")
-    count = (await db.audit_logs.delete_many({})).deleted_count
-    ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "")
-    await db.audit_logs.insert_one({
-        "id": new_id(), "user_id": None, "user_email": "system",
-        "action": "audit_logs_cleared", "entity": "system", "entity_id": "audit_logs",
-        "old_value": {"deleted_count": count}, "new_value": None,
-        "protected": True, "ip": ip, "created_at": now_iso(),
-    })
-    return {"ok": True, "deleted": count}
+    """AUD-01: audit records are append-only. No role, including the super admin, can delete them; the attempt itself is
+    recorded. (Retention or archiving, if ever needed, must be an offline, separately approved procedure.)"""
+    await log_audit(admin, "audit_logs_delete_refused", "system", "audit_logs", request=request)
+    raise HTTPException(status_code=405, detail="Audit records are append-only and cannot be deleted.")
 
 
 # ---------------- Reports ----------------
@@ -1059,12 +1424,17 @@ REPORTS = {
 }
 
 
+def _report_projection(fields: list) -> dict:
+    """Only the report's own columns leave the database: never password hashes, Aadhaar, PAN, bank details or tokens."""
+    return {"_id": 0, **{f: 1 for f in fields}}
+
+
 @router.get("/reports/{report}")
 async def get_report(report: str, admin: dict = Depends(require_admin)):
     if report not in REPORTS:
         raise HTTPException(status_code=404, detail="Report not found.")
     coll, q, fields = REPORTS[report]
-    rows = await db[coll].find(q, {"_id": 0}).sort("created_at", -1).to_list(2000)
+    rows = await db[coll].find(q, _report_projection(fields)).sort("created_at", -1).to_list(2000)
     return {"report": report, "fields": fields, "rows": rows, "count": len(rows)}
 
 
@@ -1072,13 +1442,14 @@ async def get_report(report: str, admin: dict = Depends(require_admin)):
 async def export_report(report: str, admin: dict = Depends(require_admin)):
     if report not in REPORTS:
         raise HTTPException(status_code=404, detail="Report not found.")
+    from finance_routes import _csv_safe
     coll, q, fields = REPORTS[report]
-    rows = await db[coll].find(q, {"_id": 0}).sort("created_at", -1).to_list(5000)
+    rows = await db[coll].find(q, _report_projection(fields)).sort("created_at", -1).to_list(5000)
     buf = io.StringIO()
     writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
     writer.writeheader()
     for r in rows:
-        writer.writerow({f: r.get(f, "") for f in fields})
+        writer.writerow({f: (_csv_safe(r[f]) if isinstance(r.get(f), str) else r.get(f, "")) for f in fields})
     buf.seek(0)
     return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
                              headers={"Content-Disposition": f"attachment; filename={report}_report.csv"})

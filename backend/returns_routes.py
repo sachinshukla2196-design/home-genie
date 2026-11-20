@@ -24,7 +24,7 @@ from money import to_paise, paise_to_float, paise_of, mul_ratio
 from pagination import clamp_page, page_meta
 from stock import PRE_DISPATCH, intent, run_intents, restock_returned_lines, reserve_replacement
 from validators import safe_image_refs
-from vendor_routes import require_approved_vendor
+from vendor_routes import require_vendor_obligations
 
 router = APIRouter(prefix="/api", tags=["returns"])
 
@@ -124,12 +124,19 @@ async def _open_case_total(order_id: str) -> int:
                                                                     {"_id": 0, "amount_paise": 1}).to_list(100))
 
 
+def _value_with_tax(order: dict, value: int) -> int:
+    """What the customer paid for goods worth `value` at line price. GST-inclusive orders (Decision 1): the line price already
+    contains the tax. Older GST-exclusive orders: the line value plus its proportional share of the order's GST."""
+    if order.get("prices_include_gst"):
+        return value
+    sub = paise_of(order, "subtotal_paise", "subtotal") or 1
+    return value + mul_ratio(paise_of(order, "gst_paise", "gst_amount"), value, sub)
+
+
 def _lines_refund_paise(order: dict, vendor_id: str) -> int:
     """One vendor's lines plus their share of the order's GST: the same basis as a return refund (_suggested_refund)."""
-    sub = paise_of(order, "subtotal_paise", "subtotal") or 1
-    gst = paise_of(order, "gst_paise", "gst_amount")
     value = sum(paise_of(li, "total_paise", "total") for li in order.get("items", []) if li.get("vendor_id") == vendor_id)
-    return value + mul_ratio(gst, value, sub)
+    return _value_with_tax(order, value)
 
 
 async def settle_paid_cancellation(order_id: str):
@@ -272,6 +279,9 @@ async def refund_case_action(case_id: str, body: RefundAction, request: Request,
             raise HTTPException(status_code=400, detail="A closing note is required.")
         sets.update({"resolved_by": admin["id"], "outcome": "refunded" if case["status"] == "confirmed" else "no_refund"})
     elif target == "confirmed":
+        if case.get("initiated_by") and case["initiated_by"] == admin["id"]:
+            # Decision 4 (maker-checker): the admin who initiated the refund cannot also confirm that the money went out.
+            raise HTTPException(status_code=403, detail="A different finance admin must confirm a refund you initiated.")
         if admin.get("role") not in FINANCE_ROLES:
             raise HTTPException(status_code=403, detail="Finance access required to confirm a refund.")
         ref = body.reference.strip()
@@ -407,13 +417,7 @@ class ReturnIn(BaseModel):
 
 def _suggested_refund(order: dict, lines: list) -> int:
     """Value of the returned lines plus their share of the order's tax. Delivery/COD fees are not refunded. Admin can lower it."""
-    sub = paise_of(order, "subtotal_paise", "subtotal") or 1
-    gst = paise_of(order, "gst_paise", "gst_amount")
-    total = 0
-    for ln in lines:
-        value = ln["price_paise"] * ln["quantity"]
-        total += value + mul_ratio(gst, value, sub)
-    return total
+    return sum(_value_with_tax(order, ln["price_paise"] * ln["quantity"]) for ln in lines)
 
 
 @router.post("/orders/{order_id}/returns")
@@ -570,7 +574,7 @@ async def customer_cancel_return(rid: str, user: dict = Depends(get_current_user
 
 # ----------------------------------------------------------- vendor side
 @router.get("/vendor/returns")
-async def vendor_returns(status: Optional[str] = None, page: int = 1, page_size: int = 25, user: dict = Depends(require_approved_vendor)):
+async def vendor_returns(status: Optional[str] = None, page: int = 1, page_size: int = 25, user: dict = Depends(require_vendor_obligations)):
     page, page_size = clamp_page(page, page_size)
     q = {"vendor_id": user["_vendor"]["id"], **({"status": status} if status else {})}
     total = await db.return_cases.count_documents(q)
@@ -589,7 +593,7 @@ async def _vendor_return(user: dict, rid: str) -> dict:
 
 
 @router.get("/vendor/returns/{rid}")
-async def vendor_return_detail(rid: str, user: dict = Depends(require_approved_vendor)):
+async def vendor_return_detail(rid: str, user: dict = Depends(require_vendor_obligations)):
     rc = await _vendor_return(user, rid)
     o = await db.orders.find_one({"id": rc["order_id"]}, {"_id": 0, "address": 1})
     a = (o or {}).get("address") or {}
@@ -604,7 +608,7 @@ class VendorReturnAction(BaseModel):
 
 
 @router.post("/vendor/returns/{rid}/action")
-async def vendor_return_action(rid: str, body: VendorReturnAction, request: Request, user: dict = Depends(require_approved_vendor)):
+async def vendor_return_action(rid: str, body: VendorReturnAction, request: Request, user: dict = Depends(require_vendor_obligations)):
     rc = await _vendor_return(user, rid)
     note = body.note.strip()
     if body.action == "approve":
@@ -648,7 +652,7 @@ class InspectionIn(BaseModel):
 
 
 @router.post("/vendor/returns/{rid}/inspection")
-async def vendor_return_inspection(rid: str, body: InspectionIn, request: Request, user: dict = Depends(require_approved_vendor)):
+async def vendor_return_inspection(rid: str, body: InspectionIn, request: Request, user: dict = Depends(require_vendor_obligations)):
     """Goods are restocked only after the vendor confirms receipt AND records an inspection, only the resellable lines, once."""
     rc = await _vendor_return(user, rid)
     decided = {l.index: l for l in body.lines}

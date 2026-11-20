@@ -3,7 +3,7 @@ import { Link, useLocation, Outlet } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
   LayoutDashboard, Users, Package, ShoppingCart, Banknote,
-  FileBarChart, Settings, ScrollText, LogOut, ShieldCheck, Store, Handshake, Award, UserCheck, Inbox,
+  FileBarChart, Settings, ScrollText, LogOut, ShieldCheck, Store, Handshake, Award, UserCheck, Inbox, UserCog, Briefcase,
 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
@@ -18,6 +18,8 @@ const NAV = [
   { to: "/admin/orders", icon: ShoppingCart, key: "nav.orders" },
   { to: "/admin/activations", icon: UserCheck, key: "nav.activations", roles: ["admin", "super_admin"] },   // the server enforces this too
   { to: "/admin/withdrawals", icon: Banknote, key: "nav.withdrawals" },
+  { to: "/admin/kyc", icon: ShieldCheck, key: "nav.kyc" },
+  { to: "/admin/operations", icon: Briefcase, key: "nav.operations" },
   { to: "/admin/vendors", icon: Store, key: "av.title" },
   { to: "/admin/vendor-applications", icon: Inbox, key: "nav.vendorApplications", roles: ["super_admin", "admin", "support_admin"] },   // the server enforces this too
   { to: "/admin/agreements", icon: Handshake, key: "aa.nav" },
@@ -25,6 +27,7 @@ const NAV = [
   { to: "/admin/reports", icon: FileBarChart, key: "nav.reports" },
   { to: "/admin/settings", icon: Settings, key: "nav.settings" },
   { to: "/admin/audit", icon: ScrollText, key: "nav.audit" },
+  { to: "/admin/team", icon: UserCog, key: "nav.adminTeam", roles: ["super_admin"] },   // the server enforces this too
 ];
 
 export function AdminLayout() {

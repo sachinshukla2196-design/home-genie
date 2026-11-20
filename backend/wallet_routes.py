@@ -28,6 +28,29 @@ async def get_wallet(user: dict = Depends(get_current_user)):
     return w
 
 
+@router.get("/commissions/statement")
+async def my_commission_statement(user: dict = Depends(get_current_user)):
+    """Batch 5 (HG-02/HG-03): the member's own commission statement — every commission, net of reversals, with why it is
+    still held. Amounts are integer paise; the release rule is delivery + the return window (owner decision 2)."""
+    from eligibility import payout_block
+    from money import paise_to_float
+    rows = await db.commissions.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    orders = {o["id"]: o for o in await db.orders.find({"id": {"$in": list({r["order_id"] for r in rows})}}, {"_id": 0}).to_list(None)}
+    items, totals = [], {"earned_paise": 0, "reversed_paise": 0, "released_paise": 0, "pending_paise": 0}
+    for r in rows:
+        amt, rev = int(r.get("amount_paise") or 0), int(r.get("reversed_paise") or 0)
+        released = bool(r.get("released_at"))
+        hold = None if released or r.get("status") == "REVERSED" else await payout_block(orders.get(r["order_id"]), hold_days=r.get("release_after_days") or 0)
+        net = max(amt - rev, 0)
+        totals["earned_paise"] += amt
+        totals["reversed_paise"] += rev
+        totals["released_paise" if released else "pending_paise"] += 0 if r.get("status") == "REVERSED" else net
+        items.append({"id": r["id"], "order_number": r.get("order_number"), "type": r.get("type"), "status": r.get("status"),
+                      "amount_paise": amt, "reversed_paise": rev, "net_paise": net, "net": paise_to_float(net),
+                      "created_at": r.get("created_at"), "released_at": r.get("released_at"), "held_because": hold})
+    return {"items": items, **totals, **{k[:-6]: paise_to_float(v) for k, v in totals.items()}}
+
+
 @router.get("/wallet/transactions")
 async def wallet_txns(user: dict = Depends(get_current_user)):
     return await db.wallet_transactions.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(300)
@@ -92,16 +115,17 @@ async def submit_kyc(body: KycBody, request: Request, user: dict = Depends(get_c
         "account_holder_name": body.account_holder_name.strip(),
         "bank_account": body.bank_account.strip(), "ifsc": body.ifsc.strip().upper(),
         "bank_name": body.bank_name.strip(),
-        "status": "pending", "rejection_reason": None,
+        "status": "pending", "rejection_reason": None, "last_edited_by": None,
         "submitted_at": now_iso(), "updated_at": now_iso(),
     }
     existing = await db.kyc_records.find_one({"user_id": user["id"]})
     if existing:
         rec["id"] = existing.get("id", new_id())
-        await db.kyc_records.update_one({"user_id": user["id"]}, {"$set": rec})
+        await db.kyc_records.update_one({"user_id": user["id"]}, {"$set": rec, "$inc": {"version": 1}})   # version: stale reviews refused
     else:
         rec["id"] = new_id()
         rec["created_at"] = now_iso()
+        rec["version"] = 1
         await db.kyc_records.insert_one(dict(rec))
     await db.users.update_one({"id": user["id"]}, {"$set": {"kyc_status": "pending", "updated_at": now_iso()}})
     await create_notification(user["id"], "kyc", "KYC submitted",

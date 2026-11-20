@@ -8,6 +8,7 @@ import { Logo } from "@/components/Logo";
 import { useI18n } from "@/context/I18nContext";
 import { API } from "@/lib/api";
 import { pressable } from "@/components/motion";
+import { OrderSelfService } from "@/components/OrderSelfService";
 
 const STATUS_COLORS = {
   paid: "bg-hg-success/15 text-hg-success ring-hg-success/30",
@@ -146,11 +147,23 @@ export default function OrderDetail() {
           </table>
         </div>
         <div className="ml-auto mt-6 w-full max-w-xs space-y-2 text-sm">
-          <div className="flex justify-between text-muted2"><span>{t("order.subtotal")}</span><span className="tabular-nums">{money(o.subtotal)}</span></div>
-          <div className="flex justify-between text-muted2"><span>{t("order.gst")} ({o.gst_percent}%)</span><span className="tabular-nums">{money(o.gst_amount)}</span></div>
+          {o.prices_include_gst ? (
+            /* Decision 1: GST-inclusive invoice — taxable value + GST contained in the prices = goods total */
+            <>
+              <div className="flex justify-between text-muted2" data-testid="inv-taxable"><span>Taxable value</span><span className="tabular-nums">{money(o.subtotal)}</span></div>
+              <div className="flex justify-between text-muted2" data-testid="inv-gst"><span>GST included {o.gst_percent != null ? `(${o.gst_percent}%)` : "(mixed rates)"}</span><span className="tabular-nums">{money(o.gst_amount)}</span></div>
+              {o.cod_fee > 0 && <div className="flex justify-between text-muted2"><span>{t("checkout.codFee")}</span><span className="tabular-nums">{money(o.cod_fee)}</span></div>}
+            </>
+          ) : (
+            <>
+              <div className="flex justify-between text-muted2"><span>{t("order.subtotal")}</span><span className="tabular-nums">{money(o.subtotal)}</span></div>
+              <div className="flex justify-between text-muted2"><span>{t("order.gst")} ({o.gst_percent}%)</span><span className="tabular-nums">{money(o.gst_amount)}</span></div>
+            </>
+          )}
           <div className="flex justify-between border-t border-brand-50 pt-2 font-display text-lg font-semibold text-ink"><span>{t("order.total")}</span><span className="tabular-nums text-hg-violet dark:text-hg-lavender">{money(o.total)}</span></div>
         </div>
-        {o.payment_status !== "paid" && o.payment_method !== "cod" && (
+        <OrderSelfService order={o} onChange={load} />
+        {o.payment_status === "pending" && o.status !== "cancelled" && o.payment_method !== "cod" && (
           <motion.div {...pressable} className="mt-6 print:hidden">
             <Button onClick={() => navigate("/app/checkout")} className="hg-btn h-11 w-full rounded-full" data-testid="order-paynow">{t("order.payNow")}</Button>
           </motion.div>

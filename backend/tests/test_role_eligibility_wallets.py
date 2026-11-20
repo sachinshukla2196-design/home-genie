@@ -111,8 +111,8 @@ def test_ineligible_roles_earn_nothing_new_and_their_share_is_not_redirected(c, 
         assert set(ref) == {("COMMISSION_DIRECT", S[f"{key}_d1"])}
     else:              # a green non-distributor referrer is skipped; the team upline keeps its share, nothing is redirected
         assert set(ref) == {("COMMISSION_DIRECT", S[f"{key}_d1"]), ("COMMISSION_TEAM", S[f"{key}_up"])}
-        assert ref[("COMMISSION_TEAM", S[f"{key}_up"])]["amount_paise"] == 5000
-    assert ref[("COMMISSION_DIRECT", S[f"{key}_d1"])]["amount_paise"] == 30000
+        assert ref[("COMMISSION_TEAM", S[f"{key}_up"])]["amount_paise"] == 4762      # 5% of the pre-GST 952.38 (1000 incl. 5% GST)
+    assert ref[("COMMISSION_DIRECT", S[f"{key}_d1"])]["amount_paise"] == 28571      # 30% of the pre-GST 952.38
     team = _comms(c, _shop(c, f"{key}_d2")["id"])                            # as team
     assert set(team) == {("COMMISSION_DIRECT", S[f"{key}_d2"]), ("COMMISSION_REFERRAL", S[f"{key}_d1"])}
 
@@ -196,7 +196,8 @@ def _sale(c, key="hg", sub=1000.0, release=True):
     sp = round(sub * 100)
     o = {"id": oid, "order_number": "NW-" + oid[:5], "user_id": S["buyer"], "seller_user_id": S[key], "payment_method": "online",
          "payment_status": "paid", "status": "delivered", "subtotal": sub, "subtotal_paise": sp, "total": sub * 1.05, "total_paise": round(sp * 1.05),
-         "fulfilments": [], "items": [], "refunded_paise": 0, "refunded_amount": 0.0, "paid_at": now_iso(), "created_at": now_iso()}
+         "fulfilments": [], "items": [], "refunded_paise": 0, "refunded_amount": 0.0, "paid_at": now_iso(), "created_at": now_iso(),
+         "delivered_at": OLD}                                     # decision 2: delivered long ago, so a release is due
     _run(c, lambda: db.orders.insert_one(dict(o)))
     b = _run(c, lambda: db.users.find_one({"id": S["buyer"]}, {"_id": 0}))
     _run(c, lambda: distribute_sale_commissions(o, b))

@@ -15,8 +15,7 @@ export default function Cart() {
   const navigate = useNavigate();
   const sym = "₹";
   const money = (v) => `${sym}${Number(v).toLocaleString("en-IN")}`;
-  const gst = Math.round(subtotal * 0.05);
-  const total = subtotal + gst;
+  const total = subtotal;          // Decision 1: prices include GST; nothing is added on top
 
   if (items.length === 0) return (
     <div className="mx-auto max-w-lg py-10">
@@ -63,8 +62,7 @@ export default function Cart() {
           className="hg-card h-fit p-5 sm:p-6 lg:sticky lg:top-24">
           <h3 className="font-display text-lg font-semibold text-ink">{t("cart.summary")}</h3>
           <div className="mt-4 space-y-2.5 text-sm">
-            <Row label={t("order.subtotal")} value={money(subtotal)} />
-            <Row label={`${t("order.gst")} (5%)`} value={money(gst)} />
+            <p className="text-xs text-muted2" data-testid="cart-gst-note">All prices include GST. Your invoice shows the GST breakdown.</p>
             <div className="my-2 border-t border-brand-50" />
             <Row label={t("order.total")} value={money(total)} bold />
           </div>

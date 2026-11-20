@@ -166,6 +166,29 @@ async def reconcile_ledger(limit: int = 500) -> dict:
     return {"sales": sales, "reversals": reversals, "refunds": refunds}
 
 
+async def _eligible_paise(vendor_id: str):
+    """Sum of ledger entries that may be settled now (decision 3), and how many orders are still held."""
+    from eligibility import payout_block, return_window_days
+    rows = await db.vendor_ledger.find({"vendor_id": vendor_id}, {"_id": 0, "amount_paise": 1, "order_id": 1}).to_list(None)
+    by_order, free = {}, 0
+    for r in rows:
+        if r.get("order_id"):
+            by_order[r["order_id"]] = by_order.get(r["order_id"], 0) + r["amount_paise"]
+        else:
+            free += r["amount_paise"]
+    if not by_order:
+        return free, 0
+    window = await return_window_days()
+    orders = {o["id"]: o for o in await db.orders.find({"id": {"$in": list(by_order)}}, {"_id": 0}).to_list(None)}
+    eligible, held = free, 0
+    for oid, amt in by_order.items():
+        if await payout_block(orders.get(oid), window=window) is None:
+            eligible += amt
+        elif amt:
+            held += 1
+    return eligible, held
+
+
 async def balances(vendor_id: str) -> dict:
     """Vendor money split by what each number means. All values are integer paise."""
     agg = await db.vendor_ledger.aggregate([{"$match": {"vendor_id": vendor_id}},
@@ -177,11 +200,17 @@ async def balances(vendor_id: str) -> dict:
     open_settle = await db.settlements.aggregate([{"$match": {"vendor_id": vendor_id, "status": {"$in": ["requested", "approved"]}}},
                                                   {"$group": {"_id": None, "n": {"$sum": "$amount_paise"}}}]).to_list(1)
     under_settlement = open_settle[0]["n"] if open_settle else 0
+    eligible, held_orders = await _eligible_paise(vendor_id)
     settled = -paid
     return {"currency": "INR", "eligible_sales_paise": sales, "sale_reversals_paise": rev, "refunds_paise": ref,
             "adjustments_paise": adj, "commissions_paise": comm, "vendor_payable_paise": payable_before_settlements,
             "settled_paise": settled, "settlement_in_progress_paise": under_settlement,
             "pending_settlement_paise": payable_before_settlements - settled,
-            "available_for_settlement_paise": payable_before_settlements - settled - under_settlement,
-            "provisional": True,
-            "provisional_note": "Before commissions, fees and deductions: those policies are not approved yet."}
+            # Decision 3: only money from orders that are delivered, past the return window and free of open returns, refunds or
+            # payment problems can be settled. Entries on held orders wait; entries with no order (adjustments, payouts) count.
+            "available_for_settlement_paise": min(payable_before_settlements - settled, eligible) - under_settlement,
+            "awaiting_eligibility_paise": max(payable_before_settlements - settled - eligible, 0),
+            "held_orders": held_orders,
+            "provisional": False,
+            "provisional_note": "Platform commission under the approved agreement is already deducted. Money from an order becomes "
+                                "available after delivery and the return window, with no open return, refund or payment issue."}

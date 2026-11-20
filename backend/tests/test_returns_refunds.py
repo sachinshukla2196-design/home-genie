@@ -226,7 +226,7 @@ def test_refund_is_recorded_only_after_an_authorised_confirmation(c):
     o, case = _open_case(c)
     cid = case["id"]
     assert _act(c, "fin", cid, "confirm", reference="UTR1", confirmation_type="manual_reconciliation", note="x" * 12).status_code == 400   # must initiate first
-    assert _act(c, "fin", cid, "initiate", amount=case["amount_paise"] / 100 + 1).status_code == 400                                         # cannot raise
+    assert _act(c, "plain", cid, "initiate", amount=case["amount_paise"] / 100 + 1).status_code == 400                                         # cannot raise
     assert _act(c, "plain", cid, "initiate", method="upi", amount=case["amount_paise"] / 100 - 5).status_code == 200                           # may lower
     assert _get(c, o["id"]).get("refunded_paise") in (None, 0)                                                                               # nothing recorded yet
     lowered = case["amount_paise"] - 500
@@ -249,7 +249,7 @@ def test_refund_is_recorded_only_after_an_authorised_confirmation(c):
 
 def test_confirming_twice_concurrently_refunds_once(c):
     o, case = _open_case(c)
-    _act(c, "fin", case["id"], "initiate", method="upi")
+    _act(c, "plain", case["id"], "initiate", method="upi")
     body = {"reference": "UTR-RACE", "confirmation_type": "manual_reconciliation", "note": "Verified against bank statement"}
     codes = sorted(ThreadPoolExecutor(max_workers=2).map(lambda _: _act(c, "fin", case["id"], "confirm", **body).status_code, range(2)))
     assert codes[0] == 200 and codes[1] in (400, 409)
@@ -258,7 +258,7 @@ def test_confirming_twice_concurrently_refunds_once(c):
 
 def test_confirm_resumes_cleanly_after_a_crash_between_the_books_and_the_case(c):
     o, case = _open_case(c)
-    _act(c, "fin", case["id"], "initiate", method="upi")
+    _act(c, "plain", case["id"], "initiate", method="upi")
     # the process died after the financial reversal was recorded but before the case was marked confirmed
     c.portal.call(lambda: shop_routes.reverse_order_financials(o["id"], {"id": S["fin"]["id"]}, None, case["amount_paise"] / 100, "UTR-CRASH", "t",
                                                                case_id=case["id"]))
@@ -271,7 +271,7 @@ def test_confirm_resumes_cleanly_after_a_crash_between_the_books_and_the_case(c)
 def test_a_reference_cannot_be_reused_for_a_different_case_on_the_same_order(c):
     o, case = _open_case(c)
     c.portal.call(lambda: shop_routes.reverse_order_financials(o["id"], {"id": "a"}, None, 10.0, "UTR-REUSED", "t"))     # a different, earlier refund
-    _act(c, "fin", case["id"], "initiate", method="upi", amount=20.0)
+    _act(c, "plain", case["id"], "initiate", method="upi", amount=20.0)
     r = _act(c, "fin", case["id"], "confirm", reference="UTR-REUSED", confirmation_type="manual_reconciliation", note="Verified in the bank statement")
     assert r.status_code == 409
 
@@ -280,14 +280,14 @@ def test_failed_refunds_can_be_retried_and_every_transition_is_validated(c):
     o, case = _open_case(c)
     cid = case["id"]
     assert _act(c, "fin", cid, "fail", note="bank down").status_code == 400                   # cannot fail before it started
-    _act(c, "fin", cid, "initiate", method="bank_transfer")
+    _act(c, "plain", cid, "initiate", method="bank_transfer")
     assert _act(c, "fin", cid, "fail", note="no").status_code == 400                          # reason required
     assert _act(c, "fin", cid, "fail", note="Bank transfer bounced").json()["status"] == "failed"
     assert _act(c, "fin", cid, "retry", method="upi").json()["status"] == "initiated"
     assert _act(c, "fin", cid, "resolve", note="x").status_code == 400
     assert _act(c, "fin", cid, "resolve", note="Customer withdrew the complaint").json()["outcome"] == "no_refund"
-    assert _act(c, "fin", cid, "initiate").status_code == 400                                  # terminal
-    assert _act(c, "fin", "nope", "initiate").status_code == 404
+    assert _act(c, "plain", cid, "initiate").status_code == 400                                  # terminal
+    assert _act(c, "plain", "nope", "initiate").status_code == 404
 
 
 def test_the_one_step_refund_action_also_settles_the_open_case(c):
@@ -346,7 +346,7 @@ def test_return_requests_are_validated_against_delivery_window_quantity_and_poli
     assert _return(c, o, [(p, 1)], photos=["javascript:alert(1)"]).status_code == 422
     assert _return(c, o, [(p, 1)], kind="swap").status_code == 400
     ok = _return(c, o, [(p, 2)], photos=["/api/files/x.png", "https://cdn.example.com/a.jpg"])
-    assert ok.status_code == 200 and ok.json()["cases"][0]["status"] == "requested" and ok.json()["cases"][0]["suggested_refund_paise"] == 21000   # 2 x 100 + 5% GST
+    assert ok.status_code == 200 and ok.json()["cases"][0]["status"] == "requested" and ok.json()["cases"][0]["suggested_refund_paise"] == 20000   # 2 x 100, GST included (decision 1)
     assert _return(c, o, [(p, 2)]).status_code == 400                                         # only 1 left to return
     assert _return(c, o, [(p, 1)]).status_code == 200
 
@@ -418,7 +418,7 @@ def test_returned_goods_restock_only_after_inspection_only_resellable_and_only_o
     assert _stock(c, p["id"]) == 49                                                          # +3 resellable, once
     assert _case_row(c, rid)["status"] == "refund_pending"
     rc = _cases(c, return_case_id=rid)
-    assert len(rc) == 1 and rc[0]["kind"] == "return" and rc[0]["amount_paise"] == 31500 and rc[0]["vendor_id"] == S["va"]["id"]
+    assert len(rc) == 1 and rc[0]["kind"] == "return" and rc[0]["amount_paise"] == 30000 and rc[0]["vendor_id"] == S["va"]["id"]
     c.portal.call(returns_routes.reconcile_returns)
     c.portal.call(lambda: stock.run_recovery(min_age_s=0))
     assert _stock(c, p["id"]) == 49 and len(_cases(c, return_case_id=rid)) == 1              # repair sweeps change nothing
@@ -449,14 +449,14 @@ def test_return_refund_flows_through_a_case_and_credits_back_only_the_returning_
     _vact(c, "ua", rid, "receive")
     _inspect(c, "ua", rid, ["resellable"])
     case = _cases(c, return_case_id=rid)[0]
-    _act(c, "fin", case["id"], "initiate", method="upi")
+    _act(c, "plain", case["id"], "initiate", method="upi")
     assert _case_row(c, rid)["status"] == "refund_pending"
     assert _act(c, "fin", case["id"], "confirm", reference="UTR-RET-1", confirmation_type="manual_reconciliation", note="Verified in the bank statement").status_code == 200
     assert _case_row(c, rid)["status"] == "refunded"
     ent = lambda vk: c.portal.call(lambda: db.vendor_ledger.find({"vendor_id": S[vk]["id"], "order_id": o["id"]}).to_list(10))
     assert [e["amount_paise"] for e in ent("va") if e["type"] == "REFUND"] == [-10000]        # vendor A: the returned item's value
     assert [e for e in ent("vb") if e["type"] == "REFUND"] == []                              # vendor B untouched
-    assert _get(c, o["id"])["refunded_paise"] == case["amount_paise"] == 10500
+    assert _get(c, o["id"])["refunded_paise"] == case["amount_paise"] == 10000          # 100 incl. GST (decision 1)
 
 
 def test_a_vendor_may_contest_but_never_outright_reject_and_the_admin_decides(c):

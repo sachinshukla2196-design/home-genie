@@ -73,6 +73,7 @@ def _commissioned_order(c, method="online", proven=True):
     buyer = _run(c, lambda: db.users.find_one({"id": S["buyer"]}, {"_id": 0}))
     assert _run(c, lambda: distribute_sale_commissions(o, buyer))["credited"] == 3
     _run(c, lambda: db.commissions.update_many({"order_id": oid}, {"$set": {"created_at": OLD}}))
+    _run(c, lambda: db.orders.update_one({"id": oid}, {"$set": {"status": "delivered", "delivered_at": OLD}}))   # decision 2
     return oid
 
 
@@ -118,6 +119,7 @@ def test_a_reason_is_mandatory(c):
 def test_release_inside_the_return_window_is_refused_and_moves_nothing(c):
     oid = _commissioned_order(c)
     _run(c, lambda: db.commissions.update_many({"order_id": oid}, {"$set": {"created_at": now_iso()}}))
+    _run(c, lambda: db.orders.update_one({"id": oid}, {"$set": {"delivered_at": now_iso()}}))          # delivered just now: window open
     d = _direct(c, oid)
     before = _wallet(c, d["user_id"])
     r = _release(c, "finance", d["id"])
@@ -230,6 +232,7 @@ def test_a_hold_never_bypasses_the_return_window_cod_proof_open_cases_or_cancell
     cases = []
     o = _commissioned_order(c)                                                                   # inside the window
     _run(c, lambda: db.commissions.update_many({"order_id": o}, {"$set": {"created_at": now_iso()}}))
+    _run(c, lambda: db.orders.update_one({"id": o}, {"$set": {"delivered_at": now_iso()}}))          # delivered just now
     cases.append(o)
     o = _commissioned_order(c, method="cod")                                                     # unproven COD
     _run(c, lambda: db.orders.update_one({"id": o}, {"$set": {"cod_collection.type": "manual_exception"}}))
@@ -283,8 +286,14 @@ def test_a_legacy_held_status_record_is_clawed_back_and_cannot_bypass_any_condit
 
 # ================================================================ manual wallet credit
 def _credit(c, who, did="buyer", amount=250.0, reason="Goodwill adjustment", rid=None, **extra):
+    """Decision 4 (maker-checker): `who` requests the credit; the OTHER finance administrator approves it. Returns the
+    approval response when the request was accepted, otherwise the request's own refusal."""
     body = {"distributor_id": _did(c, did), "amount": amount, "reason": reason, "request_id": rid or ("rq-" + new_id()[:16]), **extra}
-    return c.post("/api/admin/wallet/credit", headers=_hdr(S[who]), json=body), body
+    r = c.post("/api/admin/wallet/credit", headers=_hdr(S[who]), json=body)
+    if r.status_code != 200 or r.json().get("approval", {}).get("status") != "pending":
+        return r, body
+    checker = "super" if who != "super" else "finance"
+    return c.post(f"/api/admin/finance/approvals/{r.json()['approval']['id']}/approve", headers=_hdr(S[checker]), json={}), body
 
 
 def _did(c, key):
@@ -338,7 +347,7 @@ def test_a_valid_credit_posts_one_ledger_row_moves_the_wallet_and_is_audited(c):
     a1, p1, n1 = _state(c, "other")
     assert p1 - p0 == 25050 and round(a1 - a0, 2) == 250.5 and n1 - n0 == 1
     row = _run(c, lambda: db.wallet_transactions.find_one({"op_key": "admin_credit:" + body["request_id"]}, {"_id": 0}))
-    assert row["amount_paise"] == 25050 and row["status"] == "CREDITED" and row["description"] == "Goodwill for delayed order" and row["created_by"] == S["finance"]
+    assert row["amount_paise"] == 25050 and row["status"] == "CREDITED" and row["description"] == "Goodwill for delayed order" and row["created_by"] == S["super"]        # the approver executes; the requester is on the approval record
     audit = _run(c, lambda: db.audit_logs.find_one({"action": "admin_wallet_credit", "entity_id": S["other"]}, {"_id": 0}))
     assert audit and audit["new_value"]["request_id"] == body["request_id"] and audit["new_value"]["amount_paise"] == 25050
 
@@ -354,14 +363,22 @@ def test_a_repeated_request_id_credits_once_and_a_conflicting_reuse_is_refused(c
 
 
 def test_concurrent_identical_credits_apply_once(c):
+    """Four identical submissions make ONE request; four concurrent approvals by the checker apply it ONCE."""
     rid = "rq-" + new_id()[:16]
     model = admin_routes.WalletCreditBody(distributor_id=_did(c, "buyer"), amount=75.0, reason="Concurrent double click", request_id=rid)
     fin = {"id": S["finance"], "role": "accounts_admin", "distributor_id": "X"}
     before = _state(c, "buyer")
 
-    async def race():
+    async def submit_race():
         return await asyncio.gather(*[admin_routes.admin_wallet_credit(model, None, admin=fin) for _ in range(4)], return_exceptions=True)
-    _run(c, race)
+    outs = _run(c, submit_race)
+    assert len({o["approval"]["id"] for o in outs if isinstance(o, dict)}) == 1
+    assert _run(c, lambda: db.financial_approvals.count_documents({"_id": f"wallet_credit:{rid}"})) == 1
+    aid = f"wallet_credit:{rid}"
+    from concurrent.futures import ThreadPoolExecutor
+    codes = sorted(ThreadPoolExecutor(max_workers=4).map(
+        lambda _: c.post(f"/api/admin/finance/approvals/{aid}/approve", headers=_hdr(S["super"]), json={}).status_code, range(4)))
+    assert codes.count(200) == 1
     after = _state(c, "buyer")
     assert after[1] - before[1] == 7500 and after[2] - before[2] == 1
 

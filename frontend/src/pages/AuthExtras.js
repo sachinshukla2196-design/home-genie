@@ -114,6 +114,22 @@ export function ForgotPassword() {
   const [confirm, setConfirm] = useState("");
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
+  // Self-service: a code to the registered (trusted) mobile, then a new password.
+  const [otpMobile, setOtpMobile] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpCode, setOtpCode] = useState("");
+  const [otpPw, setOtpPw] = useState("");
+  const pwOk = (pw) => pw.length >= 8 && /[A-Za-z]/.test(pw) && /\d/.test(pw);
+  const sendResetCode = async () => {
+    setLoading(true);
+    try { const { data } = await API.post("/auth/forgot/otp/send", { mobile: otpMobile.trim() }); setOtpSent(true); toast.success(data.message); }
+    catch (e) { toast.error(apiError(e)); } finally { setLoading(false); }
+  };
+  const resetWithCode = async () => {
+    setLoading(true);
+    try { const { data } = await API.post("/auth/forgot/otp/reset", { mobile: otpMobile.trim(), otp: otpCode, password: otpPw }); toast.success(data.message); navigate("/login", { replace: true }); }
+    catch (e) { toast.error(apiError(e)); } finally { setLoading(false); }
+  };
 
   // Google verifies the account e-mail; the return URL carries recover=google so the callback knows the intent.
   const googleRecovery = () => {
@@ -156,8 +172,26 @@ export function ForgotPassword() {
   }
 
   return (
-    <Shell title="Forgot password" sub="Recover your account with Google">
+    <Shell title="Forgot password" sub="Recover your account with your mobile or Google">
       <div className="mt-6 space-y-4">
+        <div className="space-y-3 rounded-2xl p-4 ring-1 ring-brand-50" data-testid="forgot-otp">
+          <Field label="Registered mobile number" value={otpMobile} onChange={(e) => setOtpMobile(e.target.value.replace(/\D/g, "").slice(0, 10))} testid="forgot-otp-mobile" />
+          {!otpSent ? (
+            <Button onClick={sendResetCode} disabled={loading || otpMobile.length !== 10} className={primaryBtn} data-testid="forgot-otp-send">
+              {loading ? <span className="inline-flex items-center gap-2">{spinner}{t("common.loading")}</span> : "Send code to my mobile"}
+            </Button>
+          ) : (
+            <>
+              <Field label="Code from SMS" value={otpCode} onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))} testid="forgot-otp-code" />
+              <Field label="New password" type="password" value={otpPw} onChange={(e) => setOtpPw(e.target.value)} testid="forgot-otp-password" />
+              <p className="text-xs text-muted2">At least 8 characters with letters and numbers.</p>
+              <Button onClick={resetWithCode} disabled={loading || otpCode.length !== 6 || !pwOk(otpPw)} className={primaryBtn} data-testid="forgot-otp-reset">
+                {loading ? <span className="inline-flex items-center gap-2">{spinner}{t("common.loading")}</span> : "Set new password"}
+              </Button>
+            </>
+          )}
+        </div>
+        <p className="text-center text-xs text-muted2">or</p>
         {googleDone ? (
           <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ type: "spring", stiffness: 300, damping: 20 }}
             className="flex items-start gap-3 rounded-2xl bg-hg-success/10 px-4 py-4 text-sm leading-relaxed text-ink ring-1 ring-hg-success/30" data-testid="forgot-google-done">

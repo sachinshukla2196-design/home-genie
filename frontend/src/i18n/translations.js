@@ -11,7 +11,7 @@ export const translations = {
     "nav.referral": "Share & Sell", "nav.notifications": "Notifications",
     "nav.reports": "Reports", "nav.profile": "Profile", "nav.support": "Support",
     "nav.more": "More", "nav.admin": "Admin", "nav.logout": "Log out",
-    "nav.settings": "Settings", "nav.users": "Users", "nav.audit": "Audit Logs",
+    "nav.settings": "Settings", "nav.users": "Users", "nav.audit": "Audit Logs", "nav.adminTeam": "Admin Team",
 
     "cta.getStarted": "Get Started", "cta.login": "Login", "cta.register": "Register",
     "cta.joinGenie": "Join as a HomeGenie", "cta.exploreProducts": "Explore Products",
@@ -135,7 +135,7 @@ export const translations = {
     "qa.shop": "Shop Products", "qa.share": "Share & Sell", "qa.orders": "My Orders",
     "qa.wallet": "My Points", "qa.support": "Support", "qa.profile": "My Profile",
 
-    "nav.withdrawals": "Withdraw",
+    "nav.withdrawals": "Withdraw", "nav.kyc": "KYC", "nav.operations": "Operations",
     "withdraw.title": "Withdraw Points",
     "withdraw.request": "Request withdrawal",
     "withdraw.amount": "Points to withdraw",
@@ -754,7 +754,7 @@ export const translations = {
     "nav.referral": "शेयर करें और बेचें", "nav.notifications": "सूचनाएँ",
     "nav.reports": "रिपोर्ट", "nav.profile": "प्रोफ़ाइल", "nav.support": "सहायता",
     "nav.more": "और", "nav.admin": "एडमिन", "nav.logout": "लॉग आउट",
-    "nav.settings": "सेटिंग्स", "nav.users": "उपयोगकर्ता", "nav.audit": "ऑडिट लॉग",
+    "nav.settings": "सेटिंग्स", "nav.users": "उपयोगकर्ता", "nav.audit": "ऑडिट लॉग", "nav.adminTeam": "एडमिन टीम",
 
     "cta.getStarted": "शुरू करें", "cta.login": "लॉगिन", "cta.register": "रजिस्टर",
     "cta.joinGenie": "होम जीनी बनें", "cta.exploreProducts": "उत्पाद देखें",
@@ -878,7 +878,7 @@ export const translations = {
     "qa.shop": "उत्पाद खरीदें", "qa.share": "शेयर करें और बेचें", "qa.orders": "मेरे ऑर्डर",
     "qa.wallet": "मेरे पॉइंट्स", "qa.support": "सहायता", "qa.profile": "मेरी प्रोफ़ाइल",
 
-    "nav.withdrawals": "निकासी",
+    "nav.withdrawals": "निकासी", "nav.kyc": "केवाईसी", "nav.operations": "संचालन",
     "withdraw.title": "पॉइंट्स निकालें",
     "withdraw.request": "निकासी अनुरोध करें",
     "withdraw.amount": "कितने पॉइंट्स निकालने हैं",

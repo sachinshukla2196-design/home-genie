@@ -27,6 +27,8 @@ from core import db, hash_password, create_token, now_iso, new_id  # noqa: E402
 ADDR = {"full_name": "Cust", "mobile": "9000011111", "line1": "1 Road", "city": "Pune", "state": "MH", "pincode": "411001"}
 CRON = {"Authorization": "Bearer cron-test-secret"}
 S = {}
+LONG_AGO = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()   # delivered and past any return window (decisions 2/3)
+
 
 
 def _resolve(resolution, amount):
@@ -258,29 +260,47 @@ def test_support_admins_can_view_but_not_change_finances(c):
 
 # ====================================================================== adjustments
 def test_adjustments_are_audited_idempotent_and_reversible_never_edited(c):
-    h = _hdr(S["fin"]["id"])
     url = f"/api/admin/finance/vendors/{S['vb']['id']}/adjustments"
-    r = c.post(url, headers=h, json={"amount": -12.5, "reason": "Damaged goods deduction", "idempotency_key": "k1"})
-    assert r.status_code == 200 and r.json()["entry"]["amount_paise"] == -1250 and r.json()["created"] is True
-    again = c.post(url, headers=h, json={"amount": -12.5, "reason": "Damaged goods deduction", "idempotency_key": "k1"}).json()
-    assert again["created"] is False and again["entry"]["id"] == r.json()["entry"]["id"]          # double-click: still one entry
-    fix = c.post(url, headers=h, json={"amount": 12.5, "reason": "Reversal of mistaken deduction", "reverses": r.json()["entry"]["id"]})
-    assert fix.status_code == 200 and fix.json()["entry"]["reverses"] == r.json()["entry"]["id"]
+    code, r = _adjust(c, url, {"amount": -12.5, "reason": "Damaged goods deduction", "idempotency_key": "k1"})
+    assert code == 200 and r["entry"]["amount_paise"] == -1250 and r["created"] is True
+    _, again = _adjust(c, url, {"amount": -12.5, "reason": "Damaged goods deduction", "idempotency_key": "k1"})
+    assert again["created"] is False and again["entry"]["id"] == r["entry"]["id"]                  # double-click: still one entry
+    code, fix = _adjust(c, url, {"amount": 12.5, "reason": "Reversal of mistaken deduction", "reverses": r["entry"]["id"]})
+    assert code == 200 and fix["entry"]["reverses"] == r["entry"]["id"]
     adj = _entries(c, "vb", type="ADJUSTMENT")
     assert [e["amount_paise"] for e in adj] == [-1250, 1250]                                     # history kept, net zero
-    assert c.post(url, headers=h, json={"amount": 0, "reason": "zero not allowed"}).status_code == 400
-    assert c.post(url, headers=h, json={"amount": 5, "reason": "x"}).status_code == 422
-    assert c.post(url, headers=h, json={"amount": 5, "reason": "bad link", "reverses": "nope"}).status_code == 404
-    assert c.post(f"/api/admin/finance/vendors/nope/adjustments", headers=h, json={"amount": 5, "reason": "no vendor"}).status_code == 404
+    assert c.post(url, headers=_hdr(S["fin"]["id"]), json={"amount": 0, "reason": "zero not allowed"}).status_code == 400
+    assert c.post(url, headers=_hdr(S["fin"]["id"]), json={"amount": 5, "reason": "x"}).status_code == 422
+    assert c.post(url, headers=_hdr(S["fin"]["id"]), json={"amount": 5, "reason": "bad link", "reverses": "nope"}).status_code == 404
+    assert c.post(f"/api/admin/finance/vendors/nope/adjustments", headers=_hdr(S["fin"]["id"]), json={"amount": 5, "reason": "no vendor"}).status_code == 404
     assert c.portal.call(lambda: db.audit_logs.count_documents({"action": "vendor_ledger_adjustment"})) >= 2
-    assert not c.portal.call(lambda: db.vendor_ledger.find_one({"id": r.json()["entry"]["id"], "status": {"$ne": "posted"}}))
+    assert not c.portal.call(lambda: db.vendor_ledger.find_one({"id": r["entry"]["id"], "status": {"$ne": "posted"}}))
 
 
 # ====================================================================== settlements
+def _adjust(c, url, body, maker="fin", checker="fin2"):
+    """Decision 4: an adjustment is requested by one finance admin and approved by another; returns the resulting entry."""
+    r = c.post(url, headers=_hdr(S[maker]["id"]), json=body)
+    if r.status_code != 200:
+        return r.status_code, None
+    a = r.json()["approval"]
+    if a["status"] == "pending":
+        ok = c.post(f"/api/admin/finance/approvals/{a['id']}/approve", headers=_hdr(S[checker]["id"]), json={})
+        assert ok.status_code == 200, ok.text
+        res, created = ok.json()["result"], True
+    else:
+        res = c.portal.call(lambda: db.financial_approvals.find_one({"_id": a["id"]}))["result"]
+        created = False
+    entry = c.portal.call(lambda: db.vendor_ledger.find_one({"id": res["entry_id"]}, {"_id": 0}))
+    return 200, {"entry": entry, "created": created}
+
+
 def _make_money(c, vkey, vendor, price):
+    """A paid order whose vendor money is settleable: delivered 30 days ago, so the return window has passed (decision 3)."""
     p = _product(c, f"S-{vkey}-{new_id()[:6]}", price, vkey)
     o = _order(c, [(p, 1)])
     _pay(c, o)
+    c.portal.call(lambda: db.orders.update_one({"id": o["id"]}, {"$set": {"status": "delivered", "delivered_at": LONG_AGO}}))
     return o
 
 
@@ -290,7 +310,7 @@ def test_settlements_are_off_until_the_policy_is_explicitly_activated(c):
     r = c.post("/api/admin/finance/settlements", headers=_hdr(S["fin"]["id"]), json={"vendor_id": S["va"]["id"]})
     assert r.status_code == 409 and "not approved" in r.json()["detail"]
     s = c.get("/api/vendor/finance/summary", headers=_hdr(S["ua"]["id"])).json()
-    assert s["policy"]["active"] is False and s["policy"]["message"] and s["balances"]["provisional"] is True
+    assert s["policy"]["active"] is False and s["policy"]["message"] and s["balances"]["provisional"] is False   # commission deducted, eligibility enforced
 
 
 def test_full_settlement_lifecycle_with_dual_approval_and_exact_balances(c):
@@ -337,13 +357,13 @@ def test_only_one_open_settlement_per_vendor_even_under_concurrency(c):
 
 
 def test_a_balance_that_shrinks_after_the_request_blocks_payment(c):
-    fin = _hdr(S["fin"]["id"])
+    fin, fin2 = _hdr(S["fin"]["id"]), _hdr(S["fin2"]["id"])           # decision 4: creator != approver != payer
     c.put("/api/admin/finance/policy", headers=fin, json={"active": True, "require_dual_approval": False})
     c.portal.call(lambda: db.settlements.update_many({"vendor_id": S["vb"]["id"], "status": {"$in": ["requested", "approved"]}}, {"$set": {"status": "rejected"}}))
     o = _make_money(c, "vb", S["vb"], 400.0)
     avail = _bal(c, "vb")["available_for_settlement_paise"]
     sid = c.post("/api/admin/finance/settlements", headers=fin, json={"vendor_id": S["vb"]["id"], "amount": avail / 100}).json()["id"]
-    assert c.post(f"/api/admin/finance/settlements/{sid}/action", headers=fin, json={"action": "approve"}).status_code == 200
+    assert c.post(f"/api/admin/finance/settlements/{sid}/action", headers=fin2, json={"action": "approve"}).status_code == 200
     _refund(c, o, 100.0, "SHRINK")                                                       # a refund lands in between
     r = c.post(f"/api/admin/finance/settlements/{sid}/action", headers=fin, json={"action": "mark_paid", "reference": "UTR-777"})
     assert r.status_code == 409 and _entries(c, "vb", source_key=f"settle:{sid}") == []          # nothing was paid out
@@ -360,8 +380,7 @@ def test_paid_settlement_always_has_its_ledger_entry_even_after_a_crash(c):
 
 # ====================================================================== statement + COD
 def test_statement_csv_is_vendor_scoped_exact_and_formula_safe(c):
-    h = _hdr(S["fin"]["id"])
-    c.post(f"/api/admin/finance/vendors/{S['va']['id']}/adjustments", headers=h, json={"amount": 1, "reason": "=HYPERLINK(\"http://evil\")"})
+    _adjust(c, f"/api/admin/finance/vendors/{S['va']['id']}/adjustments", {"amount": 1, "reason": "=HYPERLINK(\"http://evil\")"})
     r = c.get("/api/vendor/finance/statement.csv", headers=_hdr(S["ua"]["id"]))
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/csv")
     body = r.text
@@ -372,23 +391,23 @@ def test_statement_csv_is_vendor_scoped_exact_and_formula_safe(c):
 
 def test_cod_short_collection_is_held_until_an_admin_resolves_it(c):
     pa = _product(c, "L-A8", 200.0, "va")
-    o = _order(c, [(pa, 1)], method="cod", seller="HGSEL")                                # total 210.00
+    o = _order(c, [(pa, 1)], method="cod", seller="HGSEL")                                # total 200.00 (prices include GST, decision 1)
     r = c.post(f"/api/orders/{o['id']}/cod-collected", headers=_hdr(S["fin2"]["id"]), json={"amount_collected": 180.0, "evidence_type": "courier_confirmation", "evidence_reference": "AWB-TEST-0003"})
     assert r.status_code == 200 and r.json()["discrepancy"] is True
     got = c.portal.call(lambda: db.orders.find_one({"id": o["id"]}))
-    assert got["payment_status"] == "cod_discrepancy" and got["cod_discrepancy"]["expected_paise"] == 21000 and got["cod_discrepancy"]["collected_paise"] == 18000
+    assert got["payment_status"] == "cod_discrepancy" and got["cod_discrepancy"]["expected_paise"] == 20000 and got["cod_discrepancy"]["collected_paise"] == 18000
     assert _entries(c, order_id=o["id"]) == [] and c.portal.call(lambda: db.commissions.count_documents({"order_id": o["id"]})) == 0
     assert c.post(f"/api/orders/{o['id']}/cod-collected", headers=_hdr(S["fin2"]["id"])).json().get("already") is True      # cannot be bypassed
     states = c.get("/api/vendor/finance/cod", headers=_hdr(S["ua"]["id"])).json()
     assert next(x for x in states["items"] if x["order_id"] == o["id"])["state"] == "discrepancy" and states["summary"]["discrepancy_paise"] >= 20000
     url = f"/api/admin/finance/cod-discrepancies/{o['id']}/resolve"
-    assert c.post(url, headers=_hdr(S["genie"]["id"]), json=_resolve("confirm_full", 210.0)).status_code == 403
-    assert c.post(url, headers=_hdr(S["supp"]["id"]), json=_resolve("confirm_full", 210.0)).status_code == 403
-    assert c.post(url, headers=_hdr(S["fin"]["id"]), json=_resolve("maybe", 210.0)).status_code == 422
+    assert c.post(url, headers=_hdr(S["genie"]["id"]), json=_resolve("confirm_full", 200.0)).status_code == 403
+    assert c.post(url, headers=_hdr(S["supp"]["id"]), json=_resolve("confirm_full", 200.0)).status_code == 403
+    assert c.post(url, headers=_hdr(S["fin"]["id"]), json=_resolve("maybe", 200.0)).status_code == 422
     assert c.post(url, headers=_hdr(S["fin"]["id"]), json=_resolve("accept_short", 180.0)).status_code == 200
-    assert [e["amount_paise"] for e in _entries(c, "va", order_id=o["id"])] == [17143]       # 200.00 x 180.00/210.00, half-up
+    assert [e["amount_paise"] for e in _entries(c, "va", order_id=o["id"])] == [18000]       # 200.00 x 180.00/200.00
     assert c.portal.call(lambda: db.commissions.count_documents({"order_id": o["id"]})) == 0  # held: no commission on a short collection
-    assert c.post(url, headers=_hdr(S["fin"]["id"]), json=_resolve("confirm_full", 210.0)).status_code == 404   # already resolved
+    assert c.post(url, headers=_hdr(S["fin"]["id"]), json=_resolve("confirm_full", 200.0)).status_code == 404   # already resolved
 
 
 def test_cod_full_confirmation_of_a_discrepancy_credits_commission_and_the_full_sale(c):
@@ -396,7 +415,7 @@ def test_cod_full_confirmation_of_a_discrepancy_credits_commission_and_the_full_
     o = _order(c, [(pa, 1)], method="cod", seller="HGSEL")
     c.post(f"/api/orders/{o['id']}/cod-collected", headers=_hdr(S["fin2"]["id"]), json={"amount_collected": 100.0, "evidence_type": "courier_confirmation", "evidence_reference": "AWB-TEST-0004"})
     r = c.post(f"/api/admin/finance/cod-discrepancies/{o['id']}/resolve", headers=_hdr(S["fin"]["id"]),
-               json=_resolve("confirm_full", 210.0))
+               json=_resolve("confirm_full", 200.0))
     assert r.status_code == 200
     assert [e["amount_paise"] for e in _entries(c, "va", order_id=o["id"])] == [20000]
     assert c.portal.call(lambda: db.commissions.count_documents({"order_id": o["id"]})) >= 1

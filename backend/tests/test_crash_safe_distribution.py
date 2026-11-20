@@ -275,6 +275,7 @@ def test_an_interrupted_distribution_is_completed_by_the_release_job_before_rele
     with pytest.raises(SimulatedCrash):
         _distribute(c, t, order)
     monkeypatch.undo()
+    _run(c, lambda: db.orders.update_one({"id": order["id"]}, {"$set": {"status": "delivered", "delivered_at": now_iso()}}))   # decision 2
     _run(c, lambda: release_due_points(FUTURE))
     assert all(d["status"] == "RELEASED" for d in _commission_docs(c, order))
     assert _wallet(c, t["seller"]["id"])["available_balance_paise"] == EXPECTED["direct"]

@@ -18,7 +18,7 @@ import ledger as L
 from core import db, P_PUBLIC
 from money import paise_to_float
 from pagination import date_range
-from vendor_routes import require_approved_vendor, _orders_base, _vendor_view, _public_vendor, LOW_STOCK
+from vendor_routes import require_approved_vendor, _orders_base, _orders_money_base, _vendor_view, _public_vendor, LOW_STOCK
 
 router = APIRouter(prefix="/api", tags=["vendor"])
 
@@ -60,7 +60,7 @@ async def _sales_periods(vid: str) -> dict:
     today = datetime.now(timezone.utc).date()
     out = {}
     for key, start in (("today", today), ("week", today - timedelta(days=6)), ("month", today.replace(day=1))):
-        window = {**_orders_base(vid), "created_at": {"$gte": start.isoformat(), "$lte": f"{today.isoformat()}T23:59:59.999999"}}
+        window = {**_orders_money_base(vid), "created_at": {"$gte": start.isoformat(), "$lte": f"{today.isoformat()}T23:59:59.999999"}}
         rows = await db.orders.aggregate([
             {"$match": window},
             {"$addFields": {"f": {"$first": {"$filter": {"input": "$fulfilments", "as": "x", "cond": {"$eq": ["$$x.vendor_id", vid]}}}},
@@ -82,7 +82,7 @@ async def vendor_dashboard(range: str = "month", date_from: Optional[str] = None
     v = user["_vendor"]
     vid = v["id"]
     f, t = _range_bounds(range, date_from, date_to)
-    window = {**_orders_base(vid), "created_at": {"$gte": f.isoformat(), "$lte": f"{t.isoformat()}T23:59:59.999999"}}
+    window = {**_orders_money_base(vid), "created_at": {"$gte": f.isoformat(), "$lte": f"{t.isoformat()}T23:59:59.999999"}}
     common = [
         {"$addFields": {"f": {"$first": {"$filter": {"input": "$fulfilments", "as": "x", "cond": {"$eq": ["$$x.vendor_id", vid]}}}},
                         "vlines": {"$filter": {"input": "$items", "as": "l", "cond": {"$eq": ["$$l.vendor_id", vid]}}}}},

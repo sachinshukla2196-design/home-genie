@@ -83,6 +83,16 @@ async def _vendor_of(user: dict) -> Optional[dict]:
     return await db.vendors.find_one({"user_id": user["id"]}, {"_id": 0})
 
 
+async def require_vendor_obligations(user: dict = Depends(require_vendor_user)) -> dict:
+    """ORD-03 / Batch 9: a SUSPENDED vendor keeps access to what it already owes customers — orders that were paid before the
+    suspension and returns still open — so paid orders do not stall. Suspension already takes every product off sale, so no
+    new order can arrive; product, catalogue and new-sale routes keep using require_approved_vendor."""
+    v = user.get("_vendor") or await _vendor_of(user)
+    if not v or v.get("status") not in (*SELLING, "suspended"):
+        raise HTTPException(status_code=403, detail="Your vendor account is not approved yet.")
+    return {**user, "_vendor": v}
+
+
 async def require_approved_vendor(user: dict = Depends(require_vendor_user)) -> dict:
     v = user.get("_vendor") or await _vendor_of(user)
     if not v or v.get("status") not in SELLING:
@@ -354,23 +364,33 @@ async def _own_product(user: dict, product_id: str) -> dict:
 @router.put("/vendor/products/{product_id}")
 async def vendor_update_product(product_id: str, body: VendorProductIn, request: Request,
                                 user: dict = Depends(require_approved_vendor)):
-    p = await _own_product(user, product_id)
-    if p.get("archived"):
-        raise HTTPException(status_code=409, detail="Restore this product from the archive before editing it.")
-    data = _clean_product_payload(body, p.get("variants"), user["_vendor"]["id"])
-    new_skus = [x["sku"] for x in data["variants"] if x["sku"] not in {y["sku"] for y in p.get("variants") or []}]
-    if new_skus and await db.products.find_one({"id": {"$ne": product_id}, "$or": [{"sku": {"$in": new_skus}}, {"variants.sku": {"$in": new_skus}}]}):
-        raise HTTPException(status_code=400, detail="A variant SKU already exists on another product.")
-    new = {k: v for k, v in data.items() if k not in ("sku", "stock")}    # SKU is fixed; stock changes go through /stock
-    if not data["variants"] and p.get("variants"):
-        raise HTTPException(status_code=400, detail="A product that has variants cannot go back to a single stock number.")
-    changed = [k for k in REVIEW_FIELDS if p.get(k) != new.get(k)] + (["variants"] if _variant_identity(p.get("variants")) != _variant_identity(data["variants"]) else [])
-    upd = {**new, "updated_at": now_iso()}
-    if data["variants"]:
-        upd["stock"] = data["stock"]
-    if changed:   # material change: back to review, hidden until approved
-        upd.update({"approval_status": "pending", "is_active": False, "rejection_reason": ""})
-    await db.products.update_one({"id": product_id}, {"$set": upd})
+    # CAT-03: the edit rewrites the variants array, whose stock numbers come from the read below. The write is therefore
+    # conditional on every stock number still being what was read; a reservation or adjustment landing in between makes
+    # it miss, and the edit is rebuilt from a fresh read (stock is never overwritten with a stale value).
+    for _attempt in range(5):
+        p = await _own_product(user, product_id)
+        if p.get("archived"):
+            raise HTTPException(status_code=409, detail="Restore this product from the archive before editing it.")
+        data = _clean_product_payload(body, p.get("variants"), user["_vendor"]["id"])
+        new_skus = [x["sku"] for x in data["variants"] if x["sku"] not in {y["sku"] for y in p.get("variants") or []}]
+        if new_skus and await db.products.find_one({"id": {"$ne": product_id}, "$or": [{"sku": {"$in": new_skus}}, {"variants.sku": {"$in": new_skus}}]}):
+            raise HTTPException(status_code=400, detail="A variant SKU already exists on another product.")
+        new = {k: v for k, v in data.items() if k not in ("sku", "stock")}    # SKU is fixed; stock changes go through /stock
+        if not data["variants"] and p.get("variants"):
+            raise HTTPException(status_code=400, detail="A product that has variants cannot go back to a single stock number.")
+        changed = [k for k in REVIEW_FIELDS if p.get(k) != new.get(k)] + (["variants"] if _variant_identity(p.get("variants")) != _variant_identity(data["variants"]) else [])
+        upd = {**new, "updated_at": now_iso()}
+        if data["variants"]:
+            upd["stock"] = data["stock"]
+        if changed:   # material change: back to review, hidden until approved
+            upd.update({"approval_status": "pending", "is_active": False, "rejection_reason": ""})
+        guard = [{"stock": p.get("stock")}] + [{"variants": {"$elemMatch": {"sku": v["sku"], "stock": v.get("stock")}}}
+                                                for v in (p.get("variants") or [])]
+        res = await db.products.update_one({"id": product_id, "$and": guard}, {"$set": upd})
+        if res.matched_count == 1:
+            break
+    else:
+        raise HTTPException(status_code=409, detail="Stock for this product is changing right now. Please try again.")
     for x in data["variants"]:       # brand-new variants record their opening stock
         if x["sku"] in new_skus and x["stock"]:
             await db.stock_movements.insert_one({"id": new_id(), "product_id": product_id, "variant_sku": x["sku"], "delta": x["stock"],
@@ -571,6 +591,10 @@ async def vendor_toggle_listing(product_id: str, body: ListingIn, request: Reque
     p = await _own_product(user, product_id)
     if body.active and p.get("approval_status") != "approved":
         raise HTTPException(status_code=400, detail="This product must be approved before it can be listed.")
+    if body.active and p.get("archived"):
+        raise HTTPException(status_code=409, detail="Restore this product from the archive before listing it.")
+    if body.active and p.get("admin_takedown"):
+        raise HTTPException(status_code=409, detail="HOME GENIES took this product down. Contact support to have it reviewed.")
     await db.products.update_one({"id": product_id}, {"$set": {"is_active": body.active, "updated_at": now_iso()}})
     await log_audit(user, "vendor_listing_" + ("resumed" if body.active else "paused"), "product", product_id, request=request)
     return await _own_product(user, product_id)
@@ -608,15 +632,30 @@ def _vendor_view(order: dict, vendor_id: str) -> Optional[dict]:
     }
 
 
+# A vendor sees an order only once its payment is VERIFIED: paid online (gateway or a confirmed UPI/manual payment), or cash on
+# delivery. A customer's UPI "claim" is only an unverified statement, so it stays hidden (FIN-02). Refunded orders stay visible
+# for history and returns.
+VENDOR_VISIBLE_PAYMENT = ("paid", "partially_refunded", "refunded", "cod_pending", "cod_discrepancy")
+# Moving goods forward (accept/pack/dispatch/deliver) additionally needs money that is not fully refunded.
+FULFILLABLE_PAYMENT = ("paid", "partially_refunded", "cod_pending")
+FORWARD_STEPS = ("accepted", "packed", "dispatched", "delivered")
+
+
 def _orders_base(vid: str) -> dict:
-    """Orders this vendor may see: payment not pending/failed, and not on hold for a refund (paid after expiry)."""
+    """Orders this vendor may see: verified payment only, and not on hold for a refund (paid after expiry)."""
+    return {"fulfilments.vendor_id": vid, "payment_status": {"$in": list(VENDOR_VISIBLE_PAYMENT)}, "needs_refund": {"$ne": True}}
+
+
+def _orders_money_base(vid: str) -> dict:
+    """For money AGGREGATES only (dashboard sales figures): also counts orders whose payment is not verified yet, so the
+    vendor sees "awaiting confirmation" / "under review" totals. Never used to list, open or fulfil an order."""
     return {"fulfilments.vendor_id": vid, "payment_status": {"$nin": ["pending", "failed"]}, "needs_refund": {"$ne": True}}
 
 
 @router.get("/vendor/orders")
 async def vendor_orders(status: Optional[str] = None, q: Optional[str] = None, date_from: Optional[str] = None,
                         date_to: Optional[str] = None, page: Optional[int] = None, page_size: Optional[int] = None,
-                        user: dict = Depends(require_approved_vendor)):
+                        user: dict = Depends(require_vendor_obligations)):
     """Own order lines. No `page`/`q`/dates = the original plain list (up to 500, optional `status`). With `page` (or q /
     dates) the reply is {items, total, page, page_size, pages, counts} where counts is per fulfilment status for the same
     search/date window. Search matches order number, product name or SKU of THIS vendor's lines only."""
@@ -651,9 +690,10 @@ async def vendor_orders(status: Optional[str] = None, q: Optional[str] = None, d
 
 
 @router.get("/vendor/orders/{order_id}")
-async def vendor_order(order_id: str, user: dict = Depends(require_approved_vendor), detail: bool = False):
+async def vendor_order(order_id: str, user: dict = Depends(require_vendor_obligations), detail: bool = False):
     vid = user["_vendor"]["id"]
-    o = await db.orders.find_one({"id": order_id, "fulfilments.vendor_id": vid, "needs_refund": {"$ne": True}}, {"_id": 0})
+    o = await db.orders.find_one({"id": order_id, "fulfilments.vendor_id": vid, "needs_refund": {"$ne": True},
+                                  "payment_status": {"$in": list(VENDOR_VISIBLE_PAYMENT)}}, {"_id": 0})
     view = _vendor_view(o, vid) if o else None
     if not view:
         raise HTTPException(status_code=404, detail="Order not found.")
@@ -713,15 +753,18 @@ class FulfilIn(BaseModel):
 
 
 @router.post("/vendor/orders/{order_id}/fulfilment")
-async def vendor_update_fulfilment(order_id: str, body: FulfilIn, request: Request, user: dict = Depends(require_approved_vendor)):
+async def vendor_update_fulfilment(order_id: str, body: FulfilIn, request: Request, user: dict = Depends(require_vendor_obligations)):
     vid = user["_vendor"]["id"]
-    o = await db.orders.find_one({"id": order_id, "fulfilments.vendor_id": vid, "needs_refund": {"$ne": True}}, {"_id": 0})
+    o = await db.orders.find_one({"id": order_id, "fulfilments.vendor_id": vid, "needs_refund": {"$ne": True},
+                                  "payment_status": {"$in": list(VENDOR_VISIBLE_PAYMENT)}}, {"_id": 0})
     if not o:
         raise HTTPException(status_code=404, detail="Order not found.")
     f = next(x for x in o["fulfilments"] if x["vendor_id"] == vid)
     cur, nxt = f["status"], body.status
     if nxt not in FLOW.get(cur, set()):
         raise HTTPException(status_code=400, detail=f"Cannot move this order from '{cur}' to '{nxt}'.")
+    if nxt in FORWARD_STEPS and o.get("payment_status") not in FULFILLABLE_PAYMENT:
+        raise HTTPException(status_code=409, detail="This order's payment is not verified (or it was refunded). Do not ship it.")
     if nxt in ("rejected", "cancelled", "delivery_failed") and len(body.note.strip()) < 5:
         raise HTTPException(status_code=400, detail="Please give a reason (at least 5 characters).")
     if nxt == "dispatched" and not (body.carrier.strip() and body.tracking_number.strip()):
@@ -740,8 +783,10 @@ async def vendor_update_fulfilment(order_id: str, body: FulfilIn, request: Reque
         push["restock_intents"] = intent("vendor_release", user["id"], vendor_id=vid, reason=f"order_{nxt}")
         if o.get("payment_status") in ("paid", "partially_refunded"):
             sets["fulfilments.$.refund_due"] = True       # G2: the customer must be refunded for this vendor's lines
-    res = await db.orders.update_one({"id": order_id, "fulfilments": {"$elemMatch": {"vendor_id": vid, "status": cur}}},
-                                     {"$set": sets, "$push": push})
+    flt = {"id": order_id, "fulfilments": {"$elemMatch": {"vendor_id": vid, "status": cur}}}
+    if nxt in FORWARD_STEPS:              # write-time check too: a refund landing mid-request must win
+        flt["payment_status"] = {"$in": list(FULFILLABLE_PAYMENT)}
+    res = await db.orders.update_one(flt, {"$set": sets, "$push": push})
     if res.modified_count != 1:
         raise HTTPException(status_code=409, detail="This order was just updated. Please refresh.")
 
@@ -775,7 +820,7 @@ class InspectionIn(BaseModel):
 
 
 @router.post("/vendor/orders/{order_id}/return-inspection")
-async def vendor_return_inspection(order_id: str, body: InspectionIn, request: Request, user: dict = Depends(require_approved_vendor)):
+async def vendor_return_inspection(order_id: str, body: InspectionIn, request: Request, user: dict = Depends(require_vendor_obligations)):
     """Goods that came back (returned_to_origin) are restocked ONLY after the vendor confirms receipt and inspection.
     One decision per order; resellable units are restocked atomically and at most once."""
     vid = user["_vendor"]["id"]
@@ -904,7 +949,9 @@ async def admin_product_decision(product_id: str, body: ProductDecision, request
         raise HTTPException(status_code=400, detail="Only products awaiting review can be decided.")
     if body.action == "approve":
         v = await db.vendors.find_one({"id": p["vendor_id"]}, {"_id": 0, "status": 1, "user_id": 1})
-        sets = {"approval_status": "approved", "is_active": (v or {}).get("status") in SELLING, "rejection_reason": ""}
+        cur = await db.products.find_one({"id": product_id}, {"_id": 0, "archived": 1, "admin_takedown": 1})
+        listable = (v or {}).get("status") in SELLING and not (cur or {}).get("archived") and not (cur or {}).get("admin_takedown")
+        sets = {"approval_status": "approved", "is_active": listable, "rejection_reason": ""}
     elif body.action == "reject":
         if len(body.reason.strip()) < 5:
             raise HTTPException(status_code=400, detail="A reason is required.")

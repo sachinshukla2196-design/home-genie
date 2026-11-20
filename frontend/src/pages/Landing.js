@@ -9,7 +9,6 @@ import { Logo } from "@/components/Logo";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { Stagger, StaggerItem, pressable } from "@/components/motion";
-import { captureSellerRef } from "@/lib/sellerRef";
 import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
 import { API } from "@/lib/api";
@@ -58,7 +57,6 @@ export default function Landing() {
   const homeLink = user ? homeRouteFor(user) : "/register";
   const [products, setProducts] = useState([]);
 
-  useEffect(() => { captureSellerRef(); }, []);
   useEffect(() => {
     API.get("/products").then(({ data }) => setProducts((data || []).slice(0, 4))).catch(() => setProducts([]));
   }, []);

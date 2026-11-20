@@ -16,6 +16,8 @@ export default function Products() {
   const navigate = useNavigate();
   const [products, setProducts] = useState(null);
   const [cat, setCat] = useState("all");
+  const [q, setQ] = useState("");
+  const [sort, setSort] = useState("featured");
   const [cats, setCats] = useState([]);
   const [added, setAdded] = useState(null);
   const sym = "₹";
@@ -25,7 +27,13 @@ export default function Products() {
     API.get("/categories").then(({ data }) => setCats(data)).catch(() => {});
   }, []);
 
-  const filtered = products?.filter((p) => cat === "all" || p.category === cat) || [];
+  // Batch 8: search, category and sort over the shop list (the server already returns only purchasable products)
+  const needle = q.trim().toLowerCase();
+  const filtered = (products || [])
+    .filter((p) => cat === "all" || p.category === cat)
+    .filter((p) => !needle || [p.name, p.name_hi, p.category, p.sku, p.brand].some((x) => String(x || "").toLowerCase().includes(needle)))
+    .sort((a, b) => sort === "price_asc" ? a.selling_price - b.selling_price : sort === "price_desc" ? b.selling_price - a.selling_price
+      : sort === "newest" ? String(b.created_at || "").localeCompare(String(a.created_at || "")) : 0);
   const addToCart = (p) => {
     add(p);
     toast.success(t("cta.addToCart"));
@@ -44,6 +52,15 @@ export default function Products() {
         <Button onClick={() => navigate("/app/cart")} variant="outline" className="rounded-full border-forest/20 text-forest" data-testid="view-cart-btn">
           <ShoppingCart size={16} className="mr-1.5" /> {t("cart.title")} {count > 0 && `(${count})`}
         </Button>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2" data-testid="shop-tools">
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search products" aria-label="Search products"
+          className="hgv-input h-11 min-w-0 flex-1 rounded-full px-4 text-sm" data-testid="shop-search" />
+        <select value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort products" className="hgv-input h-11 rounded-full px-4 text-sm" data-testid="shop-sort">
+          <option value="featured">Featured</option><option value="newest">Newest</option>
+          <option value="price_asc">Price: low to high</option><option value="price_desc">Price: high to low</option>
+        </select>
       </div>
 
       <div className="no-scrollbar -mx-4 flex gap-2.5 overflow-x-auto px-4 pb-1">

@@ -168,7 +168,7 @@ def test_a_refunded_order_is_never_marked_paid_again_by_any_payment_path(c, part
     _run(c, lambda: db.payment_transactions.update_one({"session_id": sid}, {"$set": {"payment_status": "pending"}}))  # a re-delivered payment
     _pay(c, sid)
     assert c.post("/api/payments/upi-claim", json={"order_id": o["id"], "reference": "UTR-AGAIN"}, headers=_hdr(S["cust"]["id"])).status_code == 409
-    assert c.put(f"/api/admin/payments/upi-confirm/{o['id']}", json={"reference": "UTR-AGAIN"}, headers=_hdr(S["admin"]["id"])).status_code == 409
+    assert c.put(f"/api/admin/payments/upi-confirm/{o['id']}", json={"reference": "UTR-AGAIN", "amount": o["total"]}, headers=_hdr(S["admin"]["id"])).status_code == 409
     after = _get(c, o["id"])
     assert after["payment_status"] == before["payment_status"] and after["status"] == before["status"]
     assert after["refunded_paise"] == before["refunded_paise"] and after.get("invoice_number") == before.get("invoice_number")
@@ -181,8 +181,8 @@ def test_a_cod_order_cannot_be_paid_through_upi_or_manual_payment(c, state):
     if state == "cod_discrepancy":
         _run(c, lambda: db.orders.update_one({"id": o["id"]}, {"$set": {"payment_status": "cod_discrepancy"}}))
     assert c.post("/api/payments/upi-claim", json={"order_id": o["id"], "reference": "UTR-COD"}, headers=_hdr(S["cust"]["id"])).status_code == 409
-    assert c.put(f"/api/admin/payments/upi-confirm/{o['id']}", json={"reference": "UTR-COD"}, headers=_hdr(S["admin"]["id"])).status_code == 409
-    r = c.post("/api/admin/payments/manual", json={"distributor_id": "LCCUST", "reference": "MANUAL-1"}, headers=_hdr(S["admin"]["id"]))
+    assert c.put(f"/api/admin/payments/upi-confirm/{o['id']}", json={"reference": "UTR-COD", "amount": o["total"]}, headers=_hdr(S["admin"]["id"])).status_code == 409
+    r = c.post("/api/admin/payments/manual", json={"distributor_id": "LCCUST", "reference": "MANUAL-1", "amount": o["total"]}, headers=_hdr(S["admin"]["id"]))
     got = _get(c, o["id"])
     assert got["payment_status"] == state and got["payment_method"] == "cod" and _comms(c, o["id"]) == []
     if r.status_code == 200:                                                  # it may pick another (online) order, never this one
