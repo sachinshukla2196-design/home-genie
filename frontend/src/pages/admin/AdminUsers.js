@@ -100,7 +100,7 @@ export default function AdminUsers() {
     setBusyId(creditUser.id);
     try {
       const { data } = await API.post("/admin/wallet/credit", { distributor_id: creditUser.distributor_id, amount: amt, reason: creditForm.reason.trim(), request_id: creditKey });
-      toast.success(`${data.message} New balance ₹${data.available_balance}`);
+      toast.success(data.message || "Credit requested. A different finance admin must approve it.");      // L12: no balance yet
       setCreditUser(null);
     } catch (e) { toast.error(apiError(e)); } finally { setBusyId(null); }
   };

@@ -32,6 +32,17 @@ export default function Checkout() {
   const codFee = Number(cfg.cod_fee ?? 0);
   const total = subtotal;          // Decision 1: prices include GST; only a COD fee can be added
   const set = (k) => (e) => setAddr((a) => ({ ...a, [k]: e.target.value }));
+  // Batch 13 (Phase 7A): saved addresses. A saved one is sent by id and the server copies it into the order (a snapshot).
+  const [saved, setSaved] = useState([]);
+  const [chosen, setChosen] = useState("new");
+  useEffect(() => {
+    API.get("/addresses").then(({ data }) => {
+      setSaved(data.items || []);
+      const d = (data.items || []).find((a) => a.is_default);
+      if (d) setChosen(d.id);
+    }).catch(() => {});
+  }, []);
+  const addrPayload = () => (chosen !== "new" ? { address_id: chosen } : { address: addr });
 
   useEffect(() => {
     API.get("/settings/public").then(({ data }) => setCfg((c) => ({ ...c, ...data }))).catch(() => {});
@@ -46,7 +57,7 @@ export default function Checkout() {
     setLoading(true);
     try {
       const orderItems = items.map((i) => ({ product_id: i.product_id, quantity: i.quantity, variant: i.variant || null, variant_sku: i.variant_sku || null }));
-      const { data: order } = await API.post("/orders", { items: orderItems, address: addr, seller_ref: getSellerRef(), payment_method: method });
+      const { data: order } = await API.post("/orders", { items: orderItems, ...addrPayload(), seller_ref: getSellerRef(), payment_method: method });
       clearSellerRef();      // the code attributed this order; it never carries over to later, unrelated orders
       if (method === "cod") {
         clear();
@@ -67,7 +78,7 @@ export default function Checkout() {
     setLoading(true);
     try {
       const orderItems = items.map((i) => ({ product_id: i.product_id, quantity: i.quantity, variant: i.variant || null, variant_sku: i.variant_sku || null }));
-      const { data: order } = await API.post("/orders", { items: orderItems, address: addr, seller_ref: getSellerRef(), payment_method: method });
+      const { data: order } = await API.post("/orders", { items: orderItems, ...addrPayload(), seller_ref: getSellerRef(), payment_method: method });
       clearSellerRef();      // the code attributed this order; it never carries over to later, unrelated orders
       await API.post("/payments/upi-claim", { order_id: order.id });
       clear();
@@ -88,7 +99,7 @@ export default function Checkout() {
     setLoading(true);
     try {
       const orderItems = items.map((i) => ({ product_id: i.product_id, quantity: i.quantity, variant: i.variant || null, variant_sku: i.variant_sku || null }));
-      const { data: order } = await API.post("/orders", { items: orderItems, address: addr, seller_ref: getSellerRef(), payment_method: method });
+      const { data: order } = await API.post("/orders", { items: orderItems, ...addrPayload(), seller_ref: getSellerRef(), payment_method: method });
       clearSellerRef();      // the code attributed this order; it never carries over to later, unrelated orders
       const { data: rzp } = await API.post("/payments/razorpay/order", { order_id: order.id });
       const ok = await loadRzp();
@@ -101,12 +112,13 @@ export default function Checkout() {
         theme: { color: "#0B4D2E" },
         handler: async (resp) => {
           try {
-            await API.post("/payments/razorpay/verify", {
+            const { data: v } = await API.post("/payments/razorpay/verify", {
               razorpay_order_id: resp.razorpay_order_id,
               razorpay_payment_id: resp.razorpay_payment_id,
               razorpay_signature: resp.razorpay_signature });
             clear();
-            toast.success("Payment successful!");
+            // Batch 14: an authorised-but-not-captured payment is confirmed by the gateway webhook, not shown as paid yet
+            if (v?.status === "pending_capture") toast.message(v.message); else toast.success("Payment successful!");
             navigate(`/app/orders/${order.id}`);
           } catch (e) { toast.error(apiError(e)); }
         },
@@ -151,14 +163,29 @@ export default function Checkout() {
             <h3 className="mb-4 flex items-center gap-2.5 font-display text-lg font-semibold text-ink">
               <span className="hg-icon-chip !h-9 !w-9 !rounded-xl"><MapPin size={18} /></span> {t("checkout.shipping")}
             </h3>
-            <div className="grid gap-4 sm:grid-cols-2">
+            {saved.length > 0 && (
+              <div className="mb-4 space-y-2" role="radiogroup" aria-label={t("checkout.shipping")} data-testid="co-saved">
+                {saved.map((a) => (
+                  <label key={a.id} className={`hg-tile flex cursor-pointer items-start gap-3 p-3 text-sm ${chosen === a.id ? "ring-2 ring-hg-gold/60" : ""}`}>
+                    <input type="radio" name="co-addr" className="mt-1" checked={chosen === a.id} onChange={() => setChosen(a.id)} data-testid={`co-addr-${a.id}`} />
+                    <span className="min-w-0"><span className="font-medium capitalize text-ink">{a.label}{a.is_default ? " · default" : ""}</span>
+                      <span className="block text-muted2">{a.full_name}, {a.line1}{a.line2 ? `, ${a.line2}` : ""}, {a.city}, {a.state} {a.pincode} · {a.mobile}</span></span>
+                  </label>
+                ))}
+                <label className={`hg-tile flex cursor-pointer items-center gap-3 p-3 text-sm ${chosen === "new" ? "ring-2 ring-hg-gold/60" : ""}`}>
+                  <input type="radio" name="co-addr" checked={chosen === "new"} onChange={() => setChosen("new")} data-testid="co-addr-new" /> {t("addr.useNew")}
+                </label>
+                <button type="button" onClick={() => navigate("/app/addresses")} className="text-xs font-medium text-hg-violet underline underline-offset-2">{t("addr.manage")}</button>
+              </div>
+            )}
+            {chosen === "new" && <div className="grid gap-4 sm:grid-cols-2">
               <F label={t("auth.fullName")} value={addr.full_name} onChange={set("full_name")} req testid="co-name" />
               <F label={t("auth.mobile")} value={addr.mobile} onChange={set("mobile")} req testid="co-mobile" />
               <div className="sm:col-span-2"><F label={t("auth.address")} value={addr.line1} onChange={set("line1")} req testid="co-line1" /></div>
               <F label={t("auth.city")} value={addr.city} onChange={set("city")} req testid="co-city" />
               <F label={t("auth.state")} value={addr.state} onChange={set("state")} req testid="co-state" />
               <F label={t("auth.pincode")} value={addr.pincode} onChange={set("pincode")} req testid="co-pincode" />
-            </div>
+            </div>}
           </StaggerItem>
 
           <StaggerItem className="hg-card p-5 sm:p-6">

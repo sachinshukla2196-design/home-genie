@@ -1,3 +1,5 @@
+import { Link, useSearchParams } from "react-router-dom";
+import { OrdersTabs } from "@/pages/admin/AdminOrderOps";
 import React, { useCallback, useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { toast } from "sonner";
@@ -40,7 +42,8 @@ export default function AdminOrders() {
   const { user } = useAuth();
   const isFinance = ["super_admin", "accounts_admin"].includes(user?.role);   // decision 4; the server enforces it
   const [orders, setOrders] = useState(null);
-  const [tab, setTab] = useState("all");
+  const [sp] = useSearchParams();
+  const [tab, setTab] = useState(sp.get("tab") || "claimed");
   const [confirmFor, setConfirmFor] = useState(null);
   const [reference, setReference] = useState("");
   const [confirmAmount, setConfirmAmount] = useState("");
@@ -98,14 +101,15 @@ export default function AdminOrders() {
 
   const refundOrder = async (o) => {
     const remaining = (o.total - (o.refunded_amount || 0)).toFixed(2);
-    const amt = window.prompt(`Refund amount for ${o.order_number} (max ₹${remaining}). Leave as is for FULL refund:`, remaining);
+    const amt = window.prompt(`Refund amount for ${o.order_number} (max ₹${remaining}). Leave as is for FULL refund.\nA different finance admin must confirm it before it is final.`, remaining);
     if (amt === null) return;
     const ref = window.prompt("Refund payment reference (UTR / Razorpay refund id) — mandatory:");
     if (!ref || !ref.trim()) { toast.error("Refund reference is mandatory"); return; }
     const cancel = window.confirm("Also mark this order as CANCELLED? (OK = cancelled, Cancel = keep status)");
     try {
       const { data } = await API.post(`/admin/orders/${o.id}/refund`, { amount: Number(amt), reference: ref.trim(), cancel_order: cancel });
-      toast.success(`Refunded ₹${data.refund_amount} · ${data.reversed} credit(s) clawed back`);
+      // Batch 12 (audit C-4): nothing moves until a different finance admin confirms the case in Operations, Refunds.
+      toast.success(data.message || "Refund recorded for confirmation by a different finance admin.");
       load();
     } catch (e) { toast.error(apiError(e)); }
   };
@@ -162,17 +166,21 @@ export default function AdminOrders() {
     </div>
   );
 
+  // Batch 14: this page is the PAYMENT-EXCEPTIONS workspace; the full order list lives in Orders (server-paged).
+  const needle = (sp.get("q") || "").trim().toUpperCase();
+  const match = (o) => !needle || String(o.order_number || "").toUpperCase().includes(needle);
+  const claimed = orders.filter((o) => o.payment_status === "claimed" && match(o));
+  const codOpen = orders.filter((o) => ["cod_pending", "cod_discrepancy"].includes(o.payment_status) && o.status !== "cancelled" && match(o));
   const claimedCount = orders.filter((o) => o.payment_status === "claimed").length;
-  const paidOrders = orders.filter((o) => o.payment_status === "paid" && !o.needs_refund);   // refund-pending money is not "collected"
-  const upiCollected = paidOrders.reduce((s, o) => s + Number(o.total || 0), 0);
-  const shown = tab === "refund" ? queue.items : tab === "paid" ? paidOrders : orders;
+  const shown = tab === "refund" ? queue.items.filter(match) : tab === "cod" ? codOpen : tab === "claimed" ? claimed : orders.filter(match);
 
   return (
     <div className="space-y-5">
-      <PageHeader title={t("nav.orders")} icon={ShoppingCart} />
+      <OrdersTabs active="exceptions" />
+      <PageHeader title="Payment exceptions" subtitle="UPI claims to confirm, cash on delivery to record, payments to refund. Every action keeps its own permission and audit." icon={ShoppingCart} />
       <div className="grid gap-4 sm:grid-cols-2">
-        <StatCard testid="stat-upi-pending" icon={Clock} accent="gold" label="Awaiting confirm" value={claimedCount} index={0} />
-        <StatCard testid="stat-upi-collected" icon={IndianRupee} accent="success" label="Total collected" value={money(upiCollected)} index={1} />
+        <StatCard testid="stat-upi-pending" icon={Clock} accent="gold" label="UPI claims awaiting confirmation" value={claimedCount} index={0} />
+        <StatCard testid="stat-refund-open" icon={IndianRupee} accent="gold" label="Paid orders that need a refund" value={queue.open_count} index={1} />
       </div>
 
       {/* Manual payment by HomeGenie ID (finance roles only) */}
@@ -209,9 +217,10 @@ export default function AdminOrders() {
 
       {/* Tabs */}
       <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4 pb-1 sm:mx-0 sm:px-0">
-        <OrderTab on={tab === "all"} onClick={() => setTab("all")} testid="tab-all">All Orders ({orders.length})</OrderTab>
-        <OrderTab on={tab === "paid"} onClick={() => setTab("paid")} testid="tab-paid">Paid ({paidOrders.length})</OrderTab>
+        <OrderTab on={tab === "claimed"} onClick={() => setTab("claimed")} testid="tab-claimed">UPI to confirm ({claimed.length})</OrderTab>
+        <OrderTab on={tab === "cod"} onClick={() => setTab("cod")} testid="tab-cod">Cash on delivery ({codOpen.length})</OrderTab>
         <OrderTab on={tab === "refund"} onClick={() => setTab("refund")} testid="tab-refund">Needs refund ({queue.open_count})</OrderTab>
+        <OrderTab on={tab === "all"} onClick={() => setTab("all")} testid="tab-all">Recent orders ({orders.length})</OrderTab>
       </div>
 
       {tab === "refund" && (
@@ -220,14 +229,14 @@ export default function AdminOrders() {
           fulfilled. No invoice or commission was created. Refund each one (oldest first). The vendor cannot see these orders.
         </p>
       )}
-      <div className="hg-card overflow-hidden" data-testid={tab === "refund" ? "refund-list" : tab === "paid" ? "paid-list" : "orders-list"}>
+      <div className="hg-card overflow-hidden" data-testid={tab === "refund" ? "refund-list" : tab === "claimed" ? "claimed-list" : tab === "cod" ? "cod-list" : "orders-list"}>
         <div className="overflow-x-auto">
         <table className="w-full min-w-[1100px] text-sm">
           <thead><tr className="text-left text-xs uppercase tracking-wide text-muted2"><th className={TH}>{t("order.number")}</th><th className={TH}>HomeGenie</th><th className={TH}>Date</th><th className={`${TH} text-right`}>{t("order.total")}</th><th className={TH}>Payment</th><th className={TH}>Method</th><th className={TH}>Reference ID</th><th className={TH}>{t("order.status")}</th><th className={TH}>Invoice</th><th className={TH}>Action</th></tr></thead>
           <tbody>
             {shown.map((o) => (
               <tr key={o.id} className="border-t border-brand-50 align-middle transition-colors hover:bg-brand-50/60" data-testid={`admin-order-${o.order_number}`}>
-                <td className="whitespace-nowrap px-4 py-3 font-medium text-ink">{o.order_number}</td>
+                <td className="whitespace-nowrap px-4 py-3 font-medium text-ink"><Link to={`/admin/orders/${o.id}`} className="underline-offset-2 hover:underline" data-testid={`order-link-${o.order_number}`}>{o.order_number}</Link></td>
                 <td className="px-4 py-3 font-mono text-hg-lavender" data-testid={`order-dist-${o.order_number}`}>{o.distributor_id}<div className="max-w-[160px] truncate font-sans text-xs text-muted2">{o.user_name}</div>
                   {tab === "refund" && <div className="font-sans text-xs text-hg-gold" data-testid={`waiting-${o.order_number}`}>{o.user_mobile} · waiting {o.waiting_hours ?? "?"}h</div>}</td>
                 <td className="whitespace-nowrap px-4 py-3 tabular-nums text-muted2">{(o.created_at || "").slice(0, 10)}</td>

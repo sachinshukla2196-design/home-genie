@@ -64,6 +64,17 @@ def _guard_target(actor: dict, target: dict, what: str) -> None:
         raise HTTPException(status_code=403, detail=f"Only the super admin can {what} an admin account.")
 
 
+VENDOR_ACCOUNT_ROLES = ("vendor", "vendor_staff")
+
+
+def _guard_vendor_account(actor: dict, target: dict, what: str) -> None:
+    """Batch 12 (audit C-17): vendor owner and staff accounts follow the vendor lifecycle, which only super_admin and admin may
+    change (VENDOR_ADMIN_ROLES - the same roles as vendor suspension). Blocking or deactivating them through the general user
+    tools would otherwise let support / accounts admins suspend a vendor's business."""
+    if target.get("role") in VENDOR_ACCOUNT_ROLES and actor.get("role") not in VENDOR_ADMIN_ROLES:
+        raise HTTPException(status_code=403, detail=f"Only an admin can {what} a vendor account. Use the vendor's lifecycle actions.")
+
+
 # ---------------- Dashboard ----------------
 @router.get("/dashboard")
 async def admin_dashboard(admin: dict = Depends(require_admin)):
@@ -362,6 +373,7 @@ async def admin_orders(status: Optional[str] = None, admin: dict = Depends(requi
 
 class OrderStatusBody(BaseModel):
     status: str
+    reason: str = Field(default="", max_length=300)     # Batch 13: why the admin changed it (recorded in the audit)
 
 
 MONEY_ADMIN_ROLES = ("super_admin", "accounts_admin")      # roles that may move money by hand (same set as the finance controls)
@@ -397,8 +409,16 @@ async def update_order_status(order_id: str, body: OrderStatusBody, request: Req
         if unpaid_online and body.status in ("processing", "packed", "shipped", "delivered"):
             raise HTTPException(status_code=409, detail="This order is not paid yet, so it cannot move into fulfilment.")
     upd = {"$set": {"status": body.status, "updated_at": now_iso()}}
-    if body.status == "delivered" and current != "delivered":
-        upd["$set"]["delivered_at"] = now_iso()       # decisions 2/3: the return window and the earning clocks start here
+    if body.status == "delivered" and current != "delivered" and not o.get("fulfilments"):
+        # goods sold by the platform itself (no vendor fulfilment): this record is the delivery (decisions 2/3 clocks).
+        upd["$set"]["delivered_at"] = now_iso()
+    if body.status == "delivered" and o.get("fulfilments"):
+        # Batch 12 (audit C-5a): for vendor goods the delivery evidence is the vendor fulfilment; an admin status change is
+        # recorded but starts no payout clock (eligibility reads the fulfilments). Who may confirm a delivery on a vendor's
+        # behalf is an open owner decision (OWNER_DECISION_REGISTER D-04).
+        upd["$set"]["status_set_by_admin"] = {"status": "delivered", "by": admin["id"], "at": now_iso()}
+    if current == "delivered" and body.status != "delivered":
+        upd["$unset"] = {"delivered_at": ""}           # audit C-5b: moving back from delivered withdraws the delivery record
     cancelling = body.status == "cancelled" and o.get("status") != "cancelled"
     # FIN-15: cancelling an order whose money is in (or cash is due) reverses vendor sales and opens a refund case. That is
     # an operations decision for super_admin / admin, not for support or finance-only roles.
@@ -425,7 +445,7 @@ async def update_order_status(order_id: str, body: OrderStatusBody, request: Req
                               f"Your order {o['order_number']} is now {body.status}.",
                               "ऑर्डर अपडेट", f"आपका ऑर्डर {o['order_number']} अब {body.status} है।")
     await log_audit(admin, "order_status_changed", "order", order_id,
-                    old_value={"status": o["status"]}, new_value={"status": body.status, "restock": restock}, request=request)
+                    old_value={"status": o["status"]}, new_value={"status": body.status, "restock": restock, "reason": body.reason.strip()}, request=request)
     return {"ok": True, "restock": restock, "refund_case": refund_case}
 
 
@@ -438,39 +458,60 @@ class RefundBody(BaseModel):
 
 @router.post("/orders/{order_id}/refund")
 async def refund_order(order_id: str, body: RefundBody, request: Request, admin: dict = Depends(require_money_admin)):
-    """Record a confirmed payment return (full or partial) and claw back order-dependent credits proportionally."""
+    """Record a refund (full or partial) for CONFIRMATION BY A DIFFERENT FINANCE ADMIN.
+
+    Batch 12 (audit C-4): this used to move the money in one step, which let a single person both make and approve a refund
+    and bypass the refund-case rule (owner decision 4: the person who initiates cannot confirm). It now opens the order's
+    refund case (or the cancellation case when `cancel_order` is set) already INITIATED by this admin, with the reference
+    proposed; no money moves and no commission is clawed back until another finance admin confirms the case
+    (POST /api/admin/refund-cases/{id}/action, action "confirm")."""
+    from returns_routes import open_refund_case, initiate_case_as, settle_paid_cancellation, refundable_paise, _open_case_total
     ref = (body.reference or "").strip()
-    if not ref:
+    if len(ref) < 3:      # the same rule the confirming admin must meet
         raise HTTPException(status_code=400, detail="Refund payment reference (UTR / Razorpay refund id) is required.")
     o = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not o:
         raise HTTPException(status_code=404, detail="Order not found.")
     if o.get("payment_status") not in ("paid", "partially_refunded"):
         raise HTTPException(status_code=400, detail="Only paid orders can be refunded.")
-    from cod_rules import refundable_total_paise
-    remaining_p = refundable_total_paise(o, paise_of(o, "total_paise", "total")) - paise_of(o, "refunded_paise", "refunded_amount")
-    remaining = paise_to_float(remaining_p)
-    if body.amount is not None and (to_paise(body.amount) <= 0 or to_paise(body.amount) > remaining_p):
-        raise HTTPException(status_code=400, detail=f"Refund amount must be between 0 and ₹{remaining}.")
-    import shop_routes
-    res = await shop_routes.reverse_order_financials(order_id, admin, request, refund_amount=body.amount, reference=ref, reason=body.reason)
-    if res.get("duplicate"):
+    if await db.order_refunds.find_one({"id": f"{order_id}:refund:{ref}"}, {"_id": 1}):
         raise HTTPException(status_code=409, detail="A refund with this reference was already recorded for this order.")
-    new_status = "cancelled" if body.cancel_order else ("refunded" if to_paise(res["refund_amount"]) >= remaining_p else o.get("status"))
-    upd = {"$set": {"status": new_status, "updated_at": now_iso()}}
-    cancelling = new_status == "cancelled" and o.get("status") != "cancelled"
-    if cancelling:
-        upd["$push"] = {"restock_intents": intent("admin_cancel", admin["id"], prev_status=o.get("status", ""))}
-        upd["$set"]["refund_due_cancel"] = True          # any amount still refundable after this refund gets its case (G1)
-    await db.orders.update_one({"id": order_id}, upd)
-    if cancelling:
+    remaining_p = await refundable_paise(o)
+    if body.amount is not None and (to_paise(body.amount) <= 0 or to_paise(body.amount) > remaining_p):
+        raise HTTPException(status_code=400, detail=f"Refund amount must be between 0 and ₹{paise_to_float(remaining_p)}.")
+    case = None
+    if body.cancel_order and o.get("status") != "cancelled":
+        await db.orders.update_one({"id": order_id, "status": {"$ne": "cancelled"}}, {
+            "$set": {"status": "cancelled", "cancel_reason": "admin_refund", "cancelled_at": now_iso(), "updated_at": now_iso(),
+                     "refund_due_cancel": True},
+            "$push": {"restock_intents": intent("admin_cancel", admin["id"], prev_status=o.get("status", ""))}})
         await run_intents(order_id)
-        from returns_routes import settle_paid_cancellation
-        await settle_paid_cancellation(order_id)
-    await create_notification(o["user_id"], "order", "Refund processed",
-                              f"₹{res['refund_amount']:g} refunded on order {o['order_number']} (ref {ref}).",
-                              "रिफंड हो गया", f"ऑर्डर {o['order_number']} पर ₹{res['refund_amount']:g} रिफंड हुआ।")
-    return {"ok": True, **res, "status": new_status}
+        case = await settle_paid_cancellation(order_id)
+    if case is None:
+        # an order that already has an open refund case awaiting review (late payment, cancellation, vendor rejection, return):
+        # this action initiates THAT case instead of creating a second one for the same money
+        want = to_paise(body.amount) if body.amount is not None else None
+        async for open_case in db.refund_cases.find({"order_id": order_id, "status": "awaiting_review"}, {"_id": 0}).sort("created_at", 1):
+            if want is None or want <= open_case["amount_paise"]:
+                case = open_case
+                break
+    if case is None:
+        room = remaining_p - await _open_case_total(order_id)
+        amount_p = to_paise(body.amount) if body.amount is not None else room
+        if amount_p <= 0 or amount_p > room:
+            raise HTTPException(status_code=409, detail="This amount is already covered by an open refund case. Open it from Operations, Refunds.")
+        case, _ = await open_refund_case(o, "admin_refund", amount_p, body.reason or "Refund recorded by an admin", f"adminrefund:{order_id}:{ref}")
+    elif body.amount is not None and to_paise(body.amount) < case["amount_paise"]:
+        case["amount_paise"] = to_paise(body.amount)
+    if case["status"] == "awaiting_review":
+        case = await initiate_case_as(case, admin, case["amount_paise"], body.reason, proposed_reference=ref)
+    elif admin["id"] not in ({case.get("initiated_by")} | set(case.get("initiators") or [])):
+        raise HTTPException(status_code=409, detail="This refund is already being handled. Open it from Operations, Refunds.")
+    await log_audit(admin, "refund_recorded_for_confirmation", "order", order_id,
+                    new_value={"case_id": case["id"], "amount_paise": case["amount_paise"], "reference": ref, "cancel_order": body.cancel_order},
+                    request=request)
+    return {"ok": True, "status": "pending_confirmation", "case": {k: v for k, v in case.items() if k != "_id"},
+            "message": "Refund recorded. A different finance admin must confirm it in Operations, Refunds before it is final."}
 
 
 @router.get("/refund-queue")
@@ -781,6 +822,15 @@ async def review_withdrawal(wd_id: str, body: WithdrawalReview, request: Request
     sym = settings.get("currency_symbol", "₹")
     now = now_iso()
     note = (body.note or "").strip()[:300]
+
+    if body.action in ("approve", "mark_paid"):
+        # Batch 12 (audit C-13): the KYC rule that admitted the request is re-checked when it is approved and when it is paid.
+        # Bank or identity details changed since the request put KYC back to review, and money must not go to unverified details.
+        if settings.get("require_kyc_for_withdrawal", True):
+            kyc = await db.kyc_records.find_one({"user_id": wr["user_id"]}, {"_id": 0, "status": 1})
+            if not kyc or kyc.get("status") != "verified":
+                raise HTTPException(status_code=409, detail="The member's identity and bank details are not verified now (they changed "
+                                                            "after the request). Verify KYC again before approving or paying.")
 
     if body.action == "approve":
         if wr.get("status") == "approved" and wr.get("approved_by"):
@@ -1146,6 +1196,7 @@ async def block_user(user_id: str, body: BlockBody, request: Request, admin: dic
     if not u:
         raise HTTPException(status_code=404, detail="User not found.")
     _guard_target(admin, u, "block or unblock")
+    _guard_vendor_account(admin, u, "block or unblock")
     status = u.get("account_status")
     if _deletion_marked(u):
         raise HTTPException(status_code=409, detail="This account is deactivated. It cannot be blocked or unblocked.")
@@ -1192,6 +1243,7 @@ async def delete_user(user_id: str, request: Request, admin: dict = Depends(requ
         raise HTTPException(status_code=404, detail="User not found.")
     if u.get("role") in {"super_admin", "admin", "accounts_admin", "support_admin"}:
         raise HTTPException(status_code=400, detail="Admin accounts cannot be deleted.")
+    _guard_vendor_account(admin, u, "deactivate")
     if u.get("account_status") == "deleted":
         return {"ok": True, "already_deactivated": True}
     now = now_iso()

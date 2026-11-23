@@ -88,7 +88,12 @@ def create_token(user_id: str) -> str:
 
 
 def _decode(token: str) -> dict:
-    return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO])
+    # Batch 12 (audit L9): a session token must carry an expiry and a subject. Every access token issued since the first
+    # release has `type: access`; other signed tokens (e.g. google_signup) are not sessions and are refused as such.
+    payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGO], options={"require": ["exp", "sub"]})
+    if payload.get("type") != "access":
+        raise jwt.InvalidTokenError("not an access token")
+    return payload
 
 
 def clean_user(user: dict) -> dict:
@@ -372,9 +377,7 @@ async def create_notification(user_id: str, ntype: str, title: str, message: str
 # ---------- audit ----------
 async def log_audit(user: Optional[dict], action: str, entity: str, entity_id: str = "",
                     old_value=None, new_value=None, request: Request = None):
-    ip = ""
-    if request:
-        ip = request.headers.get("x-forwarded-for", request.client.host if request.client else "")
+    ip = client_ip(request) if request else ""        # Batch 13: the same trusted-proxy rule as rate limits (never a forged header)
     rec = {
         "id": new_id(),
         "user_id": user.get("id") if user else None,
@@ -444,12 +447,36 @@ RATE_LIMITS = {   # name -> (max requests, window seconds); keys are per client 
     "vendor_register": (10, 3600), "vendor_apply": (8, 3600), "staff_accept": (10, 3600), "customer_register": (20, 3600), "forgot_password": (10, 3600),
     "login_ip": (60, 600), "admin_login_ip": (20, 600), "support_ticket": (20, 86400), "upload_sign": (60, 3600),
     "change_password": (10, 3600), "contact_change_otp": (10, 3600), "otp_send_ip": (20, 3600), "change_mobile_send": (10, 3600), "forced_change_otp": (10, 3600), "csv_import": (30, 3600), "forgot_reset": (20, 3600), "login_otp_send": (20, 3600), "login_otp_verify": (60, 3600),
+    # per account identifier + purpose (not per IP): OTP attempts across every code issued in a day (audit C-1)
+    "otp_attempts_identifier": (20, 86400),
 }
 
 
+import ipaddress as _ipaddress
+
+
+def _private_peer(host: str) -> bool:
+    try:
+        a = _ipaddress.ip_address(host)
+        return a.is_private or a.is_loopback
+    except ValueError:
+        return False
+
+
 def client_ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for", "")
-    return (fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "")) or "unknown"
+    """The caller's IP for rate limits, lockouts and audit (Batch 12, audit C-2).
+
+    `X-Forwarded-For` is client-controlled unless a trusted proxy wrote it. It is used only when the app runs behind one:
+    on Vercel (the edge overwrites the header; `VERCEL` is set by the platform) or when the direct peer is a private /
+    loopback address (a reverse proxy on the internal network). Even then the RIGHTMOST entry is taken (the one the
+    nearest proxy appended), never the leftmost one a client can forge. `TRUSTED_PROXY_HOPS` (default 1) selects the entry
+    for a chain of several proxies. Otherwise the socket peer is used."""
+    peer = request.client.host if request.client else ""
+    hops = max(int(_os.environ.get("TRUSTED_PROXY_HOPS", "1") or 1), 1)
+    fwd = [p.strip() for p in request.headers.get("x-forwarded-for", "").split(",") if p.strip()]
+    if fwd and (_os.environ.get("VERCEL") or _private_peer(peer)):
+        return fwd[-hops] if len(fwd) >= hops else fwd[0]
+    return peer or "unknown"
 
 
 async def rate_limit(name: str, key: str):

@@ -58,6 +58,7 @@ def c():
                 return v
 
             S["cust"], S["admin"] = await user("9100000301", "distributor", "HGC"), await user("9100000302", "super_admin", "HGADM")
+            S["fin2"] = await user("9100000309", "accounts_admin", "HGFIN2")      # Batch 12: confirms refunds recorded by another
             S["genie"] = await user("9100000303", "distributor", "HGSEL")
             S["cust2"] = await user("9100000306", "distributor", "HGC2")
             S["ua"], S["ub"] = await user("9100000304", "vendor", "VDA"), await user("9100000305", "vendor", "VDB")
@@ -301,6 +302,10 @@ def test_admin_refund_queue(c):
     # resolving: a full refund moves the case out of the open queue
     r = c.post(f"/api/admin/orders/{o1['id']}/refund", json={"reference": "UTR-REFUND-1"}, headers=ha)
     assert r.status_code == 200, r.text
+    # Batch 12 (audit C-4): the refund is final once a different finance admin confirms it
+    assert c.post(f"/api/admin/refund-cases/{r.json()['case']['id']}/action", headers=_hdr(S["fin2"]["id"]),
+                  json={"action": "confirm", "reference": "UTR-REFUND-1", "confirmation_type": "manual_reconciliation",
+                        "note": "Checked on the bank statement"}).status_code == 200
     after = c.get("/api/admin/refund-queue", headers=ha).json()
     assert o1["id"] not in [x["id"] for x in after["items"]] and after["open_count"] == q["open_count"] - 1
     assert o1["id"] in [x["id"] for x in c.get("/api/admin/refund-queue?state=resolved", headers=ha).json()["items"]]

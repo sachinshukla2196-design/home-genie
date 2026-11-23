@@ -8,12 +8,17 @@ create and approve the same action — enforced here, in the backend, not in the
 Requests are keyed by their idempotency key, so a retried or double-clicked request never creates a second approval.
 Approval is a compare-and-set (pending -> approving), so two checkers clicking together execute the action once.
 """
+import logging
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from core import create_notification, db, log_audit, now_iso, require_admin
+
+logger = logging.getLogger("homegenies")
+STALE_APPROVING = timedelta(minutes=5)
 
 router = APIRouter(prefix="/api/admin/finance/approvals", tags=["finance-approvals"])
 
@@ -70,7 +75,9 @@ class DecisionIn(BaseModel):
 
 @router.get("")
 async def list_approvals(status: str = "pending", admin: dict = Depends(require_finance_admin)):
-    rows = await db.financial_approvals.find({"status": status}, {"_id": 0, "payload": 0}).sort("created_at", -1).to_list(200)
+    # "pending" also lists requests stuck in "approving" (an approval interrupted mid-way), so they can be finished (C-18).
+    q = {"status": {"$in": ["pending", "approving"]}} if status == "pending" else {"status": status}
+    rows = await db.financial_approvals.find(q, {"_id": 0, "payload": 0}).sort("created_at", -1).to_list(200)
     return [_public(r) for r in rows]
 
 
@@ -81,8 +88,14 @@ async def approve(approval_id: str, body: DecisionIn, request: Request, admin: d
         raise HTTPException(status_code=404, detail="Request not found.")
     if a["maker_id"] == admin["id"]:
         raise HTTPException(status_code=403, detail="You requested this action, so a different finance administrator must approve it.")
-    claim = await db.financial_approvals.update_one({"_id": approval_id, "status": "pending"},
-                                                    {"$set": {"status": "approving", "checker_id": admin["id"], "decided_at": now_iso()}})
+    # Batch 12 (audit C-18): an approval interrupted after its claim (crash, timeout) stayed "approving" for ever. Once the claim
+    # is older than STALE_APPROVING, any finance admin other than the maker may take it over and finish it. A claim that is
+    # still fresh is never taken (so concurrent clicks run the action once). Re-running an interrupted one is safe: both
+    # executors are idempotent on the request's own key (request_id / idempotency_key).
+    stale = (datetime.now(timezone.utc) - STALE_APPROVING).isoformat()
+    claim = await db.financial_approvals.update_one(
+        {"_id": approval_id, "$or": [{"status": "pending"}, {"status": "approving", "decided_at": {"$lt": stale}}]},
+        {"$set": {"status": "approving", "checker_id": admin["id"], "decided_at": now_iso()}})
     if not claim.modified_count:
         raise HTTPException(status_code=409, detail=f"This request is already {a['status']}.")
     try:
@@ -90,6 +103,9 @@ async def approve(approval_id: str, body: DecisionIn, request: Request, admin: d
     except HTTPException as e:
         await db.financial_approvals.update_one({"_id": approval_id}, {"$set": {"status": "failed", "result": {"error": str(e.detail)}}})
         raise
+    except Exception:
+        logger.exception("financial approval %s interrupted; it stays 'approving' and can be retried", approval_id)
+        raise HTTPException(status_code=503, detail="The approval was interrupted. Approve it again in a few minutes to finish it; it will apply once.")
     result = {k: v for k, v in (result or {}).items() if k in ("message", "already", "amount", "distributor_id", "entry_id", "created")}
     await db.financial_approvals.update_one({"_id": approval_id}, {"$set": {"status": "approved", "decision_note": body.note.strip(),
                                                                             "result": result}})

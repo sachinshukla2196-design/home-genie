@@ -14,8 +14,9 @@ from validators import safe_image_refs
 
 PILLARS = ["Sarees", "Fashion Products", "Makeup, Beauty & Skincare", "Household Essentials"]
 
-# key -> ("text" | "number" | "date", max_length_or_max_value)
-ATTRIBUTE_SPECS: Dict[str, Dict[str, tuple]] = {
+# key -> (kind, limit_or_options). The ORIGINAL keys and kinds are kept exactly; Batch 12 adds the fields of the category templates
+# (catalogue_templates.TEMPLATES): select (one of options), multi (several of options) and bool. Unknown keys are still rejected.
+_LEGACY_SPECS: Dict[str, Dict[str, tuple]] = {
     "Sarees": {"fabric": ("text", 60), "weave_style": ("text", 60), "colour": ("text", 40), "length_m": ("number", 20),
                "care_instructions": ("text", 300), "origin": ("text", 80), "included_accessories": ("text", 120)},
     "Fashion Products": {"product_type": ("text", 60), "size": ("text", 30), "colour": ("text", 40), "material": ("text", 80),
@@ -26,7 +27,23 @@ ATTRIBUTE_SPECS: Dict[str, Dict[str, tuple]] = {
     "Household Essentials": {"material": ("text", 80), "dimensions": ("text", 60), "weight_g": ("number", 100000),
                              "usage_instructions": ("text", 500), "safety_info": ("text", 500)},
 }
-VARIANT_ATTRIBUTES = {"size", "colour", "design", "fabric", "pack_size", "weight", "quantity", "shade"}
+
+
+def _build_specs() -> Dict[str, Dict[str, tuple]]:
+    from catalogue_templates import TEMPLATES
+    specs = {k: dict(v) for k, v in _LEGACY_SPECS.items()}
+    for pillar, tpl in TEMPLATES.items():
+        for g in tpl["groups"]:
+            for f in g["fields"]:
+                if f["key"] in specs[pillar]:
+                    continue                                  # an original key keeps its original validation
+                kind = {"textarea": "text"}.get(f["type"], f["type"])
+                specs[pillar][f["key"]] = (kind, f.get("options") if kind in ("select", "multi") else f.get("max"))
+    return specs
+
+
+ATTRIBUTE_SPECS: Dict[str, Dict[str, tuple]] = _build_specs()
+VARIANT_ATTRIBUTES = {"size", "colour", "design", "fabric", "pack_size", "weight", "quantity", "shade", "material", "net_quantity"}
 SKU_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._\-]{1,39}")
 DOC_TYPES = {"license", "test_report", "invoice", "authenticity", "certificate", "other"}
 
@@ -40,7 +57,7 @@ def validate_attributes(category: str, attrs: Optional[dict]) -> dict:
         if k not in spec:
             raise ValueError(f"'{k}' is not a field for {category}.")
         kind, limit = spec[k]
-        if v is None or v == "":
+        if v is None or v == "" or v == []:
             continue
         if kind == "text":
             if not isinstance(v, str) or len(v.strip()) > limit:
@@ -49,6 +66,19 @@ def validate_attributes(category: str, attrs: Optional[dict]) -> dict:
         elif kind == "number":
             if isinstance(v, bool) or not isinstance(v, (int, float)) or not (0 <= v <= limit):
                 raise ValueError(f"'{k}' must be a number between 0 and {limit}.")
+            out[k] = v
+        elif kind == "select":
+            if v not in limit:
+                raise ValueError(f"'{k}' must be one of: {', '.join(limit)}.")
+            out[k] = v
+        elif kind == "multi":
+            if not isinstance(v, list) or any(x not in limit for x in v):
+                raise ValueError(f"'{k}' must be a list chosen from: {', '.join(limit)}.")
+            if v:
+                out[k] = list(dict.fromkeys(v))
+        elif kind == "bool":
+            if not isinstance(v, bool):
+                raise ValueError(f"'{k}' must be yes or no.")
             out[k] = v
         else:  # date
             try:

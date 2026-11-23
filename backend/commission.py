@@ -131,6 +131,8 @@ async def _freeze_plan(order: dict, seller_id: str):
         logger.error("return_window_days is invalid; commissions for order %s not credited", order.get("id"))
         return "invalid_return_window"
     base_p = paise_of(order, "subtotal_paise", "subtotal")
+    if isinstance(order.get("commission_base_paise"), int) and 0 <= order["commission_base_paise"] < base_p:
+        base_p = order["commission_base_paise"]      # audit C-8: goods a vendor never supplied on a COD order earn nothing
     sym = settings.get("currency_symbol", "Rs ")
     seller = await _approved(seller_id)
     items, note = [], None

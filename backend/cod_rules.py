@@ -21,6 +21,8 @@ from typing import Literal, Optional
 from fastapi import HTTPException
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
+from money import paise_of
+
 CONFIRM_ROLES = ("admin", "super_admin")                 # may confirm COD collection (accounts_admin may not)
 VERIFIABLE_TYPES = ("courier_confirmation", "provider_confirmation")   # evidence types that can prove collection at review
 # Technical sanity bound against typing errors, NOT a business limit: the product has no order-value cap to align with.
@@ -172,7 +174,9 @@ def collection_is_proven(order: dict) -> bool:
     confirmation or by an independent reviewer at resolution. A manual exception, an unresolved hold, a short
     collection or a missing record is never proven. (Evidence is recorded, not verified by any integration.)"""
     c = order.get("cod_collection") or {}
-    return (order.get("payment_status") == "paid"
+    # Batch 12 (audit C-10): a later partial refund does not undo the proof that the cash was collected; without this the
+    # remaining commission of a partly refunded COD order could never be released while the vendor side was payable.
+    return (order.get("payment_status") in ("paid", "partially_refunded")
             and c.get("type") in VERIFIABLE_TYPES
             and isinstance(c.get("collected_paise"), int)
             and c.get("collected_paise") == c.get("expected_paise"))
@@ -187,3 +191,41 @@ def refundable_total_paise(order: dict, total_p: int) -> int:
     if order.get("payment_method") == "cod" and isinstance(c, int) and not isinstance(c, bool) and 0 < c < total_p:
         return c
     return total_p
+
+
+def refund_basis_paise(order: dict, total_p: int) -> int:
+    """The value a refund is pro-rated against when it is split between vendors and HomeGenie commissions (Batch 12, audit
+    C-11). It is the GOODS value the customer paid: the refundable total without the COD handling fee, which is neither the
+    vendor's sale nor part of the commission base. Refunding all goods therefore takes back all of each share, whether or not
+    the fee was refunded. A COD order accepted short keeps the collected amount as its basis (unchanged)."""
+    base = refundable_total_paise(order, total_p)
+    fee = order.get("cod_fee_paise")
+    if isinstance(fee, int) and not isinstance(fee, bool) and 0 < fee < base:
+        return base - fee
+    return base
+
+
+def unsupplied_goods_paise(order: dict) -> tuple:
+    """Goods on the order that a vendor did not supply (its group ended rejected / cancelled / returned to origin), as
+    (value the customer would pay for them, their commission base). Batch 12, audit C-8: on a COD order these goods are never
+    paid for, so they are neither part of the cash to collect nor of the HomeGenie commission base."""
+    from eligibility import NOT_SUPPLIED
+    from money import mul_ratio
+    gone = {f.get("vendor_id") for f in order.get("fulfilments") or [] if f.get("status") in NOT_SUPPLIED}
+    if not gone:
+        return 0, 0
+    lines = [li for li in order.get("items", []) if li.get("vendor_id") in gone]
+    line_p = sum(paise_of(li, "total_paise", "total") for li in lines)
+    if order.get("prices_include_gst"):
+        base_p = sum(li["taxable_paise"] if isinstance(li.get("taxable_paise"), int) else paise_of(li, "total_paise", "total") for li in lines)
+        return line_p, base_p
+    # older GST-exclusive orders: the line value is the base; the customer's price adds the order's GST proportionally
+    subtotal_p = paise_of(order, "subtotal_paise", "subtotal")
+    total_p = paise_of(order, "total_paise", "total")
+    fee = order.get("cod_fee_paise") if isinstance(order.get("cod_fee_paise"), int) else 0
+    return (mul_ratio(total_p - fee, line_p, subtotal_p) if subtotal_p else line_p), line_p
+
+
+def expected_cod_paise(order: dict) -> int:
+    """Cash to collect on a COD order: the total less the goods no vendor supplied (audit C-8)."""
+    return paise_of(order, "total_paise", "total") - unsupplied_goods_paise(order)[0]

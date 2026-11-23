@@ -11,6 +11,8 @@ import { useI18n } from "@/context/I18nContext";
 import { useCart } from "@/context/CartContext";
 import { useAuth } from "@/context/AuthContext";
 import { productShareLink } from "@/lib/sellerRef";
+import { WishButton } from "@/components/WishButton";
+import { RelatedProducts } from "@/components/RelatedProducts";
 import { API } from "@/lib/api";
 
 export default function ProductDetail() {
@@ -197,6 +199,7 @@ export default function ProductDetail() {
               </Button>
             </motion.div>
           </StaggerItem>
+          <StaggerItem><WishButton productId={p.id} /></StaggerItem>
           {canShare && (
             <StaggerItem>
               <Button type="button" variant="outline" onClick={share} className="h-11 w-full rounded-full border-hg-gold/40 bg-transparent text-ink sm:w-auto sm:px-6" data-testid="share-product">
@@ -207,6 +210,7 @@ export default function ProductDetail() {
           )}
         </Stagger>
       </div>
+      <RelatedProducts productId={p.id} />
     </div>
   );
 }

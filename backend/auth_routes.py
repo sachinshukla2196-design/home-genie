@@ -285,7 +285,9 @@ async def register(body: RegisterBody, request: Request):
         "role": "distributor",
         "status": "red",  # red = registered/not activated, green = activated
         "mobile_verified": True,
-        "email_verified": True,
+        # Batch 12 (audit C-3): only the MOBILE was proven here (OTP). The e-mail is unproven until a Google sign-in on it
+        # links the account, so Google can never be used to enter an account someone registered with another's e-mail.
+        "email_verified": False,
         "sponsor_id": sponsor["distributor_id"] if sponsor else None,
         "sponsor_user_id": sponsor["id"] if sponsor else None,
         "address": body.address, "state": body.state, "city": body.city, "pincode": body.pincode,
@@ -474,7 +476,10 @@ async def forgot_google(body: GoogleRecoveryBody, request: Request):
     if not email:
         return {"message": GENERIC_RECOVERY_MESSAGE}
     user = await db.users.find_one({"email": email})
-    if not user or user.get("blocked") or user.get("role") in ADMIN_ROLES or not_activated(user):
+    # Batch 12 (audit C-9): Google proves control of the e-mail only if the account's e-mail was itself proven (verified
+    # or already Google-linked) - the same SEC-05 rule as Google sign-in. Otherwise whoever owns a mistyped / reused
+    # address could reset someone else's password. Same answer either way (no account discovery).
+    if not _eligible_for_otp_reset(user) or _inactive(user) or not (user.get("email_verified") or user.get("google_linked")):
         return {"message": GENERIC_RECOVERY_MESSAGE}
     now = datetime.now(timezone.utc)
     await db.password_reset_tokens.update_many({"user_id": user["id"], "used": False}, {"$set": {"used": True}})
@@ -502,7 +507,7 @@ async def forgot_google_reset(body: GoogleResetBody, request: Request):
     if not row:
         raise invalid
     user = await db.users.find_one({"id": row["user_id"]})
-    if not user or user.get("blocked") or user.get("role") in ADMIN_ROLES or not_activated(user):
+    if not _eligible_for_otp_reset(user) or _inactive(user):
         raise invalid
     await db.users.update_one({"id": user["id"]}, {"$set": {**password_update(body.password), "updated_at": now_iso()}})
     await db.password_reset_requests.update_many({"user_id": user["id"], "status": "pending"},
@@ -542,6 +547,9 @@ async def admin_login(body: AdminLoginBody, request: Request):
         user
         and verify_password(body.password, user.get("password_hash", ""))
         and user.get("role") in ADMIN_ROLES
+        # Batch 12 (audit L6): a blocked / deactivated admin gets exactly the invalid-credentials answer, so the endpoint
+        # is no longer an oracle for whether a blocked admin's password is right.
+        and not _inactive(user)
     )
     if not valid:
         await db.login_attempts.update_one({"identifier": ident},

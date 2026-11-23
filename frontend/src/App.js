@@ -8,6 +8,9 @@ import { AuthProvider } from "@/context/AuthContext";
 import { CartProvider } from "@/context/CartContext";
 import { ThemeProvider, useTheme } from "@/context/ThemeContext";
 import { ProtectedRoute } from "@/components/ProtectedRoute";
+import MemberOnly from "@/components/MemberOnly";
+import Addresses from "@/pages/Addresses";
+import Wishlist from "@/pages/Wishlist";
 import { AppLayout } from "@/components/AppLayout";
 import { AdminLayout } from "@/components/AdminLayout";
 import { VendorLayout, useVendor } from "@/components/VendorLayout";
@@ -36,6 +39,10 @@ import Rewards from "@/pages/Rewards";
 import AdminDashboard from "@/pages/admin/AdminDashboard";
 import AdminUsers from "@/pages/admin/AdminUsers";
 import AdminProducts from "@/pages/admin/AdminProducts";
+import AdminCatalogue, { AdminCatalogueStudio } from "@/pages/admin/AdminCatalogue";
+import AdminOrderOps, { AdminOrderDetail, AdminPaymentEvents } from "@/pages/admin/AdminOrderOps";
+import AdminMerchandising from "@/pages/admin/AdminMerchandising";
+import VendorProductStudio from "@/pages/vendor/VendorProductStudio";
 import AdminOrders from "@/pages/admin/AdminOrders";
 import AdminActivations from "@/pages/admin/AdminActivations";
 import AdminReports from "@/pages/admin/AdminReports";
@@ -144,11 +151,13 @@ function AppRoutes() {
                   <Route path="checkout" element={<Checkout />} />
                   <Route path="orders" element={<Orders />} />
                   <Route path="orders/:id" element={<OrderDetail />} />
-                  <Route path="rewards" element={<Rewards />} />
-                  <Route path="wallet" element={<Wallet />} />
-                  <Route path="withdrawals" element={<Withdrawals />} />
-                  <Route path="kyc" element={<Kyc />} />
-                  <Route path="referral" element={<Referral />} />
+                  <Route path="rewards" element={<MemberOnly><Rewards /></MemberOnly>} />
+                  <Route path="wallet" element={<MemberOnly><Wallet /></MemberOnly>} />
+                  <Route path="withdrawals" element={<MemberOnly><Withdrawals /></MemberOnly>} />
+                  <Route path="kyc" element={<MemberOnly><Kyc /></MemberOnly>} />
+                  <Route path="referral" element={<MemberOnly><Referral /></MemberOnly>} />
+                  <Route path="wishlist" element={<Wishlist />} />
+                  <Route path="addresses" element={<Addresses />} />
                   <Route path="notifications" element={<Notifications />} />
                   <Route path="profile" element={<Profile />} />
                 </Route>
@@ -157,7 +166,14 @@ function AppRoutes() {
                   <Route index element={<AdminDashboard />} />
                   <Route path="users" element={<AdminUsers />} />
                   <Route path="products" element={<AdminProducts />} />
-                  <Route path="orders" element={<AdminOrders />} />
+                  <Route path="catalogue" element={<AdminCatalogue />} />
+                  <Route path="order-ops" element={<Navigate to="/admin/orders" replace />} />
+                  <Route path="merchandising" element={<AdminMerchandising />} />
+                  <Route path="orders/:id" element={<AdminOrderDetail />} />
+                  <Route path="catalogue/studio/:draftId" element={<AdminCatalogueStudio />} />
+                  <Route path="orders" element={<AdminOrderOps />} />
+                  <Route path="orders/exceptions" element={<AdminOrders />} />
+                  <Route path="orders/events" element={<AdminPaymentEvents />} />
                   <Route path="activations" element={<AdminActivations />} />
                   <Route path="withdrawals" element={<AdminWithdrawals />} />
                   <Route path="kyc" element={<AdminKyc />} />
@@ -184,6 +200,9 @@ function AppRoutes() {
                   <Route path="dashboard" element={<VendorHome />} />
                   <Route path="orders" element={<VendorGate obligations><VendorOrders /></VendorGate>} />
                   <Route path="products" element={<VendorGate><VendorProducts /></VendorGate>} />
+                  <Route path="products/new" element={<VendorGate><VendorProductStudio /></VendorGate>} />
+                  <Route path="products/:productId/edit" element={<VendorGate><VendorProductStudio /></VendorGate>} />
+                  <Route path="products/studio/:draftId" element={<VendorGate><VendorProductStudio /></VendorGate>} />
                   <Route path="inventory" element={<VendorGate><VendorInventory /></VendorGate>} />
                   <Route path="dispatch" element={<VendorGate obligations><VendorDispatch /></VendorGate>} />
                   <Route path="returns" element={<VendorGate obligations><VendorReturns /></VendorGate>} />

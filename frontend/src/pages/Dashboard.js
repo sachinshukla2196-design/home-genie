@@ -3,10 +3,9 @@ import { useNavigate } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
   Coins, Package, ShoppingBag, Share2, LifeBuoy, User, ArrowRight,
-  Sparkles, CheckCircle2, Users, TrendingUp, Trophy, ChevronRight,
+  Sparkles, CheckCircle2, Trophy, ChevronRight, TrendingUp,
   ArrowUpRight, ArrowDownRight,
 } from "lucide-react";
-import { LineChart, Line, ResponsiveContainer, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 import { EmptyState } from "@/components/EmptyState";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -15,6 +14,8 @@ import { useAuth } from "@/context/AuthContext";
 import { API } from "@/lib/api";
 import { Stagger, StaggerItem, CountUp, ProgressBar, pressable } from "@/components/motion";
 import { SectionCard } from "@/components/PageHeader";
+import { HomeGeniePerformance } from "@/components/HomeGeniePerformance";
+import { MerchSections } from "@/components/MerchSections";
 
 export default function Dashboard() {
   const { t } = useI18n();
@@ -42,6 +43,8 @@ export default function Dashboard() {
     { key: "qa.profile", icon: User, to: "/app/profile" },
     { key: "qa.support", icon: LifeBuoy, to: "/legal/support" },
   ];
+
+  if (user?.role === "customer" && d) return <CustomerHome d={d} featured={featured} money={money} />;
 
   if (!d) return (
     <div className="space-y-6">
@@ -108,20 +111,8 @@ export default function Dashboard() {
         </button>
       </motion.div>
 
-      {/* Quick stat tiles */}
-      <Stagger className="grid grid-cols-3 gap-3 sm:gap-4">
-        {[
-          { icon: Package, v: d.stats.total_orders, k: "dash.totalOrders", c: "text-hg-lavender", bg: "bg-hg-lavender/15", id: "stat-orders" },
-          { icon: TrendingUp, v: d.stats.sales_count ?? 0, k: "dash.mySales", c: "text-hg-pink", bg: "bg-hg-pink/15", id: "stat-sales" },
-          { icon: Users, v: d.stats.referral_count, k: "dash.referralCount", c: "text-hg-success", bg: "bg-hg-success/15", id: "stat-customers" },
-        ].map((x) => (
-          <StaggerItem key={x.id} {...pressable} className="hg-card hg-lift flex flex-col items-center px-2 py-5 text-center" data-testid={x.id}>
-            <span className={`flex h-11 w-11 items-center justify-center rounded-2xl ${x.bg}`}><x.icon size={22} className={x.c} /></span>
-            <div className="mt-2.5 font-display text-3xl font-semibold tabular-nums text-ink"><CountUp value={x.v} /></div>
-            <div className="mt-1 text-xs leading-tight text-muted2 sm:text-sm">{t(x.k)}</div>
-          </StaggerItem>
-        ))}
-      </Stagger>
+      {/* Batch 13 (HG-03): figures from the metrics endpoint, traceable to orders, commissions and withdrawals */}
+      <HomeGeniePerformance />
 
       {/* Featured products — real catalogue only */}
       {featured.length > 0 && (
@@ -205,28 +196,7 @@ export default function Dashboard() {
         <p className="mt-3 inline-flex rounded-full bg-hg-violet/15 px-3 py-1 text-xs font-medium text-hg-violet ring-1 ring-hg-lavender/25 dark:text-hg-lavender">{t("wallet.rate")}</p>
       </SectionCard>
 
-      <div className="grid gap-5 lg:grid-cols-3">
-        {/* Sales chart */}
-        <SectionCard title={t("dash.salesOverview")} icon={TrendingUp} className="min-w-0 lg:col-span-2">
-          <div className="h-64 w-full min-w-0">
-            <ResponsiveContainer width="100%" height={256} minWidth={0} debounce={1}>
-              <LineChart data={d.income_series} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(145,133,164,0.25)" vertical={false} />
-                <XAxis dataKey="date" tick={{ fill: "#A08C74", fontSize: 12 }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fill: "#A08C74", fontSize: 12 }} axisLine={false} tickLine={false} width={30} />
-                <Tooltip
-                  contentStyle={{ background: "rgba(59,36,23,.92)", border: "1px solid rgba(255,255,255,.14)", color: "#fff", borderRadius: 12 }}
-                  labelStyle={{ color: "#E9D9BC" }} itemStyle={{ color: "#fff" }}
-                  cursor={{ stroke: "rgba(201,161,59,0.35)" }}
-                  formatter={(v) => money(v)} />
-                <Line type="monotone" dataKey="income" stroke="#5C3A26" strokeWidth={2.5}
-                  dot={{ r: 3.5, fill: "#C9A13B", stroke: "#5C3A26", strokeWidth: 1.5 }}
-                  activeDot={{ r: 5.5, fill: "#C9A13B", stroke: "#fff", strokeWidth: 2 }} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </SectionCard>
-
+      <div className="grid gap-5">
         {/* Quick actions */}
         <SectionCard title={t("dash.quickActions")} icon={Sparkles}>
           <Stagger className="grid grid-cols-3 gap-2.5">
@@ -285,6 +255,68 @@ export default function Dashboard() {
           )}
         </SectionCard>
       </div>
+    </div>
+  );
+}
+
+
+/** Owner decision 5: a CUSTOMER account shops; it has no points, earnings, sharing, KYC or withdrawals. Its home shows its
+ *  own orders and the shop, from the same /dashboard data. */
+function CustomerHome({ d, featured, money }) {
+  const { t } = useI18n();
+  const { user } = useAuth();
+  const navigate = useNavigate();
+  const links = [
+    { key: "qa.shop", icon: ShoppingBag, to: "/app/products" },
+    { key: "qa.orders", icon: Package, to: "/app/orders" },
+    { key: "qa.profile", icon: User, to: "/app/profile" },
+    { key: "qa.support", icon: LifeBuoy, to: "/legal/support" },
+  ];
+  return (
+    <div className="space-y-5" data-testid="customer-dashboard">
+      <div className="hg-hero hg-sheen relative overflow-hidden rounded-3xl p-6 sm:p-7">
+        <h1 className="font-display text-2xl font-semibold sm:text-3xl">{t("dash.greeting")}, {user?.full_name?.split(" ")[0]}</h1>
+        <p className="mt-1 text-white/85">{t("cust.homeSub")}</p>
+        <Button onClick={() => navigate("/app/products")} className="btn-gold mt-5 rounded-full px-6" data-testid="customer-shop-btn">
+          {t("cta.shopNow")} <ArrowRight size={16} className="ml-1.5" />
+        </Button>
+      </div>
+      <Stagger className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        {links.map((q) => (
+          <StaggerItem as="button" key={q.key} {...pressable} onClick={() => navigate(q.to)} data-testid={`cqa-${q.key.split(".")[1]}`}
+            className="hg-tile group flex min-w-0 flex-col items-center gap-2 p-4 text-center text-sm font-medium text-ink hover:bg-brand-50/60">
+            <span className="hg-icon-chip !h-10 !w-10"><q.icon size={19} /></span>
+            <span className="w-full break-words leading-tight">{t(q.key)}</span>
+          </StaggerItem>
+        ))}
+      </Stagger>
+      <SectionCard title={t("dash.recentOrders")} icon={Package} className="min-w-0">
+        {d.recent_orders.length === 0 ? <EmptyState icon={Package} title={t("empty.orders")} ctaLabel={t("cta.shopNow")} onCta={() => navigate("/app/products")} testid="customer-empty-orders" /> : (
+          <div className="space-y-2.5">
+            {d.recent_orders.map((o) => (
+              <button key={o.id} onClick={() => navigate(`/app/orders/${o.id}`)} className="hg-tile flex w-full items-center justify-between gap-3 p-3.5 text-left">
+                <div className="min-w-0"><div className="truncate font-medium text-ink">{o.order_number}</div><div className="truncate text-xs capitalize text-muted2">{o.status}</div></div>
+                <div className="shrink-0 font-display font-semibold tabular-nums text-ink">{money(o.total)}</div>
+              </button>
+            ))}
+          </div>
+        )}
+      </SectionCard>
+      <MerchSections />
+      {featured.length > 0 && (
+        <SectionCard title={t("cust.forYou")} icon={Sparkles} className="min-w-0">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {featured.slice(0, 8).map((p) => (
+              <button key={p.id} onClick={() => navigate(`/app/products/${p.id}`)} className="hg-tile overflow-hidden p-0 text-left">
+                {p.images?.[0] ? <img src={p.images[0]} alt={p.name} className="aspect-square w-full object-cover" loading="lazy" />
+                  : <div className="flex aspect-square w-full items-center justify-center bg-brand-50"><ShoppingBag size={28} className="text-muted2" /></div>}
+                <div className="p-2.5"><div className="line-clamp-2 text-sm font-medium text-ink">{p.name}</div>
+                  <div className="mt-1 font-display font-semibold tabular-nums text-ink">{money(p.selling_price)}</div></div>
+              </button>
+            ))}
+          </div>
+        </SectionCard>
+      )}
     </div>
   );
 }

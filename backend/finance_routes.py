@@ -410,6 +410,7 @@ async def resolve_cod_discrepancy(order_id: str, request: Request, admin: dict =
     confirm_full : the reviewer records that the full total was collected; commission is distributed once, as for any paid order.
     accept_short : a lower amount was collected; the order is closed, the vendor sale is recorded pro rata, and commission stays
                    held (`short_collection_held`) because the owner has not set a policy for short collections."""
+    from shop_routes import _cod_delivery_fields
     o = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not o or o.get("payment_status") != "cod_discrepancy":
         raise HTTPException(status_code=404, detail="No open COD discrepancy on this order.")
@@ -428,7 +429,7 @@ async def resolve_cod_discrepancy(order_id: str, request: Request, admin: dict =
                   "expected_paise": expected_p, "collected_paise": collected_p}
     claim = await db.orders.update_one(
         {"id": order_id, "payment_status": "cod_discrepancy"},
-        {"$set": {"payment_status": "paid", "status": "delivered", "delivered_at": now_iso(), "cod_collected_paise": collected_p, "cod_collected_by": admin["id"],
+        {"$set": {"payment_status": "paid", **_cod_delivery_fields(o), "cod_collected_paise": collected_p, "cod_expected_paise": expected_p, "cod_collected_by": admin["id"],
                   "cod_collected_role": "admin", "cod_collected_at": now, "paid_at": now, "updated_at": now,
                   "cod_collection": collection,
                   "cod_discrepancy.status": "resolved", "cod_discrepancy.resolution": r.resolution,

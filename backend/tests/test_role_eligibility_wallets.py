@@ -21,7 +21,7 @@ from core import db, hash_password, create_token, now_iso, new_id  # noqa: E402
 from wallet_reconcile import expected_aggregates  # noqa: E402
 
 S = {}
-ADDR = {"full_name": "A", "mobile": "9000000000", "line1": "x", "city": "c", "state": "s", "pincode": "110001"}
+ADDR = {"full_name": "Asha Rao", "mobile": "9000000000", "line1": "1 MG Road", "city": "Pune", "state": "MH", "pincode": "110001"}   # Batch 13: checkout validates addresses
 ROLES = {"vendor": "vendor", "vendor_staff": "vendor_staff", "super_admin": "super_admin", "admin": "admin",
          "accounts_admin": "accounts_admin", "support_admin": "support_admin"}
 OLD = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()

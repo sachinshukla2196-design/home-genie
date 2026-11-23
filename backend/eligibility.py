@@ -37,22 +37,49 @@ def _parse(ts) -> Optional[datetime]:
         return None
 
 
-def delivered_at(order: dict) -> Optional[datetime]:
-    """When the order was delivered. Older orders delivered before `delivered_at` existed fall back to the latest
-    'delivered' fulfilment event; an order that is not delivered has no delivery time at all."""
-    d = _parse(order.get("delivered_at"))
-    if d:
-        return d
+# A vendor group that ended without supplying the goods. Its part of the order is reversed / refunded through its own flow,
+# so it no longer stands in the way of the rest of the order being delivered (Batch 12, audit C-7).
+NOT_SUPPLIED = ("rejected", "cancelled", "returned_to_origin")
+
+
+def _fulfilment_delivered_at(f: dict, order: dict) -> Optional[datetime]:
+    """The fulfilment's delivered event; for older records without one, its own `delivered_at`, then the order's delivery
+    time (the fulfilment status itself is the vendor's delivery record; only the timestamp is borrowed)."""
+    times = [_parse(e.get("at")) for e in f.get("events") or [] if e.get("status") == "delivered"]
+    times = [t for t in times if t]
+    return max(times) if times else (_parse(f.get("delivered_at")) or _parse(order.get("delivered_at")) or _parse(order.get("updated_at")))
+
+
+def delivered_at(order: dict, vendor_id: Optional[str] = None) -> Optional[datetime]:
+    """When the order (or one vendor's part of it) was delivered - or None.
+
+    Batch 12 (audit C-5): the evidence of delivery is the VENDOR FULFILMENT, recorded by the vendor's dispatch flow. An order
+    status typed by an admin, a COD cash confirmation or a vendor step on a cancelled order no longer starts any payout clock.
+    - With `vendor_id`: that vendor's fulfilment must be delivered (vendor settlement is per vendor).
+    - Without: every vendor group must be finished - delivered, or ended without supplying (rejected / cancelled / returned
+      to origin) - and at least one delivered; the time is the latest delivery (HomeGenie commission is per order).
+    - An order with no vendor fulfilments (goods sold by the platform itself) keeps the order-level record: status delivered
+      and `delivered_at`, falling back to `updated_at` for orders delivered before that field existed."""
+    groups = order.get("fulfilments") or []
+    if groups:
+        if vendor_id is not None:
+            groups = [f for f in groups if f.get("vendor_id") == vendor_id]
+            if not groups:
+                return None
+        if any(f.get("status") not in ("delivered", *NOT_SUPPLIED) for f in groups):
+            return None
+        times = [_fulfilment_delivered_at(f, order) for f in groups if f.get("status") == "delivered"]
+        times = [t for t in times if t]
+        return max(times) if times else None
     if order.get("status") != "delivered":
         return None
-    times = [_parse(e.get("at")) for f in order.get("fulfilments") or [] for e in f.get("events") or [] if e.get("status") == "delivered"]
-    times = [t for t in times if t]
-    return max(times) if times else _parse(order.get("updated_at"))
+    return _parse(order.get("delivered_at")) or _parse(order.get("updated_at"))
 
 
 async def payout_block(order: Optional[dict], now: Optional[datetime] = None, hold_days: int = 0,
-                       window: Optional[int] = None) -> Optional[str]:
-    """None when the order's earnings may be paid out now; otherwise a short reason code (why it is still held)."""
+                       window: Optional[int] = None, vendor_id: Optional[str] = None) -> Optional[str]:
+    """None when the order's earnings may be paid out now; otherwise a short reason code (why it is still held).
+    `vendor_id` limits the delivery test to that vendor's part of the order (vendor settlement)."""
     from financial_ops import has_open_case
     if not order:
         return "order_missing"
@@ -65,7 +92,7 @@ async def payout_block(order: Optional[dict], now: Optional[datetime] = None, ho
         return "refund_due"
     if any(d.get("status") == "refund_due" for d in order.get("duplicate_payments") or []):
         return "duplicate_payment_refund_due"
-    d = delivered_at(order)
+    d = delivered_at(order, vendor_id)
     if not d:
         return "not_delivered"
     days = max(hold_days or 0, await return_window_days() if window is None else window)

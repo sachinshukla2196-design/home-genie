@@ -4,7 +4,7 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime, timezone, timedelta
 
-from money import to_paise, paise_to_float
+from money import to_paise, paise_to_float, paise_of
 from core import (db, now_iso, new_id, get_current_user, get_settings, get_or_create_wallet, wallet_apply,
                   add_wallet_transaction, create_notification, log_audit)
 
@@ -38,16 +38,24 @@ async def my_commission_statement(user: dict = Depends(get_current_user)):
     orders = {o["id"]: o for o in await db.orders.find({"id": {"$in": list({r["order_id"] for r in rows})}}, {"_id": 0}).to_list(None)}
     items, totals = [], {"earned_paise": 0, "reversed_paise": 0, "released_paise": 0, "pending_paise": 0}
     for r in rows:
-        amt, rev = int(r.get("amount_paise") or 0), int(r.get("reversed_paise") or 0)
+        amt, rev = paise_of(r, "amount_paise", "amount"), paise_of(r, "reversed_paise", "reversed_amount")   # C-21: legacy rows
         released = bool(r.get("released_at"))
         hold = None if released or r.get("status") == "REVERSED" else await payout_block(orders.get(r["order_id"]), hold_days=r.get("release_after_days") or 0)
         net = max(amt - rev, 0)
         totals["earned_paise"] += amt
         totals["reversed_paise"] += rev
         totals["released_paise" if released else "pending_paise"] += 0 if r.get("status") == "REVERSED" else net
+        events = [x.get("event_id") for x in r.get("reversal_records") or [] if x.get("event_id")]
+        reasons = []
+        if events:
+            async for ev in db.order_refunds.find({"id": {"$in": events}}, {"_id": 0, "reason": 1}):
+                if ev.get("reason"):
+                    reasons.append(ev["reason"])
         items.append({"id": r["id"], "order_number": r.get("order_number"), "type": r.get("type"), "status": r.get("status"),
+                      "percent": r.get("percent"), "base_paise": paise_of(r, "base_paise", "base_amount") if (r.get("base_paise") or r.get("base_amount")) else None,
                       "amount_paise": amt, "reversed_paise": rev, "net_paise": net, "net": paise_to_float(net),
-                      "created_at": r.get("created_at"), "released_at": r.get("released_at"), "held_because": hold})
+                      "created_at": r.get("created_at"), "released_at": r.get("released_at"), "held_because": hold,
+                      "reversal_reasons": reasons or (["Order cancelled or refunded"] if rev else [])})
     return {"items": items, **totals, **{k[:-6]: paise_to_float(v) for k, v in totals.items()}}
 
 

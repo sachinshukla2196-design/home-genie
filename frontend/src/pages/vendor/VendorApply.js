@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Building2, CheckCircle2, ClipboardCheck, Eye, EyeOff, Globe2, KeyRound, MapPin, PackageCheck, Send, ShieldCheck, Sparkles, UserRound, Users } from "lucide-react";
 import { VendorPublicShell, VButton, VCard, VChips, VField, VInput, VSelect, VTextarea, VBanner } from "@/components/vendor/VendorUI";
@@ -41,8 +41,20 @@ export default function VendorApply() {
   const [done, setDone] = useState(null);
   const [error, setError] = useState("");
   const [showPw, setShowPw] = useState(false);
+  // Batch 12 (audit C-16): when SMS works, the business mobile is proven with a code before the vendor login is created.
+  const [smsOtp, setSmsOtp] = useState(false);
+  const [otp, setOtp] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpMsg, setOtpMsg] = useState("");
+  useEffect(() => { API.get("/settings/public").then(({ data }) => setSmsOtp(!!data.sms_otp_available)).catch(() => {}); }, []);
+  const sendCode = async () => {
+    if (!MOBILE_RE.test(f.mobile.trim())) { setTried(true); document.getElementById("va-mobile")?.focus(); return; }
+    setOtpMsg("");
+    try { const { data } = await API.post("/vendor-applications/send-otp", { mobile: f.mobile.trim() }); setOtpSent(true); setOtpMsg(data.message); }
+    catch (ex) { setOtpMsg(apiError(ex)); }
+  };
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
-  const problems = problemsOf(f);
+  const problems = { ...problemsOf(f), otp: smsOtp && !/^\d{6}$/.test(otp.trim()) ? "Enter the 6-digit code sent to the business mobile." : null };
   const err = (k) => (tried ? problems[k] : null);
 
   const submit = async (e) => {
@@ -57,7 +69,8 @@ export default function VendorApply() {
     setBusy(true);
     try {
       const { data } = await API.post("/vendor-applications", { ...f, business_name: f.business_name.trim(), description: f.description.trim(),
-        contact_name: f.contact_name.trim(), mobile: f.mobile.trim(), email: f.email.trim(), city: f.city.trim(), website: f.website.trim() });
+        contact_name: f.contact_name.trim(), mobile: f.mobile.trim(), email: f.email.trim(), city: f.city.trim(), website: f.website.trim(),
+        otp: smsOtp ? otp.trim() : "" });
       setDone(data.message);
       window.scrollTo({ top: 0, behavior: "smooth" });
     } catch (ex) {
@@ -156,6 +169,16 @@ export default function VendorApply() {
               <VField id="va-mobile" label="Business mobile" required error={err("mobile")} help="Use the business's own number.">
                 <VInput id="va-mobile" value={f.mobile} onChange={set("mobile")} inputMode="numeric" maxLength={10} autoComplete="tel-national" invalid={!!err("mobile")} data-testid="va-mobile" />
               </VField>
+              {smsOtp && (
+                <VField id="va-otp" label="Mobile verification code" required error={err("otp")} className="sm:col-span-2"
+                        help={otpMsg || "We send a 6-digit code to the business mobile to confirm it belongs to you."}>
+                  <div className="flex gap-2">
+                    <VInput id="va-otp" value={otp} onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))} inputMode="numeric" maxLength={6}
+                            autoComplete="one-time-code" invalid={!!err("otp")} data-testid="va-otp" />
+                    <VButton type="button" variant="secondary" onClick={sendCode} data-testid="va-send-otp">{otpSent ? "Resend code" : "Send code"}</VButton>
+                  </div>
+                </VField>
+              )}
               <VField id="va-email" label="Business email" optional error={err("email")}>
                 <VInput id="va-email" type="email" value={f.email} onChange={set("email")} maxLength={120} autoComplete="email" invalid={!!err("email")} data-testid="va-email" />
               </VField>

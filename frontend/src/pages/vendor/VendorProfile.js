@@ -12,6 +12,7 @@ import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
 import { API, apiError } from "@/lib/api";
 import { Governance } from "@/components/vendor/Governance";
+import { INDIAN_STATES } from "@/lib/vendorOptions";
 
 const PILLARS = ["Sarees", "Fashion Products", "Makeup, Beauty & Skincare", "Household Essentials"];
 const PILLAR_KEY = { "Sarees": "pillar.sarees.t", "Fashion Products": "pillar.fashion.t", "Makeup, Beauty & Skincare": "pillar.beauty.t", "Household Essentials": "pillar.household.t" };
@@ -34,6 +35,9 @@ export default function VendorProfile() {
   const navigate = useNavigate();
   const [f, setF] = useState(null);
   const [busy, setBusy] = useState(false);
+  // Batch 14 (VEN-05): the server says what may be edited in this status, what needs approval, and what is outstanding
+  const [ov, setOv] = useState(null);
+  useEffect(() => { API.get("/vendor/me/profile-overview").then(({ data }) => setOv(data)).catch(() => setOv(null)); }, [vendor]);
 
   useEffect(() => {
     if (vendor === null) return;
@@ -44,8 +48,9 @@ export default function VendorProfile() {
   if (!f) return <Skeleton className="h-96 rounded-3xl" />;
 
   const status = vendor ? vendor.status : "draft";
-  const locked = status === "approved" || status === "suspended";
-  const underReview = status === "submitted" || status === "under_review";
+  const mode = ov?.mode || "full";
+  const locked = mode === "contact_only";
+  const underReview = mode === "in_review" || mode === "onboarding";
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const toggleCat = (c) => setF({ ...f, categories: f.categories.includes(c) ? f.categories.filter((x) => x !== c) : [...f.categories, c] });
 
@@ -65,7 +70,9 @@ export default function VendorProfile() {
       <PageHeader title={vendor ? t("vp.profile") : t("vp.onboard.title")} subtitle={!locked ? t("vp.onboard.sub") : undefined} icon={Store}
         actions={vendor && <span className={`rounded-full px-3 py-1 text-xs font-semibold ring-1 ${VENDOR_STATUS_TONE[status]}`} data-testid="vendor-profile-status">{t(`vp.st.${status}`)}</span>} />
 
-      {underReview && <Banner icon={Clock} tone="gold" testid="vendor-pending">{t("vp.onboard.pending")}</Banner>}
+      {mode === "onboarding" && <Banner icon={Clock} tone="gold" testid="vendor-onboarding">HOME GENIES is completing your registration with you. The details below are read-only until it is approved.</Banner>}
+      {mode === "in_review" && <Banner icon={Clock} tone="gold" testid="vendor-pending">{t("vp.onboard.pending")}</Banner>}
+      {ov && ov.vendor && <ProfileOverview ov={ov} />}
       {status === "rejected" && <Banner icon={AlertTriangle} tone="danger" testid="vendor-rejected">{t("vp.onboard.rejected")} <b>{vendor.rejection_reason}</b></Banner>}
       {status === "changes_requested" && <Banner icon={AlertTriangle} tone="danger" testid="vendor-changes-requested">{t("vp.onboard.changesRequested")} <b>{vendor.status_reason}</b></Banner>}
       {status === "pending_documents" && <Banner icon={AlertTriangle} tone="gold" testid="vendor-pending-docs">{t("vp.onboard.pendingDocs")} {vendor.status_reason && <b>{vendor.status_reason}</b>}</Banner>}
@@ -80,7 +87,14 @@ export default function VendorProfile() {
           <Field label={t("vp.f.email")} value={f.support_email} onChange={set("support_email")} disabled={underReview} type="email" testid="vp-email" />
           <div className="sm:col-span-2"><Field label={t("vp.f.address")} value={f.address} onChange={set("address")} disabled={underReview} testid="vp-address" required /></div>
           <Field label={t("vp.f.city")} value={f.city} onChange={set("city")} disabled={underReview} testid="vp-city" />
-          <Field label={t("vp.f.state")} value={f.state} onChange={set("state")} disabled={underReview} testid="vp-state" />
+          <div>
+            <Label className="text-sm text-ink">{t("vp.f.state")}</Label>
+            <select value={f.state || ""} onChange={set("state")} disabled={underReview} data-testid="vp-state"
+              className="mt-1.5 h-10 w-full rounded-md bg-white px-3 text-sm text-ink ring-1 ring-brand-100 dark:bg-white/5 dark:ring-white/15">
+              <option value="">Choose…</option>{INDIAN_STATES.map((x) => <option key={x} value={x}>{x}</option>)}
+              {f.state && !INDIAN_STATES.includes(f.state) && <option value={f.state}>{f.state}</option>}
+            </select>
+          </div>
           <Field label={t("vp.f.pincode")} value={f.pincode} onChange={set("pincode")} disabled={underReview} testid="vp-pincode" />
           <Field label={t("vp.f.return")} value={f.return_address} onChange={set("return_address")} disabled={underReview} testid="vp-return" />
         </div>
@@ -161,4 +175,34 @@ function Banner({ icon: Icon, tone, children, testid }) {
 
 function ReadOnly({ label, value }) {
   return <div className="hg-tile p-3"><div className="text-xs text-muted2">{label}</div><div className="mt-0.5 font-medium text-ink">{value || "—"}</div></div>;
+}
+
+
+const DOC_TONE = { verified: "text-hg-success", approved: "text-hg-success", rejected: "text-danger", submitted: "text-hg-gold", pending: "text-hg-gold" };
+
+/** Batch 14 (VEN-05): documents, bank and verification status from GET /api/vendor/me/profile-overview. Read-only facts; nothing
+ *  here approves anything. */
+function ProfileOverview({ ov }) {
+  const missing = ov.requirements?.missing || [];
+  const lc = ov.bank?.latest_change;
+  const locked = Object.entries(ov.approval_required || {});
+  return (
+    <SectionCard title="Profile status" icon={CheckCircle2} testid="vp-overview">
+      <div className="grid gap-3 text-sm sm:grid-cols-3">
+        <div className="hg-tile p-3"><div className="text-xs text-muted2">Documents</div>
+          <div className="font-medium text-ink">{ov.documents.length} uploaded{missing.length ? `, ${missing.length} still needed` : ""}</div>
+          {missing.length > 0 && <div className="mt-1 text-xs text-danger">Needed: {missing.join(", ").replace(/_/g, " ")}</div>}</div>
+        <div className="hg-tile p-3"><div className="text-xs text-muted2">Settlement bank</div>
+          <div className="font-medium text-ink">{ov.bank.account ? `${ov.bank.account} · ${ov.bank.ifsc || ""}` : "Not given yet"}</div>
+          {lc && <div className={`mt-1 text-xs ${lc.status === "pending" ? "text-hg-gold" : lc.status === "rejected" ? "text-danger" : "text-hg-success"}`}>Change request {lc.status}{lc.admin_note ? `: ${lc.admin_note}` : ""}</div>}</div>
+        <div className="hg-tile p-3"><div className="text-xs text-muted2">Contact verification</div>
+          <div className="font-medium text-ink">Mobile {ov.verification.mobile ? "verified" : "not verified"} · E-mail {ov.verification.email ? "verified" : "not verified"}</div></div>
+      </div>
+      {ov.documents.length > 0 && <ul className="mt-3 space-y-1 text-xs">{ov.documents.map((d) => <li key={d.id} className="flex justify-between gap-2"><span>{(d.type || "").replace(/_/g, " ")}{d.note ? ` · ${d.note}` : ""}</span><span className={DOC_TONE[d.status] || "text-muted2"}>{d.status}</span></li>)}</ul>}
+      {locked.length > 0 && (
+        <details className="mt-3 text-sm"><summary className="flex cursor-pointer items-center gap-2 font-medium text-ink"><Lock size={14} /> Details that need HOME GENIES approval to change</summary>
+          <ul className="mt-2 space-y-1 text-xs text-muted2">{locked.map(([k, how]) => <li key={k}><b className="text-ink">{k.replace(/_/g, " ")}:</b> {how}</li>)}</ul></details>
+      )}
+    </SectionCard>
+  );
 }

@@ -61,6 +61,12 @@ def admin_h(admin_token):
     return {"Authorization": f"Bearer {admin_token}"}
 
 
+RETIRED = ("Retired in Batch 13: this checks the pre-HOME GENIES model (activation by admin 'manual payment', a Rs 100 referral "
+           "credit, 20%/12% purchase-level depth commission). The approved model is commission on attributed sales only (30/10/5), "
+           "no recruitment earnings, depth commission inactive (owner decision S-7). Current rules are covered in-process by "
+           "test_commission_model, test_commission_engine, test_withdrawal_controls and test_batch12_remediation.")
+
+
 # ---------------- Helpers ----------------
 def _register_request(sponsor_id):
     body = {
@@ -141,27 +147,25 @@ class TestAdminLogin:
 # ==============================================================
 class TestOtp:
     def test_login_otp_send_unconfigured_returns_503_no_otp_leak(self, admin_h):
-        # Register a fresh non-admin distributor so we know the mobile is non-admin.
+        # Batch 13: registration now activates the account at once (no approval queue), so the member is created directly.
         r, body = _register_request(MASTER_ID)
         assert r.status_code == 200, r.text
-        req = _find_pending_req(admin_h, body["mobile"])
-        ar = _approve(admin_h, req["id"])
-        assert ar.status_code == 200
-        # Now hit login-otp/send for this registered non-admin mobile → expect 503
+        sms = requests.get(f"{API}/settings/public", timeout=15).json().get("sms_otp_available")
         r = requests.post(f"{API}/auth/login-otp/send", json={"mobile": body["mobile"]}, timeout=15)
-        assert r.status_code == 503, f"expected 503 got {r.status_code} {r.text}"
+        # SMS not configured -> 503 for everyone; configured -> the same generic 200 for every number (no enumeration)
+        assert r.status_code == (200 if sms else 503), f"got {r.status_code} {r.text}"
         body_text = r.text.lower()
         for banned in ("dev_otp", "test_number", "test_otp", "\"otp\":"):
             assert banned not in body_text, f"leaked '{banned}' in response"
 
-    def test_admin_otp_blocked_403(self, admin_h):
-        # Mobile 9999999999 belongs to an admin per current DB (proven by prior probe).
-        r = requests.post(f"{API}/auth/login-otp/send", json={"mobile": "9999999999"}, timeout=15)
-        # If no admin holds that mobile in this env we skip; else assert 403.
-        if r.status_code == 404:
-            pytest.skip("no admin mobile present in DB to probe")
-        assert r.status_code == 403, f"expected 403 for admin OTP send, got {r.status_code} {r.text}"
-        assert "otp" not in r.text.lower() or "sign in with the secure" in r.text.lower()
+    def test_admin_otp_gets_the_same_answer_as_an_unknown_number(self, admin_h):
+        # Batch 13 (was "admin OTP blocked 403"): since Batch 0 the OTP endpoints answer every number identically, so they cannot
+        # be used to discover admin mobiles; an admin is simply never sent a code (it signs in through the admin login only).
+        admin_mobile = requests.get(f"{API}/auth/me", headers=admin_h, timeout=15).json().get("mobile") or "9999999999"
+        a = requests.post(f"{API}/auth/login-otp/send", json={"mobile": admin_mobile}, timeout=15)
+        b = requests.post(f"{API}/auth/login-otp/send", json={"mobile": "9" + _rand_mobile()[1:]}, timeout=15)
+        assert (a.status_code, a.json()) == (b.status_code, b.json())
+        assert "otp\":" not in a.text.lower()
 
 
 # ==============================================================
@@ -178,73 +182,32 @@ class TestResetBackdoor:
 # 4. Registration flow: approval does NOT credit ₹100
 # ==============================================================
 class TestRegistrationApprovalNoRupee100:
-    def test_approve_does_not_pay_100(self, admin_h):
+    def test_registration_pays_nobody(self, admin_h):
+        # Batch 13 (was "approval does not pay Rs 100"): registration activates the account at once and creates no commission
         r, body = _register_request(MASTER_ID)
         assert r.status_code == 200, r.text
-        req = _find_pending_req(admin_h, body["mobile"])
-        assert req is not None
-        ar = _approve(admin_h, req["id"])
-        assert ar.status_code == 200, ar.text
-        did = ar.json()["distributor_id"]
-        # verify no REFERRAL_COMMISSION for this new user
+        lg = _login(body["mobile"])
+        assert lg.status_code == 200, lg.text
+        new_uid = lg.json()["user"]["id"]
         comms = requests.get(f"{API}/admin/commissions", headers=admin_h, timeout=15).json()
-        for c in comms:
-            assert not (c.get("referred_distributor_id") == did
-                        and c.get("type") == "REFERRAL_COMMISSION"), \
-                f"₹100 wrongly credited at approval for {did}"
-        # cleanup: leave the RED user (will be reused/deleted at session end)
+        comms = comms if isinstance(comms, list) else comms.get("items", [])
+        assert not [c for c in comms if new_uid in (c.get("referred_user_id"), c.get("buyer_id"), c.get("user_id"))]
 
 
 # ==============================================================
-# 5. ₹100 at GREEN activation, idempotent
+# 5. Recruiting a member never pays (the old Rs 100 activation credit is retired)
 # ==============================================================
 class TestActivationRupee100:
-    def test_activation_pays_100_once(self, admin_h):
-        # Register + approve under MST000001 (sponsor is admin — but admin isn't GREEN → no ₹100 possible).
-        # Per code: referral commission only paid if sponsor.status == 'green'.
-        # So we need to first create a GREEN sponsor under MST000001, then a new distributor under that sponsor.
-        sponsor_did, sponsor_uid, _, _ = _create_and_activate(admin_h, MASTER_ID)
-        # Now create a NEW distributor with sponsor_did and activate them
-        r, body = _register_request(sponsor_did)
+    def test_recruiting_a_member_pays_the_sponsor_nothing(self, admin_h):
+        sponsor = _login("9000000018", "Demo@1234")                 # the demo HomeGenie seeded as MST000001
+        assert sponsor.status_code == 200, sponsor.text
+        sh = {"Authorization": f"Bearer {sponsor.json()['token']}"}
+        before = requests.get(f"{API}/wallet", headers=sh, timeout=15).json()
+        r, body = _register_request(MASTER_ID)
         assert r.status_code == 200, r.text
-        req = _find_pending_req(admin_h, body["mobile"])
-        ar = _approve(admin_h, req["id"])
-        assert ar.status_code == 200, ar.text
-        new_did = ar.json()["distributor_id"]
-
-        # count referral commissions BEFORE activation
-        comms_before = requests.get(f"{API}/admin/commissions", headers=admin_h, timeout=15).json()
-        n_before = sum(1 for c in comms_before
-                       if c.get("referred_distributor_id") == new_did
-                       and c.get("type") == "REFERRAL_COMMISSION")
-        assert n_before == 0
-
-        # activate
-        mp = _admin_manual_payment(admin_h, new_did, reference=f"TEST-ACT-{new_did}")
-        assert mp.status_code == 200, mp.text
-
-        comms_after = requests.get(f"{API}/admin/commissions", headers=admin_h, timeout=15).json()
-        ref_comms = [c for c in comms_after
-                     if c.get("referred_distributor_id") == new_did
-                     and c.get("type") == "REFERRAL_COMMISSION"]
-        assert len(ref_comms) == 1, f"expected 1 REFERRAL_COMMISSION got {len(ref_comms)}"
-        c = ref_comms[0]
-        assert float(c["amount"]) == 100.0
-        assert c.get("sponsor_distributor_id") == sponsor_did
-
-        # New distributor should have zero commissions to themselves
-        self_comms = [c for c in comms_after
-                      if c.get("sponsor_distributor_id") == new_did]
-        assert len(self_comms) == 0
-
-        # idempotent: rerun manual payment
-        mp2 = _admin_manual_payment(admin_h, new_did, reference=f"TEST-ACT-{new_did}")
-        assert mp2.status_code == 200, mp2.text
-        comms_final = requests.get(f"{API}/admin/commissions", headers=admin_h, timeout=15).json()
-        ref_comms2 = [c for c in comms_final
-                      if c.get("referred_distributor_id") == new_did
-                      and c.get("type") == "REFERRAL_COMMISSION"]
-        assert len(ref_comms2) == 1, "double payment on retry (not idempotent)"
+        after = requests.get(f"{API}/wallet", headers=sh, timeout=15).json()
+        for k in ("available_balance", "pending_balance", "total_earned"):
+            assert float(after.get(k) or 0) == float(before.get(k) or 0), k
 
 
 # ==============================================================
@@ -252,6 +215,7 @@ class TestActivationRupee100:
 # ==============================================================
 @pytest.fixture(scope="module")
 def product_id(admin_h):
+    pytest.skip(RETIRED)
     """Create a NON-activation product for the 70% commission test."""
     sku = f"TEST-PROD-{_rand_str(8).upper()}"
     body = {"sku": sku, "name": f"Test Product {sku}", "mrp": 1000, "selling_price": 1000,
@@ -262,6 +226,7 @@ def product_id(admin_h):
     return r.json()["id"]
 
 
+@pytest.mark.skip(reason=RETIRED)
 class TestProductLevelCommission:
     def test_l1_l2_commission_20_12(self, admin_h, product_id):
         # Build a 3-deep GREEN chain: A -> B -> C (C is buyer)
@@ -322,6 +287,7 @@ class TestProductLevelCommission:
 # ==============================================================
 # 7. Withdrawal atomic + no minimum
 # ==============================================================
+@pytest.mark.skip(reason=RETIRED + " This flow also used one admin to approve AND pay, which the two-person rule now refuses.")
 class TestWithdrawal:
     def test_withdrawal_flow(self, admin_h):
         # Create GREEN distributor A -> GREEN B under A. B buys product to give A commission.

@@ -398,7 +398,9 @@ class TestOtpSecurity:
 # ---------------- Regression: existing credentials still work ----------------
 class TestCredentialRegression:
     def test_admin_password_login(self):
-        r = requests.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD},
+        # Batch 13: administrators sign in through the admin login only (SEC-11); the member login refuses them
+        assert requests.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}, timeout=TIMEOUT).status_code == 403
+        r = requests.post(f"{API}/auth/admin-login", json={"username": os.getenv("TEST_ADMIN_USERNAME", ADMIN_EMAIL), "password": ADMIN_PASSWORD},
                           timeout=TIMEOUT)
         assert r.status_code == 200, r.text[:300]
         assert r.json()["user"]["role"] == "super_admin"

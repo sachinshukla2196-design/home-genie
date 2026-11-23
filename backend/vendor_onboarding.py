@@ -373,7 +373,8 @@ async def create_onboarding_vendor(*, business_name: str, contact_name: str, mob
         user = {"id": new_id(), "distributor_id": code, "full_name": contact_name.strip(), "mobile": mobile, "email": email or None,
                 "password_hash": chosen or hash_password(secrets.token_urlsafe(32)), "applicant_password": bool(chosen),
                 "role": "vendor", "status": VENDOR_ACCOUNT_STATUS,
-                "account_status": "active" if (activate and chosen) else "pending_approval", "mobile_verified": False, "email_verified": False, "kyc_status": "not_started",
+                "account_status": "active" if (activate and chosen) else "pending_approval",
+                "mobile_verified": bool((application or {}).get("mobile_verified")), "email_verified": False, "kyc_status": "not_started",
                 "sponsor_id": None, "sponsor_user_id": None, "created_at": now, "updated_at": now}
         if app_id:
             user["vendor_application_id"] = app_id

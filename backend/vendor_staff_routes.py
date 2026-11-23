@@ -13,7 +13,8 @@ from pymongo.errors import DuplicateKeyError
 
 from core import db, get_current_user, hash_password, new_id, now_iso, next_sequence, log_audit, create_notification, rate_limit, client_ip
 from vendor_routes import _mask
-from vendor_staff import PERMISSIONS, PRESETS, VENDOR_STAFF_ROLE, validate_role, new_invite_token, hash_token
+from vendor_staff import (PERMISSIONS, PERMISSION_INFO, PRESET_INFO, PRESETS, VENDOR_STAFF_ROLE, effective_permissions, validate_role,
+                          new_invite_token, hash_token)
 from vendor_lifecycle import VENDOR_ACCOUNT_STATUS
 
 router = APIRouter(prefix="/api", tags=["vendor"])
@@ -60,7 +61,10 @@ async def list_staff(owner: dict = Depends(require_owner_account)):
     rows = await db.vendor_members.find({"vendor_id": owner["_vendor"]["id"]}, {"_id": 0}).sort("created_at", 1).to_list(200)
     people = {u["id"]: u for u in await db.users.find({"id": {"$in": [r["user_id"] for r in rows if r.get("user_id")]}},
                                                       {"_id": 0, "id": 1, "full_name": 1, "mobile": 1}).to_list(200)}
-    return {"staff": [_view(r, people.get(r.get("user_id"))) for r in rows], "presets": PRESETS, "permissions": PERMISSIONS}
+    return {"staff": [_view(r, people.get(r.get("user_id"))) for r in rows], "presets": PRESETS, "permissions": PERMISSIONS,
+            # Batch 12, Phase 5: what the role builder explains to the owner
+            "permission_info": PERMISSION_INFO, "preset_info": PRESET_INFO,
+            "preset_effective": {k: sorted(p for p in effective_permissions(v) if p in PERMISSION_INFO) for k, v in PRESETS.items()}}
 
 
 class InviteIn(BaseModel):

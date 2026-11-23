@@ -238,6 +238,10 @@ def test_capture_on_a_refunded_order_is_flagged_not_applied(c):
     _gateway_paid(c, "cs_paid")
     r = c.post(f"/api/admin/orders/{o['id']}/refund", json={"reference": "RFND-0001", "reason": "test"}, headers=_hdr("super"))
     assert r.status_code == 200, r.text
+    # Batch 12 (audit C-4): recorded by one finance admin, confirmed by another
+    assert c.post(f"/api/admin/refund-cases/{r.json()['case']['id']}/action", headers=_hdr("fin"),
+                  json={"action": "confirm", "reference": "RFND-0001", "confirmation_type": "manual_reconciliation",
+                        "note": "Checked on the bank statement"}).status_code == 200
     _gateway_tx(c, o, "cs_late")
     _gateway_paid(c, "cs_late")
     after = _get(c, o["id"])
@@ -289,8 +293,10 @@ def test_rejecting_a_claim_returns_the_order_to_unpaid_and_records_it(c):
 
 
 # ================================================================ FIN-14: Razorpay webhook idempotency
-def _webhook(c, event_id, rzp_order):
-    body = json.dumps({"event": "payment.captured", "payload": {"payment": {"entity": {"order_id": rzp_order}}}}).encode()
+def _webhook(c, event_id, rzp_order, amount_paise=None):
+    # Batch 14: a real payment.captured event carries the amount, currency and status, which are now validated
+    entity = {"id": "pay_" + event_id, "order_id": rzp_order, "status": "captured", "currency": "INR", "amount": amount_paise}
+    body = json.dumps({"event": "payment.captured", "payload": {"payment": {"entity": entity}}}).encode()
     sig = hmac.new(b"whsec-test-only", body, hashlib.sha256).hexdigest()
     return c.post("/api/webhook/razorpay", content=body, headers={"X-Razorpay-Signature": sig, "X-Razorpay-Event-Id": event_id,
                                                                     "Content-Type": "application/json"})
@@ -308,12 +314,12 @@ def test_failed_webhook_processing_is_retried_and_success_is_final(c, monkeypatc
             raise RuntimeError("database hiccup")
         return await real(sid, request)
     monkeypatch.setattr(shop_routes, "_process_paid_order", flaky)
-    with pytest.raises(RuntimeError):
-        _webhook(c, "evt_1", "order_rzp_1")
+    amt = _get(c, o["id"])["total_paise"]
+    assert _webhook(c, "evt_1", "order_rzp_1", amt).status_code == 500                # Batch 14: recorded failure, provider retries
     assert _run(c, lambda: db.webhook_events.find_one({"event_id": "evt_1"}))["status"] == "failed"
-    assert _webhook(c, "evt_1", "order_rzp_1").json()["status"] == "ok"            # Razorpay's retry processes it
+    assert _webhook(c, "evt_1", "order_rzp_1", amt).json()["status"] == "processed"  # Razorpay's retry processes it
     assert _get(c, o["id"])["payment_status"] == "paid"
-    assert _webhook(c, "evt_1", "order_rzp_1").json()["status"] == "duplicate"
+    assert _webhook(c, "evt_1", "order_rzp_1", amt).json()["status"] == "duplicate"
     assert calls["n"] == 2
 
 

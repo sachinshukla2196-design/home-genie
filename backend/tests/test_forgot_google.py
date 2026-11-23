@@ -53,6 +53,8 @@ def c(monkeypatch_module):
                 S[key] = {"id": new_id(), "distributor_id": key.upper() + "1", "full_name": key, "mobile": mobile,
                           "email": email, "password_hash": hash_password(PW), "role": role, "status": "green",
                           "account_status": "active", "blocked": key == "blocked",
+                          # Batch 12 (audit C-9): Google recovery needs an account whose e-mail was itself proven
+                          "email_verified": True,
                           "created_at": now_iso(), "updated_at": now_iso()}
                 await db.users.insert_one(dict(S[key]))
         client.portal.call(seed)

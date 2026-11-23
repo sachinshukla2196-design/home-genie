@@ -26,7 +26,8 @@ DEMO_PASSWORD = os.environ.get("TEST_DEMO_PASSWORD", "Demo@1234")
 class TestHealth:
     def test_health_root_no_api_prefix_internal(self):
         # K8s health probe hits backend container directly on port 8001 (no ingress)
-        r = requests.get("http://localhost:8001/health", timeout=10)
+        # Batch 13: the internal address depends on the host; it defaults to the original container port
+        r = requests.get(os.environ.get("TEST_INTERNAL_HEALTH_URL", "http://localhost:8001/health"), timeout=10)
         assert r.status_code == 200, f"internal /health failed: {r.status_code} {r.text}"
         assert r.json() == {"status": "ok"}
 
@@ -50,7 +51,11 @@ def demo_token():
 
 @pytest.fixture(scope="module")
 def admin_token():
-    return _login(ADMIN_EMAIL, ADMIN_PASSWORD)
+    # Batch 13: administrators sign in through the admin login only (SEC-11)
+    r = requests.post(f"{API}/auth/admin-login", json={"username": os.environ.get("TEST_ADMIN_USERNAME", ADMIN_EMAIL), "password": ADMIN_PASSWORD},
+                      timeout=15)
+    assert r.status_code == 200, f"admin login failed: {r.status_code} {r.text}"
+    return r.json()["token"]
 
 
 def _auth(token):

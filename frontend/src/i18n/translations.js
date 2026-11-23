@@ -118,6 +118,8 @@ export const translations = {
     "status.redDesc": "Registered — selling role not approved yet", "status.greenDesc": "Approved HomeGenie",
 
     "dash.title": "Dashboard", "dash.greeting": "Namaste",
+    "nav.wishlist": "Wishlist", "nav.addresses": "Addresses", "addr.title": "My addresses", "addr.sub": "Save delivery addresses and choose one at checkout.", "addr.add": "Add address", "addr.edit": "Edit address", "addr.none": "No saved addresses yet", "addr.default": "Default", "addr.makeDefault": "Make default", "addr.defaultSet": "Default address updated", "addr.delete": "Delete", "addr.deleted": "Address deleted", "addr.confirmDelete": "Delete this address? Orders already placed keep their own copy.", "addr.saved": "Address saved", "addr.note": "Orders keep the address they were placed with; editing or deleting an address here never changes a past order.", "addr.indiaOnly": "We deliver within India.", "addr.type": "Address type", "addr.label.home": "Home", "addr.label.work": "Work", "addr.label.other": "Other", "addr.name": "Recipient name", "addr.mobile": "Mobile number", "addr.line1": "House / flat, street", "addr.line2": "Building, area (line 2)", "addr.locality": "Locality", "addr.landmark": "Landmark", "addr.city": "City / town", "addr.district": "District", "addr.state": "State / union territory", "addr.pincode": "PIN code", "addr.optional": "optional", "addr.choose": "Choose…", "addr.cancel": "Cancel", "addr.save": "Save address", "addr.errName": "Enter the recipient's name.", "addr.errMobile": "Enter a valid 10-digit mobile number.", "addr.errLine1": "Enter the house and street.", "addr.errCity": "Enter the city.", "addr.errState": "Choose the state.", "addr.errPin": "Enter a valid 6-digit PIN code.", "addr.useNew": "Deliver to a different address", "addr.manage": "Manage saved addresses", "wish.title": "Wishlist", "wish.sub": "Products you saved. Prices and availability are shown as they are now.", "wish.empty": "Your wishlist is empty", "wish.save": "Save", "wish.saved": "Saved", "wish.added": "Saved to your wishlist", "wish.removed": "Removed from your wishlist", "wish.remove": "Remove from wishlist", "wish.toCart": "Move to cart", "wish.moved": "Moved to your cart", "wish.chooseOption": "Choose an option", "wish.optionOut": "That option is out of stock", "wish.priceDown": "was", "wish.priceUp": "was", "wish.status.available": "In stock", "wish.status.choose_variant": "Choose an option", "wish.status.out_of_stock": "Out of stock", "wish.status.unavailable": "No longer available",
+    "cust.homeSub": "Sarees, fashion, beauty and home essentials from trusted sellers.", "cust.forYou": "Picked for you",
     "dash.accountStatus": "Account Status", "dash.walletBalance": "Available Points",
     "dash.totalIncome": "Total Earned", "dash.todayIncome": "Earned Today",
     "dash.totalOrders": "My Orders", "dash.referralCount": "Customers Referred",
@@ -135,7 +137,7 @@ export const translations = {
     "qa.shop": "Shop Products", "qa.share": "Share & Sell", "qa.orders": "My Orders",
     "qa.wallet": "My Points", "qa.support": "Support", "qa.profile": "My Profile",
 
-    "nav.withdrawals": "Withdraw", "nav.kyc": "KYC", "nav.operations": "Operations",
+    "nav.withdrawals": "Withdraw", "nav.kyc": "KYC", "nav.operations": "Operations", "nav.catalogue": "Catalogue", "nav.orderOps": "Order lookup", "nav.merch": "Merchandising",
     "withdraw.title": "Withdraw Points",
     "withdraw.request": "Request withdrawal",
     "withdraw.amount": "Points to withdraw",
@@ -861,6 +863,8 @@ export const translations = {
     "status.redDesc": "रजिस्टर्ड — सेलिंग भूमिका अभी स्वीकृत नहीं", "status.greenDesc": "स्वीकृत होम जीनी",
 
     "dash.title": "डैशबोर्ड", "dash.greeting": "नमस्ते",
+    "nav.wishlist": "विशलिस्ट", "nav.addresses": "पते", "addr.title": "मेरे पते", "addr.sub": "डिलीवरी पते सहेजें और चेकआउट पर चुनें।", "addr.add": "पता जोड़ें", "addr.edit": "पता बदलें", "addr.none": "अभी कोई सहेजा पता नहीं", "addr.default": "डिफ़ॉल्ट", "addr.makeDefault": "डिफ़ॉल्ट बनाएं", "addr.defaultSet": "डिफ़ॉल्ट पता बदला गया", "addr.delete": "हटाएं", "addr.deleted": "पता हटाया गया", "addr.confirmDelete": "यह पता हटाएं? पहले के ऑर्डर में अपनी प्रति रहती है।", "addr.saved": "पता सहेजा गया", "addr.note": "ऑर्डर उसी पते के साथ रहते हैं जिससे वे दिए गए थे; यहाँ बदलाव पुराने ऑर्डर नहीं बदलता।", "addr.indiaOnly": "हम भारत में डिलीवरी करते हैं।", "addr.type": "पते का प्रकार", "addr.label.home": "घर", "addr.label.work": "दफ़्तर", "addr.label.other": "अन्य", "addr.name": "प्राप्तकर्ता का नाम", "addr.mobile": "मोबाइल नंबर", "addr.line1": "मकान / फ्लैट, गली", "addr.line2": "बिल्डिंग, क्षेत्र (पंक्ति 2)", "addr.locality": "इलाका", "addr.landmark": "लैंडमार्क", "addr.city": "शहर / कस्बा", "addr.district": "ज़िला", "addr.state": "राज्य / केंद्र शासित प्रदेश", "addr.pincode": "पिन कोड", "addr.optional": "वैकल्पिक", "addr.choose": "चुनें…", "addr.cancel": "रद्द करें", "addr.save": "पता सहेजें", "addr.errName": "प्राप्तकर्ता का नाम लिखें।", "addr.errMobile": "सही 10 अंकों का मोबाइल नंबर लिखें।", "addr.errLine1": "मकान और गली लिखें।", "addr.errCity": "शहर लिखें।", "addr.errState": "राज्य चुनें।", "addr.errPin": "सही 6 अंकों का पिन कोड लिखें।", "addr.useNew": "किसी और पते पर भेजें", "addr.manage": "सहेजे पते संभालें", "wish.title": "विशलिस्ट", "wish.sub": "आपके सहेजे उत्पाद। कीमत और उपलब्धता अभी की दिखती है।", "wish.empty": "आपकी विशलिस्ट खाली है", "wish.save": "सहेजें", "wish.saved": "सहेजा गया", "wish.added": "विशलिस्ट में सहेजा", "wish.removed": "विशलिस्ट से हटाया", "wish.remove": "विशलिस्ट से हटाएं", "wish.toCart": "कार्ट में डालें", "wish.moved": "कार्ट में डाला गया", "wish.chooseOption": "विकल्प चुनें", "wish.optionOut": "यह विकल्प स्टॉक में नहीं है", "wish.priceDown": "पहले", "wish.priceUp": "पहले", "wish.status.available": "स्टॉक में", "wish.status.choose_variant": "विकल्प चुनें", "wish.status.out_of_stock": "स्टॉक में नहीं", "wish.status.unavailable": "अब उपलब्ध नहीं",
+    "cust.homeSub": "भरोसेमंद विक्रेताओं से साड़ियाँ, फैशन, ब्यूटी और घरेलू ज़रूरतें।", "cust.forYou": "आपके लिए चुने गए",
     "dash.accountStatus": "खाता स्थिति", "dash.walletBalance": "उपलब्ध पॉइंट्स",
     "dash.totalIncome": "कुल अर्जित", "dash.todayIncome": "आज अर्जित",
     "dash.totalOrders": "मेरे ऑर्डर", "dash.referralCount": "रेफ़र किए ग्राहक",
@@ -878,7 +882,7 @@ export const translations = {
     "qa.shop": "उत्पाद खरीदें", "qa.share": "शेयर करें और बेचें", "qa.orders": "मेरे ऑर्डर",
     "qa.wallet": "मेरे पॉइंट्स", "qa.support": "सहायता", "qa.profile": "मेरी प्रोफ़ाइल",
 
-    "nav.withdrawals": "निकासी", "nav.kyc": "केवाईसी", "nav.operations": "संचालन",
+    "nav.withdrawals": "निकासी", "nav.kyc": "केवाईसी", "nav.operations": "संचालन", "nav.catalogue": "कैटलॉग", "nav.orderOps": "ऑर्डर खोज", "nav.merch": "मर्चेंडाइज़िंग",
     "withdraw.title": "पॉइंट्स निकालें",
     "withdraw.request": "निकासी अनुरोध करें",
     "withdraw.amount": "कितने पॉइंट्स निकालने हैं",

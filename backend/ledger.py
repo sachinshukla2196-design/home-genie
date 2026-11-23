@@ -77,8 +77,10 @@ async def post_order_collected(order: dict, scale: Optional[tuple] = None) -> in
         if not _sale_eligible(order, f):
             continue
         amt = vendor_lines_paise(order, f["vendor_id"])
-        sc = scale or ((order["cod_collected_paise"], paise_of(order, "total_paise", "total")) if isinstance(order.get("cod_collected_paise"), int)
-                       and order.get("cod_collected_paise") != paise_of(order, "total_paise", "total") else None)
+        # a COD order accepted short: scale each sale by collected / expected (expected excludes unsupplied goods - C-8)
+        exp_p = order["cod_expected_paise"] if isinstance(order.get("cod_expected_paise"), int) else paise_of(order, "total_paise", "total")
+        sc = scale or ((order["cod_collected_paise"], exp_p) if isinstance(order.get("cod_collected_paise"), int)
+                       and order.get("cod_collected_paise") != exp_p else None)
         if sc:
             amt = mul_ratio(amt, sc[0], sc[1])
         if amt > 0:
@@ -111,14 +113,21 @@ async def post_sale_reversal(order: dict, vendor_id: str) -> bool:
     sale = await db.vendor_ledger.find_one({"source_key": f"sale:{order['id']}:{vendor_id}"}, {"_id": 0})
     if not sale:
         return False
-    _, created = await post_entry(vendor_id, SALE_REVERSAL, -sale["amount_paise"], f"salerev:{order['id']}:{vendor_id}",
-                                  order_id=order["id"], reverses=sale["id"], reason="Vendor did not fulfil the order")
-    if created:      # no sale, no commission: return what was charged for this order
-        charged = -sum(r["amount_paise"] for r in await db.vendor_ledger.find({"vendor_id": vendor_id, "order_id": order["id"], "type": COMMISSION},
-                                                                              {"_id": 0, "amount_paise": 1}).to_list(1000))
-        if charged > 0:
-            await post_entry(vendor_id, COMMISSION, charged, f"commrev:{order['id']}:{vendor_id}", order_id=order["id"],
-                             reason="Commission returned: vendor did not fulfil the order")
+    # Batch 12 (audit C-6): take back only what is still attributed to the vendor. Refund shares already posted for this order
+    # reduced it; reversing the full sale on top of them would leave the vendor negative on goods it never supplied.
+    refunded = max(-await _entries(vendor_id, order["id"], REFUND), 0)
+    remaining = sale["amount_paise"] - refunded
+    created = False
+    if remaining > 0:
+        _, created = await post_entry(vendor_id, SALE_REVERSAL, -remaining, f"salerev:{order['id']}:{vendor_id}",
+                                      order_id=order["id"], reverses=sale["id"], reason="Vendor did not fulfil the order",
+                                      meta={"sale_paise": sale["amount_paise"], "already_refunded_paise": refunded})
+    # no sale, no commission: return what was charged for this order (idempotent by its own key)
+    charged = -sum(r["amount_paise"] for r in await db.vendor_ledger.find({"vendor_id": vendor_id, "order_id": order["id"], "type": COMMISSION},
+                                                                          {"_id": 0, "amount_paise": 1}).to_list(1000))
+    if charged > 0:
+        await post_entry(vendor_id, COMMISSION, charged, f"commrev:{order['id']}:{vendor_id}", order_id=order["id"],
+                         reason="Commission returned: vendor did not fulfil the order")
     return created
 
 
@@ -126,8 +135,8 @@ async def post_refund_shares(order: dict, refund: dict) -> int:
     """Post each vendor's share of one customer refund event. The refund that closes the order takes exactly the remainder,
     so the vendor's refunds always add up to the sale to the paisa. Idempotent per (refund event, vendor)."""
     n = 0
-    from cod_rules import refundable_total_paise
-    total_p = refundable_total_paise(order, paise_of(order, "total_paise", "total"))     # denominator matches the (scaled) sale
+    from cod_rules import refund_basis_paise
+    total_p = refund_basis_paise(order, paise_of(order, "total_paise", "total"))     # goods value the sale shares (audit C-11)
     amt_p = refund["amount_paise"] if isinstance(refund.get("amount_paise"), int) else paise_of(refund, "amount_paise", "amount")
     closes = bool(order.get("financials_reversed")) and refund.get("closes_order", False)
     only = refund.get("vendor_id")        # a refund for ONE vendor's returned goods is theirs entirely; otherwise split by value
@@ -182,7 +191,7 @@ async def _eligible_paise(vendor_id: str):
     orders = {o["id"]: o for o in await db.orders.find({"id": {"$in": list(by_order)}}, {"_id": 0}).to_list(None)}
     eligible, held = free, 0
     for oid, amt in by_order.items():
-        if await payout_block(orders.get(oid), window=window) is None:
+        if await payout_block(orders.get(oid), window=window, vendor_id=vendor_id) is None:
             eligible += amt
         elif amt:
             held += 1

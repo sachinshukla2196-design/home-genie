@@ -4,6 +4,7 @@ import { motion } from "framer-motion";
 import {
   LayoutDashboard, ShoppingBag, Package, Coins, Share2, Banknote, Gift, Home, ShieldCheck,
   Bell, User, LogOut, ChevronLeft, ShoppingCart,
+  Heart, MapPin,
 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { useI18n } from "@/context/I18nContext";
@@ -17,6 +18,8 @@ const NAV = [
   { to: "/app/products", icon: ShoppingBag, key: "nav.products" },
   { to: "/app/rewards", icon: Gift, key: "nav.rewards", homegenie: true },
   { to: "/app/orders", icon: Package, key: "nav.orders" },
+  { to: "/app/wishlist", icon: Heart, key: "nav.wishlist" },
+  { to: "/app/addresses", icon: MapPin, key: "nav.addresses" },
   { to: "/app/wallet", icon: Coins, key: "nav.wallet", homegenie: true },
   { to: "/app/withdrawals", icon: Banknote, key: "nav.withdrawals", homegenie: true },
   { to: "/app/kyc", icon: ShieldCheck, key: "nav.kyc", homegenie: true },
@@ -39,12 +42,13 @@ const TITLES = [
   ["/app/products", "nav.shop"], ["/app/rewards", "nav.rewards"], ["/app/orders", "nav.orders"],
   ["/app/wallet", "nav.wallet"], ["/app/withdrawals", "nav.withdrawals"], ["/app/referral", "nav.referral"],
   ["/app/notifications", "nav.notifications"], ["/app/profile", "nav.profile"], ["/app/cart", "nav.cart"],
-  ["/app/checkout", "nav.checkout"],
+  ["/app/checkout", "nav.checkout"], ["/app/addresses", "nav.addresses"], ["/app/wishlist", "nav.wishlist"],
 ];
 
 export function AppLayout() {
   const { t, lang, setLang } = useI18n();
   const { user, logout } = useAuth();
+  const isCustomer = user?.role === "customer";      // owner decision 5: customers have no Rewards / points screens
   const { count } = useCart();
   const { theme } = useTheme();
   const loc = useLocation();
@@ -169,9 +173,9 @@ export function AppLayout() {
       {/* Mobile bottom nav with the raised Rewards button */}
       <nav className="fixed bottom-0 left-0 right-0 z-40 border-t border-brand-50 bg-white/95 backdrop-blur-lg lg:hidden"
         style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }} data-testid="mobile-bottom-nav">
-        <div className="grid grid-cols-5 items-end">
+        <div className={`grid ${isCustomer ? "grid-cols-4" : "grid-cols-5"} items-end`}>
           {BOTTOM_LEFT.map((i) => <Tab key={i.to} item={i} />)}
-          <Link to="/app/rewards" className="flex flex-col items-center pb-2" data-testid="bottom-rewards">
+          {!isCustomer && <Link to="/app/rewards" className="flex flex-col items-center pb-2" data-testid="bottom-rewards">
             <motion.span whileTap={{ scale: 0.9 }} whileHover={{ y: -3 }} transition={{ type: "spring", stiffness: 420, damping: 22 }}
               className={`hg-sheen -mt-8 flex h-[68px] w-[68px] items-center justify-center rounded-[1.4rem] border-4 border-white hg-orange dark:border-hg-bg ${active("/app/rewards") ? "ring-2 ring-hg-gold/60" : "hg-pulse-ring"}`}>
               <motion.span animate={active("/app/rewards") ? { rotate: [0, -12, 10, 0], scale: [1, 1.12, 1] } : {}} transition={{ duration: 0.6 }}>
@@ -179,7 +183,7 @@ export function AppLayout() {
               </motion.span>
             </motion.span>
             <span className={`mt-1.5 text-xs font-semibold ${active("/app/rewards") ? "text-hg-gold" : "text-hg-gold/85"}`}>{t("nav.rewards")}</span>
-          </Link>
+          </Link>}
           {BOTTOM_RIGHT.map((i) => <Tab key={i.to} item={i} />)}
         </div>
       </nav>

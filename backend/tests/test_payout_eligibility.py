@@ -20,6 +20,7 @@ import db_indexes  # noqa: E402
 import shop_routes  # noqa: E402
 import ledger as L  # noqa: E402
 from commission import release_due_points  # noqa: E402
+from eligibility import payout_block  # noqa: E402
 from core import db, hash_password, create_token, now_iso, new_id  # noqa: E402
 
 ADDR = {"full_name": "Cust", "mobile": "9000011111", "line1": "1 Road", "city": "Pune", "state": "MH", "pincode": "411001"}
@@ -89,7 +90,19 @@ def _comm(c, oid):
 
 
 def _set(c, oid, **fields):
-    _run(c, lambda: db.orders.update_one({"id": oid}, {"$set": fields}))
+    """Batch 12 (audit C-5): delivery is the VENDOR FULFILMENT, so a delivery time given here is recorded on every fulfilment
+    (status delivered + a delivered event), exactly as the vendor's dispatch flow records it - not only on the order."""
+    async def go():
+        o = await db.orders.find_one({"id": oid}, {"_id": 0})
+        extra = {}
+        if "delivered_at" in fields and o.get("fulfilments"):
+            fl = []
+            for f in o["fulfilments"]:
+                ev = [e for e in f.get("events", []) if e.get("status") != "delivered"] + [{"status": "delivered", "at": fields["delivered_at"]}]
+                fl.append({**f, "status": "delivered", "delivered_at": fields["delivered_at"], "events": ev})
+            extra["fulfilments"] = fl
+        await db.orders.update_one({"id": oid}, {"$set": {**fields, **extra}})
+    _run(c, go)
 
 
 def _release(c):
@@ -151,12 +164,15 @@ def test_manual_release_follows_the_same_rule(c):
     assert r.status_code == 200, r.text
 
 
-def test_admin_marking_delivered_records_the_delivery_time(c):
+def test_admin_marking_a_vendor_order_delivered_is_recorded_but_is_not_the_delivery(c):
+    # Batch 12 (audit C-5a; replaces "admin marking delivered records the delivery time"): for vendor goods the delivery is the
+    # vendor fulfilment. The admin's status change is recorded but starts no payout clock (owner decision D-04 is open).
     o = _paid_order(c, seller=False)
     for st in ("processing", "shipped", "delivered"):
         c.put(f"/api/admin/orders/{o['id']}/status", json={"status": st}, headers=_hdr("super"))
-    got = _run(c, lambda: db.orders.find_one({"id": o["id"]}))
-    assert got["status"] == "delivered" and got["delivered_at"]
+    got = _run(c, lambda: db.orders.find_one({"id": o["id"]}, {"_id": 0}))
+    assert got["status"] == "delivered" and got["status_set_by_admin"]["status"] == "delivered" and not got.get("delivered_at")
+    assert _run(c, lambda: payout_block(got)) == "not_delivered"
 
 
 # ================================================================ Decision 3: vendor settlement eligibility

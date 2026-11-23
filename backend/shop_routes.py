@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 from decimal import Decimal, ROUND_HALF_UP
 from fastapi import APIRouter, Body, HTTPException, Request, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Any, List, Optional
 
 try:  # Emergent's private package (preinstalled only in Emergent's image) — unchanged behaviour there
@@ -61,18 +61,24 @@ def _taxable_part(inclusive_paise: int, rate: float) -> int:
 SHOP_VISIBLE = {"approval_status": {"$in": [None, "approved"]}, "is_active": True, "archived": {"$ne": True}}
 
 
+# What shoppers may see of a product (Batch 12): never a vendor's unapproved pending changes, its price history, the compliance
+# documents it gave for review, or who prepared / reviewed it.
+P_SHOP = {**P_PUBLIC, "pending_revision": 0, "price_history": 0, "compliance_documents": 0, "created_by": 0,
+          "created_on_behalf_by": 0, "reviewed_by": 0, "rejection_reason": 0, "status_set_by_admin": 0}
+
+
 @router.get("/products")
 async def list_products(category: Optional[str] = None):
     q = dict(SHOP_VISIBLE)
     if category:
         q["category"] = category
-    items = await db.products.find(q, P_PUBLIC).sort("created_at", 1).to_list(200)
+    items = await db.products.find(q, P_SHOP).sort("created_at", 1).to_list(200)
     return items
 
 
 @router.get("/products/{product_id}")
 async def get_product(product_id: str):
-    p = await db.products.find_one({"id": product_id, **SHOP_VISIBLE}, P_PUBLIC)
+    p = await db.products.find_one({"id": product_id, **SHOP_VISIBLE}, P_SHOP)
     if not p:
         raise HTTPException(status_code=404, detail="Product not found.")
     return p
@@ -92,17 +98,46 @@ class OrderItemIn(BaseModel):
 
 
 class AddressIn(BaseModel):
-    full_name: str
+    """A typed delivery address (Batch 13: validated on the server; a saved address is sent as `address_id` instead)."""
+    full_name: str = Field(min_length=2, max_length=80)
     mobile: str
-    line1: str
-    city: str
-    state: str
+    line1: str = Field(min_length=3, max_length=160)
+    line2: str = Field(default="", max_length=120)
+    landmark: str = Field(default="", max_length=120)
+    city: str = Field(min_length=2, max_length=60)
+    state: str = Field(min_length=2, max_length=60)
     pincode: str
+
+    @field_validator("mobile")
+    @classmethod
+    def _mobile(cls, v):
+        v = re.sub(r"[\s-]", "", v or "")
+        v = v[3:] if v.startswith("+91") else v
+        if not re.fullmatch(r"[6-9]\d{9}", v):
+            raise ValueError("Enter a valid 10-digit mobile number.")
+        return v
+
+    @field_validator("pincode")
+    @classmethod
+    def _pin(cls, v):
+        v = (v or "").strip()
+        if not re.fullmatch(r"[1-9]\d{5}", v):
+            raise ValueError("Enter a valid 6-digit PIN code.")
+        return v
+
+    @field_validator("full_name", "line1", "line2", "landmark", "city", "state")
+    @classmethod
+    def _plain(cls, v):
+        v = (v or "").strip()
+        if any(ch in v for ch in "<>"):
+            raise ValueError("Address fields cannot contain < or >.")
+        return v
 
 
 class CreateOrder(BaseModel):
     items: List[OrderItemIn]
-    address: AddressIn
+    address: Optional[AddressIn] = None
+    address_id: Optional[str] = None    # Batch 13: a saved address (copied into the order as a snapshot)
     seller_ref: Optional[str] = None   # HomeGenie code from a share link (?ref=)
     payment_method: str = "online"     # "online" | "cod"
 
@@ -111,6 +146,14 @@ class CreateOrder(BaseModel):
 async def create_order(body: CreateOrder, request: Request, user: dict = Depends(get_current_user)):
     if not body.items:
         raise HTTPException(status_code=400, detail="Your cart is empty.")
+    # the delivery address is settled BEFORE anything is reserved: a saved one is copied (snapshot), a typed one was validated
+    if body.address_id:
+        from customer_routes import address_snapshot
+        address = await address_snapshot(user["id"], body.address_id)
+    elif body.address:
+        address = body.address.model_dump()
+    else:
+        raise HTTPException(status_code=400, detail="Choose a delivery address.")
     settings = await get_settings()
     gst_percent = settings.get("gst_percent", 5.0)
 
@@ -192,7 +235,7 @@ async def create_order(body: CreateOrder, request: Request, user: dict = Depends
         "total": grand_total, "total_paise": total_paise, "subtotal_paise": subtotal_p, "money_version": 3,
         "prices_include_gst": True, "items_total_paise": inclusive_p, "items_total": paise_to_float(inclusive_p),
         "currency": settings.get("currency", "INR"),
-        "address": body.address.model_dump(),
+        "address": address,
         "seller_user_id": seller_user_id,
         "seller_distributor_id": seller_did,
         "payment_method": "cod" if cod else "online",
@@ -236,6 +279,16 @@ async def create_order(body: CreateOrder, request: Request, user: dict = Depends
     return order
 
 
+def _cod_delivery_fields(order: dict) -> dict:
+    """Batch 12 (audit C-5d): confirming COD cash records the payment, not the delivery. Vendor goods are delivered by the
+    vendor's fulfilment (which rolls the order to delivered); only an order without vendor fulfilments, or whose fulfilments are
+    already finished, shows as delivered here. No payout clock starts from this step (eligibility reads the fulfilments)."""
+    from eligibility import delivered_at as _delivered
+    if not order.get("fulfilments"):
+        return {"status": "delivered", "delivered_at": now_iso()}
+    return {"status": "delivered"} if _delivered(order) else {}
+
+
 @router.post("/orders/{order_id}/cod-collected")
 async def cod_collected(order_id: str, request: Request, user: dict = Depends(get_current_user), body: Any = Body(default=None)):
     """Confirm that cash was collected for a COD order. The rules live in `cod_rules` (see its docstring).
@@ -262,7 +315,8 @@ async def cod_collected(order_id: str, request: Request, user: dict = Depends(ge
     if order.get("status") == "cancelled":
         raise HTTPException(status_code=400, detail="This order is cancelled, so cash cannot be confirmed for it.")
     entry = parse_collection_evidence(body)
-    expected_p = paise_of(order, "total_paise", "total")
+    from cod_rules import expected_cod_paise, unsupplied_goods_paise
+    expected_p = expected_cod_paise(order)          # audit C-8: goods a vendor did not supply are not collected
     collected_p = to_paise(entry.amount_collected)
     evidence = {"type": entry.evidence_type, "reference": entry.evidence_reference, "note": entry.note,
                 "recorded_by": user["id"], "recorded_at": now_iso(),
@@ -288,7 +342,10 @@ async def cod_collected(order_id: str, request: Request, user: dict = Depends(ge
 
     claim = await db.orders.update_one(
         {"id": order_id, "payment_status": "cod_pending"},
-        {"$set": {"payment_status": "paid", "status": "delivered", "delivered_at": now_iso(),
+        {"$set": {"payment_status": "paid", **_cod_delivery_fields(order),
+                  "cod_expected_paise": expected_p, "cod_collected_paise": collected_p,
+                  **({"commission_base_paise": paise_of(order, "subtotal_paise", "subtotal") - unsupplied_goods_paise(order)[1]}
+                     if unsupplied_goods_paise(order)[1] else {}),
                   "cod_collected_by": user["id"],
                   "cod_collected_by_id": user.get("distributor_id"),
                   "cod_collected_role": "admin",
@@ -450,86 +507,22 @@ async def razorpay_verify(body: RzpVerifyBody, request: Request, user: dict = De
         raise HTTPException(status_code=400, detail="Payment does not match this order.")
     if int(pay.get("amount", 0)) != expected_paise:
         raise HTTPException(status_code=400, detail="Payment amount mismatch.")
-    if pay.get("status") not in ("captured", "authorized"):
-        raise HTTPException(status_code=400, detail="Payment is not captured yet.")
     await db.payment_transactions.update_one({"session_id": body.razorpay_order_id},
         {"$set": {"razorpay_payment_id": body.razorpay_payment_id, "updated_at": now_iso()}})
+    if pay.get("status") == "authorized":
+        # Batch 14: an authorisation is not money received yet. The order is confirmed by the payment.captured webhook
+        # (or the next verify / status check) once the gateway captures it.
+        return {"message": "Payment received; we are confirming it with the bank.", "status": "pending_capture",
+                "order_id": tx.get("order_id")}
+    if pay.get("status") != "captured":
+        raise HTTPException(status_code=400, detail="Payment is not captured yet.")
     await _process_paid_order(body.razorpay_order_id, request)
     tx = await db.payment_transactions.find_one({"session_id": body.razorpay_order_id}, {"_id": 0})
     return {"message": "Payment successful", "order_id": tx.get("order_id") if tx else None}
 
 
-@router.post("/webhook/razorpay")
-async def razorpay_webhook(request: Request):
-    """Server-authoritative Razorpay webhook. Validates HMAC, is idempotent per event,
-    and converges on the same _process_paid_order state machine as the client verify."""
-    secret = os.environ.get("RAZORPAY_WEBHOOK_SECRET", "")
-    if not secret:
-        raise HTTPException(status_code=503, detail="Webhook not configured.")
-    raw = await request.body()
-    sig = request.headers.get("X-Razorpay-Signature", "")
-    import hmac as _hmac, hashlib as _hashlib, json as _json
-    expected = _hmac.new(secret.encode(), raw, _hashlib.sha256).hexdigest()
-    if not _hmac.compare_digest(expected, sig):
-        raise HTTPException(status_code=400, detail="Invalid signature")
-    try:
-        event = _json.loads(raw.decode())
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid payload")
-    event_id = request.headers.get("X-Razorpay-Event-Id") or event.get("id") or ""
-    # FIN-14: an event counts as handled only AFTER it was processed. A failed run leaves it "failed" so Razorpay's retry
-    # processes it again; a run that crashed mid-way is retried once its claim is older than WEBHOOK_STALE_SECONDS.
-    if event_id and not await _claim_webhook_event(event_id, event):
-        return {"status": "duplicate"}
-    try:
-        await _handle_razorpay_event(event, request)
-    except Exception:
-        if event_id:
-            await db.webhook_events.update_one({"event_id": event_id}, {"$set": {"status": "failed", "failed_at": now_iso()}})
-        raise
-    if event_id:
-        await db.webhook_events.update_one({"event_id": event_id}, {"$set": {"status": "processed", "processed_at": now_iso()}})
-    return {"status": "ok"}
-
-
+# Razorpay webhooks: payment_events.py (Batch 14 reconciliation: signature, normalised record, match, validate, apply once).
 WEBHOOK_STALE_SECONDS = 120
-
-
-async def _claim_webhook_event(event_id: str, event: dict) -> bool:
-    """True when THIS delivery should process the event. Processed events (and events recorded by the earlier version, which
-    had no status) are never processed again; a "failed" event, or a "processing" claim older than WEBHOOK_STALE_SECONDS
-    (a crashed run), is taken over with a compare-and-set so only one delivery wins."""
-    now = datetime.now(timezone.utc)
-    ev = await db.webhook_events.find_one({"event_id": event_id})
-    if not ev:
-        try:
-            await db.webhook_events.insert_one({"event_id": event_id, "provider": "razorpay", "type": event.get("event"),
-                                                "status": "processing", "claimed_at": now.isoformat(), "created_at": now.isoformat()})
-            return True
-        except DuplicateKeyError:
-            return False
-    status, claimed_at = ev.get("status"), ev.get("claimed_at") or ""
-    if status in (None, "processed"):
-        return False
-    if status == "processing" and claimed_at >= (now - timedelta(seconds=WEBHOOK_STALE_SECONDS)).isoformat():
-        return False
-    r = await db.webhook_events.update_one({"event_id": event_id, "status": status, "claimed_at": ev.get("claimed_at")},
-                                           {"$set": {"status": "processing", "claimed_at": now.isoformat()}})
-    return r.modified_count == 1
-
-
-async def _handle_razorpay_event(event: dict, request: Request) -> None:
-    etype = event.get("event", "")
-    if etype in ("payment.captured", "order.paid"):
-        entity = (event.get("payload", {}).get("payment", {}) or {}).get("entity", {}) or {}
-        rzp_order_id = entity.get("order_id")
-        if not rzp_order_id:
-            order_ent = (event.get("payload", {}).get("order", {}) or {}).get("entity", {}) or {}
-            rzp_order_id = order_ent.get("id")
-        if rzp_order_id:
-            tx = await db.payment_transactions.find_one({"session_id": rzp_order_id})
-            if tx:
-                await _process_paid_order(rzp_order_id, request)
 
 
 HG_COMMISSION_TYPES = ["COMMISSION_DIRECT", "COMMISSION_REFERRAL", "COMMISSION_TEAM"]
@@ -580,7 +573,8 @@ async def _reverse_commission(c: dict, event: dict, order: dict) -> int:
         credited_p = paise_of(c, "amount_paise", "amount")
         done_p = paise_of(c, "reversed_paise", "reversed_amount")
         room_p = credited_p - done_p
-        total_p = refundable_total_paise(order, paise_of(order, "total_paise", "total"))
+        from cod_rules import refund_basis_paise
+        total_p = refund_basis_paise(order, paise_of(order, "total_paise", "total"))   # goods value, without the COD fee (C-11)
         claw_p = min(room_p if event["closes_order"] else mul_ratio(credited_p, int(event["amount_paise"]), total_p), room_p)
         if claw_p <= 0:
             return 0

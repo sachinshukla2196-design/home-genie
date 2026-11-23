@@ -290,10 +290,16 @@ def test_failed_refunds_can_be_retried_and_every_transition_is_validated(c):
     assert _act(c, "plain", "nope", "initiate").status_code == 404
 
 
-def test_the_one_step_refund_action_also_settles_the_open_case(c):
+def test_the_admin_refund_action_records_the_open_case_for_a_second_finance_admin(c):
     o, case = _open_case(c)
+    # Batch 12 (audit C-4): the admin "Refund" action no longer moves money by itself. It takes the order's open case as the
+    # maker (initiated, reference proposed); a different finance admin confirms it, and only then is it settled.
     r = c.post(f"/api/admin/orders/{o['id']}/refund", headers=_hdr(S["fin"]["id"]), json={"reference": "UTR-LEGACY"})
-    assert r.status_code == 200
+    assert r.status_code == 200 and r.json()["case"]["id"] == case["id"]
+    got = _cases(c, id=case["id"])[0]
+    assert got["status"] == "initiated" and got["initiated_by"] == S["fin"]["id"] and got["proposed_reference"] == "UTR-LEGACY"
+    assert _act(c, "fin", case["id"], "confirm", reference="UTR-LEGACY", confirmation_type="manual_reconciliation", note="x" * 12).status_code == 403
+    assert _act(c, "admin", case["id"], "confirm", reference="UTR-LEGACY", confirmation_type="manual_reconciliation", note="x" * 12).status_code == 200
     assert _cases(c, id=case["id"])[0]["status"] == "confirmed" and _cases(c, id=case["id"])[0]["reference"] == "UTR-LEGACY"
 
 

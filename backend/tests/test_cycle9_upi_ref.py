@@ -23,6 +23,20 @@ ADMIN_PASSCODE = os.environ.get("TEST_ADMIN_PASSCODE", "anj000088sk")
 DEMO_EMAIL = "demo.distributor@homegenies.example.com"
 DEMO_PASSWORD = os.environ.get("TEST_DEMO_PASSWORD", "Demo@1234")
 
+
+_ADMIN_TOKEN = {}
+
+
+def _amt(order_id):
+    """Batch 13: UPI confirmation must state the exact amount received (payment-integrity rule, Batch 1). The amount is read
+    from the order itself through the admin order view; an unknown order gets a placeholder (the server answers 404)."""
+    if "t" not in _ADMIN_TOKEN:
+        r = requests.post(f"{API}/auth/admin-login", json={"username": os.environ.get("TEST_ADMIN_USERNAME", ADMIN_EMAIL),
+                                                           "password": ADMIN_PASSWORD}, timeout=25)
+        _ADMIN_TOKEN["t"] = r.json().get("token") if r.status_code == 200 else ""
+    r = requests.get(f"{API}/admin/order-ops/orders/{order_id}", headers={"Authorization": f"Bearer {_ADMIN_TOKEN['t']}"}, timeout=25)
+    return r.json()["order"]["total"] if r.status_code == 200 else 1.0
+
 ADDRESS = {"full_name": "QA Tester", "mobile": "9812345678", "line1": "1 QA Street",
            "city": "Pune", "state": "MH", "pincode": "411001"}
 
@@ -43,7 +57,12 @@ def dist():
 
 @pytest.fixture(scope="module")
 def admin():
-    return _session(ADMIN_EMAIL, ADMIN_PASSWORD)
+    # Batch 13: administrators sign in through the admin login only (SEC-11); the member login refuses them
+    r = requests.post(f"{API}/auth/admin-login", json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD}, timeout=25)
+    assert r.status_code == 200, r.text
+    s = requests.Session()
+    s.headers.update({"Authorization": f"Bearer {r.json()['token']}", "Content-Type": "application/json"})
+    return s
 
 
 @pytest.fixture(scope="module")
@@ -51,7 +70,9 @@ def starter():
     r = requests.get(f"{API}/products", timeout=25)
     assert r.status_code == 200, r.text
     items = r.json() if isinstance(r.json(), list) else r.json().get("products", [])
-    kit = [p for p in items if p.get("is_activation_product")] or [p for p in items if p.get("sku") == "ANJ-STARTER"]
+    # Batch 13: the separate "activation product" (ANJ-STARTER) is retired; any product on sale serves for a purchase
+    kit = [p for p in items if p.get("is_activation_product")] or [p for p in items if p.get("sku") == "ANJ-STARTER"] or \
+        [p for p in items if (p.get("stock") or 0) > 0]
     assert kit, "activation product missing"
     return kit[0]
 
@@ -79,7 +100,7 @@ class TestUpiConfirmReference:
     def test_empty_reference_rejected_400(self, dist, admin, starter):
         o = _claimed_order(dist, starter["id"])
         for bad in ("", "   "):
-            r = admin.put(f"{API}/admin/payments/upi-confirm/{o['id']}", json={"reference": bad}, timeout=25)
+            r = admin.put(f"{API}/admin/payments/upi-confirm/{o['id']}", json={"reference": bad, "amount": _amt(o['id'])}, timeout=25)
             assert r.status_code == 400, f"ref={bad!r} -> {r.status_code} {r.text[:200]}"
             assert "requir" in r.text.lower(), r.text[:300]
         got = dist.get(f"{API}/orders/{o['id']}", timeout=25).json()
@@ -89,7 +110,7 @@ class TestUpiConfirmReference:
     def test_valid_reference_confirms_and_persists(self, dist, admin, starter):
         o = _claimed_order(dist, starter["id"])
         ref = f"UTR{uuid.uuid4().hex[:10].upper()}"
-        r = admin.put(f"{API}/admin/payments/upi-confirm/{o['id']}", json={"reference": ref}, timeout=40)
+        r = admin.put(f"{API}/admin/payments/upi-confirm/{o['id']}", json={"reference": ref, "amount": _amt(o['id'])}, timeout=40)
         assert r.status_code == 200, r.text
         assert r.json().get("reference") == ref
 
@@ -110,7 +131,7 @@ class TestUpiConfirmReference:
 
         # idempotent: repeat confirm keeps the same invoice and does not overwrite reference
         inv = got["invoice_number"]
-        r2 = admin.put(f"{API}/admin/payments/upi-confirm/{o['id']}", json={"reference": "SHOULD-NOT-APPLY"}, timeout=30)
+        r2 = admin.put(f"{API}/admin/payments/upi-confirm/{o['id']}", json={"reference": "SHOULD-NOT-APPLY", "amount": _amt(o['id'])}, timeout=30)
         assert r2.status_code == 200, r2.text
         again = dist.get(f"{API}/orders/{o['id']}", timeout=25).json()
         assert again["invoice_number"] == inv, "invoice regenerated"
@@ -118,19 +139,19 @@ class TestUpiConfirmReference:
 
     def test_whitespace_trimmed(self, dist, admin, starter):
         o = _claimed_order(dist, starter["id"])
-        r = admin.put(f"{API}/admin/payments/upi-confirm/{o['id']}", json={"reference": "  UTR-TRIM-1  "}, timeout=40)
+        r = admin.put(f"{API}/admin/payments/upi-confirm/{o['id']}", json={"reference": "  UTR-TRIM-1  ", "amount": _amt(o['id'])}, timeout=40)
         assert r.status_code == 200, r.text
         got = dist.get(f"{API}/orders/{o['id']}", timeout=25).json()
         assert got.get("payment_reference") == "UTR-TRIM-1", got.get("payment_reference")
 
     def test_requires_admin_role(self, dist, starter):
         o = _claimed_order(dist, starter["id"])
-        r = dist.put(f"{API}/admin/payments/upi-confirm/{o['id']}", json={"reference": "HACK"}, timeout=25)
+        r = dist.put(f"{API}/admin/payments/upi-confirm/{o['id']}", json={"reference": "HACK", "amount": _amt(o['id'])}, timeout=25)
         assert r.status_code == 403, r.status_code
         assert dist.get(f"{API}/orders/{o['id']}", timeout=25).json()["payment_status"] == "claimed"
 
     def test_unknown_order_404(self, admin):
-        r = admin.put(f"{API}/admin/payments/upi-confirm/{uuid.uuid4()}", json={"reference": "X1"}, timeout=25)
+        r = admin.put(f"{API}/admin/payments/upi-confirm/{uuid.uuid4()}", json={"reference": "X1", "amount": _amt(uuid.uuid4())}, timeout=25)
         assert r.status_code == 404, r.status_code
 
 

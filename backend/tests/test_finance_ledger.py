@@ -18,6 +18,7 @@ os.environ.pop("ADMIN_EMAIL", None)
 
 from fastapi.testclient import TestClient  # noqa: E402
 import server  # noqa: E402
+from delivery_helper import deliver  # noqa: E402
 import db_indexes  # noqa: E402
 import shop_routes  # noqa: E402
 import ledger as L  # noqa: E402
@@ -300,7 +301,7 @@ def _make_money(c, vkey, vendor, price):
     p = _product(c, f"S-{vkey}-{new_id()[:6]}", price, vkey)
     o = _order(c, [(p, 1)])
     _pay(c, o)
-    c.portal.call(lambda: db.orders.update_one({"id": o["id"]}, {"$set": {"status": "delivered", "delivered_at": LONG_AGO}}))
+    c.portal.call(lambda: deliver(db, o["id"], LONG_AGO))       # Batch 12: delivery is the vendor fulfilment (delivery_helper)
     return o
 
 

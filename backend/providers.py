@@ -162,6 +162,10 @@ async def otp_create(identifier: str, purpose: str) -> dict:
 
 
 async def otp_verify(identifier: str, purpose: str, code: str) -> bool:
+    """Check a code. Race-safe (Batch 12, audit C-1): every attempt is RESERVED atomically before the comparison
+    (`attempts < max` and `used: false` in one conditional update), and the code is consumed with a second conditional
+    update, so parallel guesses cannot exceed the attempt limit and a code can be used once only. Every attempt also
+    counts against a per-identifier daily budget across codes, so requesting fresh codes does not reset the guessing allowance."""
     if not sms_available():
         raise OTP_UNAVAILABLE
     rec = await db.otp_sessions.find_one({"identifier": identifier, "purpose": purpose}, sort=[("created_at", -1)])
@@ -169,8 +173,6 @@ async def otp_verify(identifier: str, purpose: str, code: str) -> bool:
         raise HTTPException(status_code=400, detail="Please request an OTP first.")
     if rec.get("used"):
         raise HTTPException(status_code=400, detail="This OTP was already used. Request a new one.")
-    if rec.get("attempts", 0) >= OTP_MAX_ATTEMPTS:
-        raise HTTPException(status_code=429, detail="Too many attempts. Request a new OTP.")
     try:
         if datetime.fromisoformat(rec["expires_at"]) < datetime.now(timezone.utc):
             raise HTTPException(status_code=400, detail="OTP has expired. Request a new one.")
@@ -178,8 +180,18 @@ async def otp_verify(identifier: str, purpose: str, code: str) -> bool:
         raise
     except Exception:
         pass
-    await db.otp_sessions.update_one({"_id": rec["_id"]}, {"$inc": {"attempts": 1}})
+    from core import rate_limit
+    await rate_limit("otp_attempts_identifier", f"{purpose}:{identifier}")   # every attempt, before the comparison
+    reserved = await db.otp_sessions.find_one_and_update(
+        {"_id": rec["_id"], "used": False, "attempts": {"$lt": OTP_MAX_ATTEMPTS}}, {"$inc": {"attempts": 1}})
+    if not reserved:
+        fresh = await db.otp_sessions.find_one({"_id": rec["_id"]}, {"used": 1})
+        if fresh and fresh.get("used"):
+            raise HTTPException(status_code=400, detail="This OTP was already used. Request a new one.")
+        raise HTTPException(status_code=429, detail="Too many attempts. Request a new OTP.")
     if not hmac.compare_digest(_hash(code), rec["code_hash"]):
         raise HTTPException(status_code=400, detail="Invalid OTP.")
-    await db.otp_sessions.update_one({"_id": rec["_id"]}, {"$set": {"used": True}})
+    consumed = await db.otp_sessions.update_one({"_id": rec["_id"], "used": False}, {"$set": {"used": True, "used_at": now_iso()}})
+    if consumed.modified_count != 1:
+        raise HTTPException(status_code=400, detail="This OTP was already used. Request a new one.")
     return True

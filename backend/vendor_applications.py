@@ -52,6 +52,11 @@ class ApplicationIn(BaseModel):
     password: str = Field(min_length=8, max_length=128)
     confirm_password: str = Field(max_length=128)
     company_fax: str = Field(default="", max_length=200)      # honeypot: hidden from people, filled in by bots
+    otp: str = Field(default="", max_length=10)                # Batch 12 (audit C-16): the business mobile's code, when SMS works
+
+
+class ApplyOtpIn(BaseModel):
+    mobile: str
 
 
 def _clean(body: ApplicationIn) -> dict:
@@ -84,16 +89,40 @@ def _clean(body: ApplicationIn) -> dict:
             "email": email or None, "city": body.city.strip(), "state": body.state, "website": website or None}
 
 
+@router.post("/vendor-applications/send-otp")
+async def apply_send_otp(body: ApplyOtpIn, request: Request):
+    """Batch 12 (audit C-16): a code to the business mobile before the applicant's login is created. The answer never says
+    whether the number already has an account."""
+    from providers import otp_create, sms_available, OTP_UNAVAILABLE
+    await rate_limit("otp_send_ip", client_ip(request))
+    mobile = body.mobile.strip()
+    if not MOBILE.fullmatch(mobile):
+        raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number.")
+    if not sms_available():
+        raise OTP_UNAVAILABLE
+    await otp_create(mobile, "vendor_apply")
+    return {"ok": True, "message": "We sent a 6-digit code to the business mobile."}
+
+
 @router.post("/vendor-applications")
 async def apply_to_sell(body: ApplicationIn, request: Request):
+    from providers import otp_verify, sms_available
     await rate_limit("vendor_apply", client_ip(request))
     data = _clean(body)                                         # input errors are about the form, never about other people
     if body.company_fax.strip():                                # honeypot tripped: same answer, nothing stored
         return {"ok": True, "message": NEUTRAL}
+    # Batch 12 (audit C-16): the applicant signs in straight away (owner decision), so the mobile must be proven first whenever
+    # SMS is available - the same rule as member sign-up (SEC-05). Without SMS the application works as before.
+    verified = False
+    if sms_available():
+        if not body.otp.strip():
+            raise HTTPException(status_code=400, detail="Enter the code sent to your business mobile.")
+        await otp_verify(data["mobile"], "vendor_apply", body.otp.strip())
+        verified = True
     now = now_iso()
     app = {"id": new_id(), "number": await next_sequence("vendor_application", "VA", 6), **data, "status": "new",
            "password_hash": hash_password(body.password),
-           "open_mobile": data["mobile"], "consent_at": now, "source": "public_form",
+           "open_mobile": data["mobile"], "consent_at": now, "source": "public_form", "mobile_verified": verified,
            "history": [{"at": now, "by": None, "action": "submitted", "note": ""}], "created_at": now, "updated_at": now}
     try:
         await db.vendor_applications.insert_one(dict(app))

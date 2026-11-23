@@ -97,6 +97,7 @@ def c():
             S["seller"] = await user("9100000503", "distributor", "HGSEL", S["ref"])
             S["cust"] = await user("9100000504", "distributor", "HGC", status="red")
             S["admin"] = await user("9100000505", "super_admin", "HGADM")
+            S["fin2"] = await user("9100000506", "accounts_admin", "HGFIN2")      # Batch 12: the second person who confirms refunds
             await db.business_settings.update_one({"id": "business_settings"}, {"$set": {"gst_percent": 5.0, "cod_fee": 0.0}}, upsert=True)
         client.portal.call(seed)
         yield client
@@ -261,10 +262,15 @@ def test_admin_refund_endpoint_validates_in_paise(c):
     o = _order(c, p["id"], 1)
     _pay(c, o)
     h = _hdr(S["admin"]["id"])
-    assert c.post(f"/api/admin/orders/{o['id']}/refund", json={"reference": "R", "amount": 100.01}, headers=h).status_code == 400
-    assert c.post(f"/api/admin/orders/{o['id']}/refund", json={"reference": "R", "amount": 0}, headers=h).status_code == 400
-    assert c.post(f"/api/admin/orders/{o['id']}/refund", json={"reference": "R2", "amount": 100.0}, headers=h).status_code == 200
-    assert c.portal.call(lambda: db.orders.find_one({"id": o["id"]}))["status"] == "refunded"
+    assert c.post(f"/api/admin/orders/{o['id']}/refund", json={"reference": "RF-1", "amount": 100.01}, headers=h).status_code == 400
+    assert c.post(f"/api/admin/orders/{o['id']}/refund", json={"reference": "RF-1", "amount": 0}, headers=h).status_code == 400
+    r = c.post(f"/api/admin/orders/{o['id']}/refund", json={"reference": "RF-2", "amount": 100.0}, headers=h)
+    assert r.status_code == 200 and r.json()["case"]["amount_paise"] == 10000          # recorded exactly, in paise
+    # Batch 12 (audit C-4): a different finance admin confirms before the money is recorded as returned
+    assert c.post(f"/api/admin/refund-cases/{r.json()['case']['id']}/action", headers=_hdr(S["fin2"]["id"]),
+                  json={"action": "confirm", "reference": "RF-2", "confirmation_type": "manual_reconciliation",
+                        "note": "Checked on the bank statement"}).status_code == 200
+    assert c.portal.call(lambda: db.orders.find_one({"id": o["id"]}))["refunded_paise"] == 10000
 
 
 # ============================================================ migration

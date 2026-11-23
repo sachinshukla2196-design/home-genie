@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Copy, Info, Users } from "lucide-react";
+import { AlertTriangle, Copy, Info, ShieldCheck, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PageHeader, SectionCard } from "@/components/PageHeader";
@@ -12,6 +12,32 @@ const SELECT = "h-10 rounded-xl bg-white/5 px-3 text-sm text-ink ring-1 ring-whi
 const MOBILE = /^[6-9]\d{9}$/;
 const TONE = { active: "ok", invited: "info", suspended: "warn", revoked: "muted" };
 const EMPTY = { mobile: "", full_name: "", role: "store_manager", permissions: [] };
+const RISK_TONE = { low: "ok", medium: "warn", high: "bad" };
+
+/** Batch 12, Phase 5: permissions grouped by area, each with a plain description and a risk level, plus a preview of what a
+ *  ready-made role allows. The server decides every request; this only explains it. */
+function PermissionPicker({ info, value, onChange, readOnly }) {
+  const groups = {};
+  Object.entries(info).forEach(([p, i]) => { (groups[i.module] = groups[i.module] || []).push([p, i]); });
+  return (
+    <div className="space-y-3">
+      {Object.entries(groups).map(([mod, perms]) => (
+        <fieldset key={mod} className="hg-tile p-3">
+          <legend className="px-1 text-sm font-semibold text-ink">{mod}</legend>
+          <div className="mt-1 space-y-2">
+            {perms.map(([p, i]) => (
+              <label key={p} className={`flex items-start gap-2.5 text-sm ${readOnly ? "" : "cursor-pointer"}`}>
+                <input type="checkbox" className="mt-1 h-4 w-4" checked={value.includes(p)} disabled={readOnly} onChange={() => onChange(p)} data-testid={`staff-perm-${p}`} />
+                <span className="min-w-0"><span className="font-medium text-ink">{i.label}</span> <Pill tone={RISK_TONE[i.risk]}>{i.risk} risk</Pill>
+                  <span className="block text-xs text-muted2">{i.description}</span></span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      ))}
+    </div>
+  );
+}
 
 /** Owner-only team management: invite (one-time link), change role, suspend, reactivate, resend and revoke. Every rule is enforced by the backend. */
 export default function VendorStaff() {
@@ -57,7 +83,9 @@ export default function VendorStaff() {
 
   if (!d) return <StateBlock loading={!error} error={error} onRetry={load} rows={2} testid="staff" />;
 
-  const roleOptions = Object.keys(d.presets).concat(["custom"]);
+  const roleOptions = Object.keys(d.presets).filter((r) => !d.preset_info?.[r]?.legacy).concat(["custom"]);
+  const roleLabel = (r) => d.preset_info?.[r]?.label || (r === "custom" ? "Custom role" : t(`vx.staff.role.${r}`));
+  const roleDesc = (r) => d.preset_info?.[r]?.description || (r === "custom" ? "Choose exactly what this person may do." : t(`vx.staff.desc.${r}`));
   const togglePerm = (p) => setForm({ ...form, permissions: form.permissions.includes(p) ? form.permissions.filter((x) => x !== p) : [...form.permissions, p] });
 
   const actions = (m) => {
@@ -67,7 +95,7 @@ export default function VendorStaff() {
         {m.status !== "invited" && (
           <>
             <select aria-label={t("vx.staff.changeRole")} className={SELECT} value={roleEdit[m.id] || m.role} onChange={(e) => setRoleEdit({ ...roleEdit, [m.id]: e.target.value })} data-testid={`staff-role-${m.id}`}>
-              {Object.keys(d.presets).map((r) => <option key={r} value={r}>{t(`vx.staff.role.${r}`)}</option>)}
+              {Object.keys(d.presets).filter((r) => !d.preset_info?.[r]?.legacy || r === m.role).map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
             </select>
             <Button variant="outline" size="sm" className="h-9 rounded-full" disabled={busy || (roleEdit[m.id] || m.role) === m.role} onClick={() => saveRole(m)} data-testid={`staff-save-${m.id}`}>{t("vx.staff.save")}</Button>
           </>
@@ -83,7 +111,7 @@ export default function VendorStaff() {
   const columns = [
     { key: "name", label: t("vx.staff.col.name"), render: (s) => <span className="font-medium text-ink">{s.name || "—"}</span> },
     { key: "mobile", label: t("vx.staff.col.mobile"), render: (s) => <span className="tabular-nums">{s.mobile || "—"}</span> },
-    { key: "role", label: t("vx.staff.col.role"), render: (s) => t(`vx.staff.role.${s.role}`) },
+    { key: "role", label: t("vx.staff.col.role"), render: (s) => roleLabel(s.role) },
     { key: "status", label: t("vx.staff.col.status"), render: (s) => <Pill tone={TONE[s.status] || "muted"} testid={`staff-status-${s.id}`}>{t(`vx.staff.st.${s.status}`)}</Pill> },
     { key: "added", label: t("vx.staff.col.added"), render: (s) => <span className="text-xs text-muted2">{fmtDate(s.invited_at, lang)}{s.invite_expires_at ? ` · ${t("vx.staff.expires", { d: fmtDate(s.invite_expires_at, lang) })}` : ""}</span> },
     { key: "actions", label: t("vx.staff.col.actions"), render: actions },
@@ -120,22 +148,28 @@ export default function VendorStaff() {
           <div>
             <label htmlFor="st-role" className="text-sm font-medium text-ink">{t("vx.staff.roleLabel")}</label>
             <select id="st-role" className={`${SELECT} mt-1.5 w-full`} value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value, permissions: [] })} data-testid="staff-role">
-              {roleOptions.map((r) => <option key={r} value={r}>{t(`vx.staff.role.${r}`)}</option>)}
+              {roleOptions.map((r) => <option key={r} value={r}>{roleLabel(r)}</option>)}
             </select>
-            <p className="mt-1 text-xs text-muted2">{t(`vx.staff.desc.${form.role}`)}</p>
+            <p className="mt-1 text-xs text-muted2">{roleDesc(form.role)}</p>
           </div>
+          {form.role !== "custom" && d.permission_info && (
+            <details className="sm:col-span-2" data-testid="staff-preset-preview">
+              <summary className="flex cursor-pointer items-center gap-2 text-sm font-medium text-ink"><ShieldCheck size={15} /> What this role can do</summary>
+              <div className="mt-2"><PermissionPicker info={d.permission_info} value={d.preset_effective?.[form.role] || []} readOnly onChange={() => {}} /></div>
+            </details>
+          )}
           {form.role === "custom" && (
-            <fieldset className="sm:col-span-2" data-testid="staff-perms">
-              <legend className="text-sm font-medium text-ink">{t("vx.staff.perms")}</legend>
-              <div className="mt-2 grid gap-2 sm:grid-cols-2">
-                {d.permissions.map((p) => (
-                  <label key={p} className="flex items-center gap-2 text-sm text-ink">
-                    <input type="checkbox" checked={form.permissions.includes(p)} onChange={() => togglePerm(p)} data-testid={`staff-perm-${p}`} /> {t(`vx.staff.perm.${p}`)}
-                  </label>
-                ))}
-              </div>
+            <div className="sm:col-span-2" data-testid="staff-perms">
+              <div className="text-sm font-medium text-ink">{t("vx.staff.perms")}</div>
+              <p className="mb-2 text-xs text-muted2">Give only what this person needs. Team, bank, profile and payout settings always stay with you, the owner.</p>
+              {d.permission_info ? <PermissionPicker info={d.permission_info} value={form.permissions} onChange={togglePerm} />
+                : <div className="grid gap-2 sm:grid-cols-2">{d.permissions.map((p) => (
+                  <label key={p} className="flex items-center gap-2 text-sm text-ink"><input type="checkbox" checked={form.permissions.includes(p)} onChange={() => togglePerm(p)} /> {p}</label>))}</div>}
+              {form.permissions.some((p) => d.permission_info?.[p]?.risk === "high") && (
+                <p className="mt-2 flex gap-2 text-xs text-hg-gold" role="note"><AlertTriangle size={14} className="mt-0.5 shrink-0" /> This role includes high-risk permissions (they affect what customers buy or receive, or show money figures).</p>
+              )}
               {tried && problems.permissions && <p role="alert" className="mt-1 text-xs text-danger">{t(problems.permissions)}</p>}
-            </fieldset>
+            </div>
           )}
           <div className="sm:col-span-2">
             <Button type="submit" disabled={busy} className="hg-btn h-11 rounded-full px-6" data-testid="staff-submit">{t("vx.staff.send")}</Button>

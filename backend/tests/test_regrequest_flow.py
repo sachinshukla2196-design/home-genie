@@ -205,8 +205,9 @@ class TestSecurity:
 class TestProductPermanentDelete:
     def test_permanent_delete(self, admin):
         payload = {"sku": f"TESTPD{secrets.randbelow(90000) + 10000}", "name": "TEST_Perm Delete Product",
-                   "mrp": 299, "selling_price": 199, "stock": 5, "category": "Herbal",
-                   "description": "test", "images": ["https://example.com/x.jpg"]}
+                   "mrp": 299, "selling_price": 199, "stock": 5,
+                   # Batch 13: one of the four owner-locked pillars ("Herbal" is not a category any more)
+                   "category": "Household Essentials", "description": "test", "images": []}
         cr = admin.post(f"{API}/admin/products", json=payload)
         assert cr.status_code in (200, 201), cr.text
         pid = cr.json()["id"]

@@ -392,10 +392,21 @@ def test_g2_an_already_released_commission_is_clawed_back_proportionally(c):
     pa, pb = _product(c, "va", 1000), _product(c, "vb", 1000)
     o = _paid_order(c, [(pa, 1), (pb, 1)])
     _run(c, lambda: db.commissions.update_many({"order_id": o["id"]}, {"$set": {"created_at": OLD}}))
-    _run(c, lambda: db.orders.update_one({"id": o["id"]}, {"$set": {"delivered_at": OLD, "status": "delivered"}}))   # decision 2
+    # Batch 12 (audit C-5/C-7): commission is released only once every vendor's fulfilment is delivered and the window has
+    # passed, so the released commission is now reached legitimately (both vendors delivered long ago) and vendor B's goods
+    # are then refunded (a return), instead of releasing while B's fulfilment was still 'new'.
+    async def delivered_long_ago():
+        cur = await db.orders.find_one({"id": o["id"]}, {"_id": 0})
+        fl = [{**f, "status": "delivered", "delivered_at": OLD, "events": f.get("events", []) + [{"status": "delivered", "at": OLD}]}
+              for f in cur["fulfilments"]]
+        await db.orders.update_one({"id": o["id"]}, {"$set": {"fulfilments": fl, "delivered_at": OLD, "status": "delivered"}})
+    _run(c, delivered_long_ago)
     _run(c, release_due_points)
     assert all(x["released_at"] for x in _comms(c, o["id"]))
-    _reject(c, "vb", o["id"])                                                  # (the fulfilment is still 'new')
+    vb_line = next(li for li in o["items"] if li["product_id"] == pb)
+    fresh = _get(c, o["id"])
+    _run(c, lambda: returns_routes.open_refund_case(fresh, "return", vb_line["total_paise"], "Vendor B goods returned",
+                                                    "g2r:" + o["id"], vendor_id=vb_line["vendor_id"]))
     case = _cases(c, o["id"])[0]
     _act(c, "adm", case["id"], "initiate")
     assert _act(c, "sup", case["id"], "confirm", **_confirm_body("UTR-G2R-" + o["id"][:6])).status_code == 200

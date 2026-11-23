@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { Link, useLocation, Outlet } from "react-router-dom";
+import { Link, Navigate, useLocation, Outlet } from "react-router-dom";
 import { MotionConfig, motion } from "framer-motion";
 import {
   LayoutDashboard, Package, ClipboardList, Store, LogOut, Bell, Boxes, Truck, Undo2, BarChart3, Landmark, Banknote, LifeBuoy, ShieldCheck, Menu, FileBarChart, TrendingUp, Users, FileText,
@@ -93,6 +93,9 @@ export function VendorLayout() {
   const groups = NAV_GROUPS.map((g) => ({ ...g, items: g.items.filter((i) => allowed(i.id)) })).filter((g) => g.items.length);
   const flat = groups.flatMap((g) => g.items);
   const active = (to) => (to === "/vendor" ? loc.pathname === "/vendor" : loc.pathname.startsWith(to));
+  // Batch 12 (audit L15): staff without reports access land on the first area they can use, not on a dashboard the server refuses.
+  const landing = perms && !allowed("dashboard") && loc.pathname.startsWith("/vendor/dashboard")
+    ? (flat.find((i) => i.id !== "dashboard" && i.id !== "notifications") || flat[0])?.to : null;
 
   const NavItem = ({ i, compact }) => {
     const on = active(i.to);
@@ -106,6 +109,8 @@ export function VendorLayout() {
       </Link>
     );
   };
+
+  if (landing) return <Navigate to={landing} replace />;
 
   return (
     <VendorCtx.Provider value={{ vendor, reload, unread }}>

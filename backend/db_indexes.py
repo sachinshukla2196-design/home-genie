@@ -78,6 +78,30 @@ SPECS = [
     {"coll": "account_invitations", "keys": [("token_hash", 1)], "name": "account_invitations_token_unique", "unique": True},
     {"coll": "account_invitations", "keys": [("user_id", 1), ("status", 1)], "name": "account_invitations_user_status"},
     {"coll": "product_categories", "keys": [("name", 1)], "name": "product_categories_name_unique", "unique": True},
+    # Batch 12 (Phase 4): product studio drafts; ONE open draft per existing product (a race between two tabs cannot create two)
+    {"coll": "product_drafts", "keys": [("id", 1)], "name": "product_drafts_id_unique", "unique": True},
+    {"coll": "product_drafts", "keys": [("vendor_id", 1), ("status", 1), ("updated_at", -1)], "name": "product_drafts_vendor_status"},
+    {"coll": "product_drafts", "keys": [("product_id", 1)], "name": "product_drafts_one_open_per_product", "unique": True,
+     "partialFilterExpression": {"status": "draft", "product_id": {"$type": "string"}}},
+    {"coll": "products", "keys": [("pending_revision.status", 1)], "name": "products_pending_revision",
+     "partialFilterExpression": {"pending_revision.status": "pending"}},
+    # Batch 13 (Phase 7): address book and wishlist (one row per account + product + option)
+    {"coll": "addresses", "keys": [("id", 1)], "name": "addresses_id_unique", "unique": True},
+    {"coll": "addresses", "keys": [("user_id", 1), ("deleted_at", 1)], "name": "addresses_user"},
+    {"coll": "wishlist_items", "keys": [("user_id", 1), ("product_id", 1), ("variant_sku", 1)], "name": "wishlist_user_product_variant_unique", "unique": True},
+    # Batch 13 (Phase 8): HomeGenie metrics read attributed orders / own commissions / own withdrawals by date
+    {"coll": "orders", "keys": [("seller_user_id", 1), ("created_at", -1)], "name": "orders_seller_created"},
+    # Batch 13 (Phase 11): catalogue search. One text index per collection (MongoDB limit); "none" = no stemming / stop words, so
+    # Hindi and brand names match as typed. Filters and sorts on products that are on sale use the compound index.
+    {"coll": "products", "keys": [("name", "text"), ("brand", "text"), ("keywords", "text"), ("subcategory", "text"), ("short_description", "text")],
+     "name": "products_text", "weights": {"name": 10, "brand": 5, "keywords": 5, "subcategory": 3, "short_description": 1}},
+    {"coll": "products", "keys": [("is_active", 1), ("approval_status", 1), ("category", 1), ("selling_price", 1)], "name": "products_shop_category_price"},
+    {"coll": "merch_sections", "keys": [("status", 1), ("position", 1)], "name": "merch_sections_status_position"},
+    # Batch 14: payment event reconciliation (finance inbox by status; look-up by our payment attempt)
+    {"coll": "webhook_events", "keys": [("status", 1), ("created_at", -1)], "name": "webhook_events_status_created"},
+    {"coll": "webhook_events", "keys": [("session_id", 1)], "name": "webhook_events_session"},
+    {"coll": "commissions", "keys": [("user_id", 1), ("created_at", -1)], "name": "commissions_user_created"},
+    {"coll": "withdrawal_requests", "keys": [("user_id", 1), ("created_at", -1)], "name": "withdrawal_requests_user_created"},
     # Vendor Pillar: public "Apply to sell" applications. One OPEN application per mobile (open_mobile is unset when closed),
     # and at most one vendor / one owner account per application (conversion is idempotent through these).
     {"coll": "vendor_applications", "keys": [("id", 1)], "name": "vendor_applications_id_unique", "unique": True},
@@ -119,7 +143,15 @@ def _info_as_spec(info: dict) -> dict:
     return {"keys": [tuple(k) for k in info["key"]], **opts}
 
 
+def _is_text(spec_or_info) -> bool:
+    return any(k[1] == "text" for k in _key(spec_or_info))
+
+
 def _matches(info: dict, spec: dict) -> bool:
+    # Batch 13: MongoDB reports a text index as ("_fts", "text") + ("_ftsx", 1) with its field weights, so it is compared by
+    # its weights (which list the indexed fields) instead of its key pattern.
+    if _is_text(spec):
+        return _is_text(info) and info.get("weights") == spec.get("weights")
     return _key(info) == _key(spec) and _options(_info_as_spec(info)) == _options(spec)
 
 
@@ -141,7 +173,7 @@ async def plan() -> dict:
         others = {n: i for n, i in infos.items() if (s["coll"], n) not in legacy_names}
         if any(_matches(i, s) for i in infos.values()):
             present.append(s["name"])
-        elif s["name"] in infos or any(_key(i) == _key(s) for i in others.values()):
+        elif s["name"] in infos or any(_key(i) == _key(s) for i in others.values()) or (_is_text(s) and any(_is_text(i) for i in others.values())):
             conflict.append({"index": s["name"], "collection": s["coll"], "reason": "an index on the same keys has different options or name"})
         else:
             missing.append(s["name"])
@@ -187,7 +219,8 @@ async def apply() -> dict:
         if legacy_info is not None:            # the legacy index has the same keys, so it must go before the replacement can exist
             await db[spec["coll"]].drop_index(legacy["name"])
         try:
-            await db[spec["coll"]].create_index(spec["keys"], name=name, **_options(spec))
+            await db[spec["coll"]].create_index(spec["keys"], name=name, **_options(spec),
+                                                **({"weights": spec["weights"], "default_language": "none"} if _is_text(spec) else {}))
         except Exception as e:
             if legacy_info is not None:        # put the legacy index back exactly as it was
                 await db[spec["coll"]].create_index(_key(legacy_info), name=legacy["name"], **_options(_info_as_spec(legacy_info)))

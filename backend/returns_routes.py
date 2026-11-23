@@ -109,6 +109,24 @@ async def open_refund_case(order: dict, kind: str, amount_paise: int, reason: st
     return case, True
 
 
+async def initiate_case_as(case: dict, admin: dict, amount_paise: int, note: str, proposed_reference: str = "") -> dict:
+    """Move an `awaiting_review` case to `initiated` on behalf of `admin` (the maker). A different finance admin confirms it.
+    Used by the admin "Refund" action (Batch 12, audit C-4) so that action follows the same two-person rule."""
+    now = now_iso()
+    res = await db.refund_cases.update_one(
+        {"id": case["id"], "status": "awaiting_review"},
+        {"$set": {"status": "initiated", "amount_paise": amount_paise, "method": "manual", "initiated_by": admin["id"],
+                  "proposed_reference": proposed_reference, "updated_at": now},
+         "$addToSet": {"initiators": admin["id"]},
+         "$push": {"events": {"status": "initiated", "at": now, "by": admin["id"], "note": note or proposed_reference}}})
+    if res.modified_count != 1:
+        fresh = await db.refund_cases.find_one({"id": case["id"]}, {"_id": 0})
+        if not fresh or fresh.get("status") != "initiated":
+            raise HTTPException(status_code=409, detail="This refund is already being handled. Open it from Operations, Refunds.")
+        return fresh
+    return await db.refund_cases.find_one({"id": case["id"]}, {"_id": 0})
+
+
 async def refundable_paise(order: dict) -> int:
     from cod_rules import refundable_total_paise     # a COD order accepted short can only be refunded what was collected
     return refundable_total_paise(order, paise_of(order, "total_paise", "total")) - paise_of(order, "refunded_paise", "refunded_amount")
@@ -268,7 +286,9 @@ async def refund_case_action(case_id: str, body: RefundAction, request: Request,
         amt = to_paise(body.amount) if body.amount is not None else case["amount_paise"]
         if amt <= 0 or amt > min(case["amount_paise"], room):
             raise HTTPException(status_code=400, detail="Amount must be between 0.01 and the original case amount / refundable balance.")
-        sets.update({"amount_paise": amt, "method": (body.method or "manual").strip(), "initiated_by": admin["id"]})
+        # Batch 12 (audit L1): the FIRST initiator stays the initiator through fail -> retry, and everyone who initiated is
+        # recorded, so a retry by a colleague cannot launder the maker-checker rule.
+        sets.update({"amount_paise": amt, "method": (body.method or "manual").strip(), "initiated_by": case.get("initiated_by") or admin["id"]})
     elif target == "failed":
         if len(note) < 5:
             raise HTTPException(status_code=400, detail="A reason is required.")
@@ -279,7 +299,7 @@ async def refund_case_action(case_id: str, body: RefundAction, request: Request,
             raise HTTPException(status_code=400, detail="A closing note is required.")
         sets.update({"resolved_by": admin["id"], "outcome": "refunded" if case["status"] == "confirmed" else "no_refund"})
     elif target == "confirmed":
-        if case.get("initiated_by") and case["initiated_by"] == admin["id"]:
+        if admin["id"] in ({case.get("initiated_by")} | set(case.get("initiators") or [])):
             # Decision 4 (maker-checker): the admin who initiated the refund cannot also confirm that the money went out.
             raise HTTPException(status_code=403, detail="A different finance admin must confirm a refund you initiated.")
         if admin.get("role") not in FINANCE_ROLES:
@@ -325,6 +345,8 @@ async def refund_case_action(case_id: str, body: RefundAction, request: Request,
     else:
         unset_claim = False
     update = {"$set": sets, "$push": {"events": {"status": target, "at": now, "by": admin["id"], "note": note or body.reference}}}
+    if target == "initiated":
+        update["$addToSet"] = {"initiators": admin["id"]}
     if unset_claim:
         update["$unset"] = {"confirming_reference": "", "confirming_by": "", "confirming_at": ""}
     claim = await db.refund_cases.update_one({"id": case_id, "status": case["status"]}, update)

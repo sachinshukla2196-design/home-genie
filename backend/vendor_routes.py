@@ -5,11 +5,11 @@ change another vendor's products, orders or customers by changing IDs (those ret
 Admin-side approval of vendors and vendor products lives at the bottom (/api/admin/vendors...).
 """
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pymongo.errors import DuplicateKeyError
 from fastapi import APIRouter, HTTPException, Request, Depends
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 import re
 from decimal import Decimal, ROUND_HALF_UP
@@ -128,8 +128,73 @@ class VendorProfileIn(BaseModel):
 async def vendor_me(user: dict = Depends(require_vendor_user)):
     v = user.get("_vendor") or await _vendor_of(user)
     member = user.get("_member")
-    access = {"role": "owner", "permissions": None} if not member else {"role": member["role"], "permissions": member.get("permissions", [])}
+    from vendor_staff import effective_permissions          # Phase 5: the menu shows what the server will actually allow
+    access = {"role": "owner", "permissions": None} if not member else {"role": member["role"],
+                                                                     "permissions": sorted(effective_permissions(member.get("permissions", [])))}
     return {"vendor": _public_vendor(v) if v else None, "pillars": PILLARS, "access": access}
+
+
+CONTACT_FIELDS = ("contact_person", "phone", "support_email", "address", "city", "state", "pincode", "return_address")
+APPROVAL_FIELDS = {"business_name": "Ask HOME GENIES support to change the registered business name (with proof).",
+                   "gstin": "Ask HOME GENIES support to change the GSTIN (with the new registration certificate).",
+                   "pan": "Ask HOME GENIES support to change the PAN (with the PAN card).",
+                   "categories": "Ask HOME GENIES support to add or remove a category.",
+                   "bank_account_name": "Request a bank change from this page; finance reviews it before settlements use it.",
+                   "bank_account": "Request a bank change from this page; finance reviews it before settlements use it.",
+                   "ifsc": "Request a bank change from this page; finance reviews it before settlements use it."}
+
+
+def _validate_contact(d: dict) -> None:
+    """Server-side checks for the contact fields (Batch 14, VEN-05). Empty optional values are allowed."""
+    import re as _re
+    from vendor_onboarding import INDIAN_STATES
+    phone = re.sub(r"[\s-]", "", d.get("phone") or "")
+    if not _re.fullmatch(r"(\+91)?[6-9]\d{9}", phone):
+        raise HTTPException(status_code=400, detail="Enter a valid 10-digit mobile number for the business.")
+    if d.get("pincode") and not _re.fullmatch(r"[1-9]\d{5}", d["pincode"].strip()):
+        raise HTTPException(status_code=400, detail="Enter a valid 6-digit PIN code.")
+    if d.get("state") and d["state"] not in INDIAN_STATES:
+        raise HTTPException(status_code=400, detail="Choose the state from the list.")
+    if d.get("support_email") and not _re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", d["support_email"].strip()):
+        raise HTTPException(status_code=400, detail="Enter a valid support e-mail address, or leave it blank.")
+    for k in ("contact_person", "address", "city", "return_address"):
+        if any(ch in (d.get(k) or "") for ch in "<>"):
+            raise HTTPException(status_code=400, detail="Address and name fields cannot contain < or >.")
+
+
+@router.get("/vendor/me/profile-overview")
+async def vendor_profile_overview(user: dict = Depends(require_vendor_user)):
+    """Batch 14 (VEN-05): one honest view of the business profile - what the vendor may edit now, what needs HOME GENIES approval
+    and how to ask for it, documents and outstanding requirements, bank details (masked) and any change request. Owner only
+    (staff have no rule for this path)."""
+    import governance_routes as G
+    v = await _vendor_of(user)
+    if not v:
+        return {"vendor": None, "mode": "new", "editable": list(VendorProfileIn.model_fields), "approval_required": {}}
+    st = v.get("status")
+    if st in CONTACT_ONLY:
+        mode, editable = "contact_only", list(CONTACT_FIELDS)
+    elif st in ONBOARDING or (v.get("onboarding_path") and st == "rejected"):
+        mode, editable = "onboarding", []
+    elif st in ("submitted", "under_review"):
+        mode, editable = "in_review", []
+    else:
+        mode, editable = "full", list(VendorProfileIn.model_fields)
+    docs = await db.vendor_documents.find({"vendor_id": v["id"], "deleted": {"$ne": True}}, {"_id": 0, "url": 0}).sort("created_at", -1).to_list(50)
+    pol = await G.get_vendor_policy()
+    have = {d["type"] for d in docs if d.get("status") != "rejected"}
+    bank = await db.vendor_change_requests.find_one({"vendor_id": v["id"], "kind": "bank"}, {"_id": 0}, sort=[("created_at", -1)])
+    hist = await db.vendor_status_history.find({"vendor_id": v["id"]}, {"_id": 0, "internal_note": 0, "actor": 0}).sort("at", -1).to_list(10)
+    pv = _public_vendor(v)
+    return {"vendor": pv, "status": st, "mode": mode, "editable": editable,
+            "approval_required": {k: msg for k, msg in APPROVAL_FIELDS.items() if mode in ("contact_only", "in_review", "onboarding")},
+            "review_note": v.get("rejection_reason") or None,
+            "documents": [{k: d.get(k) for k in ("id", "type", "status", "note", "review_note", "expires_at", "created_at")} for d in docs],
+            "requirements": {"required": pol["required_documents"], "missing": [r for r in pol["required_documents"] if r not in have]},
+            "bank": {"account_name": pv.get("bank_account_name"), "account": pv.get("bank_account"), "ifsc": pv.get("ifsc"),
+                     "latest_change": G._bank_view(bank) if bank else None},
+            "verification": {"mobile": bool(user.get("mobile_verified")), "email": bool(user.get("email_verified"))},
+            "history": hist}
 
 
 @router.put("/vendor/me")
@@ -145,6 +210,7 @@ async def vendor_save(body: VendorProfileIn, request: Request, user: dict = Depe
         # Approved/active/suspended vendors may update contact details only; legal/bank changes go through admin.
         allowed = {k: getattr(body, k) for k in ("contact_person", "phone", "support_email", "address", "city",
                                                   "state", "pincode", "return_address")}
+        _validate_contact(allowed)          # Batch 14 (VEN-05)
         await db.vendors.update_one({"user_id": user["id"]}, {"$set": {**allowed, "updated_at": now_iso()}})
         await log_audit(user, "vendor_profile_updated", "vendor", v["id"], new_value=allowed, request=request)
         return {"vendor": _public_vendor(await _vendor_of(user))}
@@ -223,17 +289,36 @@ class VendorProductIn(BaseModel):
     declarations: List[str] = Field(default=[], max_length=10)
     returnable: bool = True
     return_policy: str = ""
+    # Batch 12 (Phase 4, product information): short selling points, the maker's model / product code, and a description of
+    # each image (alternative text) keyed by the image reference.
+    highlights: List[str] = Field(default=[], max_length=6)
+    model_number: str = Field(default="", max_length=60)
+    image_alt: Dict[str, str] = {}
 
     @field_validator("images")
     @classmethod
     def _safe_images(cls, v: List[str]) -> List[str]:
         return safe_image_refs(v, 8)
 
+    @field_validator("highlights")
+    @classmethod
+    def _highlights(cls, v: List[str]) -> List[str]:
+        out = [str(x).strip()[:120] for x in v if str(x).strip()]
+        if any(ch in x for x in out for ch in "<>"):
+            raise ValueError("Highlights cannot contain < or >.")
+        return out
+
+    @model_validator(mode="after")
+    def _alt_text(self):
+        self.image_alt = {u: str(t).strip()[:125] for u, t in (self.image_alt or {}).items() if u in self.images and str(t).strip()}
+        return self
+
 
 # Material changes send an approved product back to admin review and hide it until approved.
 REVIEW_FIELDS = ("name", "name_hi", "description", "description_hi", "short_description", "images", "mrp", "selling_price",
                  "gst_percent", "hsn_code", "category", "subcategory", "brand", "options", "attributes", "compliance_documents",
-                 "declarations", "returnable", "return_policy")
+                 "declarations", "returnable", "return_policy", "highlights", "model_number", "image_alt")
+PRICE_FIELDS = ("mrp", "selling_price", "gst_percent", "hsn_code")
 
 
 def _variant_identity(variants: list) -> list:
@@ -329,9 +414,8 @@ async def catalogue_spec(user: dict = Depends(require_vendor_user)):
             "variant_attributes": sorted(cat.VARIANT_ATTRIBUTES), "document_types": sorted(cat.DOC_TYPES)}
 
 
-@router.post("/vendor/products")
-async def vendor_create_product(body: VendorProductIn, request: Request, user: dict = Depends(require_approved_vendor)):
-    v = user["_vendor"]
+async def create_vendor_product(v: dict, body: VendorProductIn, actor: dict, request: Request, extra: Optional[dict] = None) -> dict:
+    """Create a vendor's product awaiting review (shared by the vendor route and the product studio, Batch 12)."""
     data = _clean_product_payload(body, None, v["id"])
     sku = body.sku.strip().upper()
     all_skus = [sku] + [x["sku"] for x in data["variants"]]
@@ -339,7 +423,7 @@ async def vendor_create_product(body: VendorProductIn, request: Request, user: d
         raise HTTPException(status_code=400, detail="A product or variant with this SKU already exists.")
     p = {**data, "sku": sku, "id": new_id(), "vendor_id": v["id"], "vendor_name": v["business_name"],
          "is_active": False, "approval_status": "pending", "rejection_reason": "", "archived": False,
-         "created_at": now_iso(), "updated_at": now_iso()}
+         "created_by": actor["id"], **(extra or {}), "created_at": now_iso(), "updated_at": now_iso()}
     try:
         await db.products.insert_one(dict(p))
     except DuplicateKeyError:   # two simultaneous submits of the same SKU: unique index decides
@@ -348,10 +432,15 @@ async def vendor_create_product(body: VendorProductIn, request: Request, user: d
     for vsku, qty in initial:
         if qty:
             await db.stock_movements.insert_one({"id": new_id(), "product_id": p["id"], "variant_sku": vsku, "delta": qty,
-                                                 "reason": "initial_stock", "actor_id": user["id"], "created_at": now_iso()})
-    await log_audit(user, "vendor_product_submitted", "product", p["id"], new_value={"sku": sku}, request=request)
+                                                 "reason": "initial_stock", "actor_id": actor["id"], "created_at": now_iso()})
+    await log_audit(actor, "vendor_product_submitted", "product", p["id"], new_value={"sku": sku, **(extra or {})}, request=request)
     p.pop("_id", None)
     return p
+
+
+@router.post("/vendor/products")
+async def vendor_create_product(body: VendorProductIn, request: Request, user: dict = Depends(require_approved_vendor)):
+    return await create_vendor_product(user["_vendor"], body, user, request)
 
 
 async def _own_product(user: dict, product_id: str) -> dict:
@@ -361,32 +450,48 @@ async def _own_product(user: dict, product_id: str) -> dict:
     return p
 
 
-@router.put("/vendor/products/{product_id}")
-async def vendor_update_product(product_id: str, body: VendorProductIn, request: Request,
-                                user: dict = Depends(require_approved_vendor)):
+def changed_review_fields(p: dict, data: dict) -> list:
+    """The material fields a change would alter (these need admin review)."""
+    new = {k: v for k, v in data.items() if k not in ("sku", "stock")}
+    return [k for k in REVIEW_FIELDS if p.get(k) != new.get(k)] + \
+        (["variants"] if _variant_identity(p.get("variants")) != _variant_identity(data["variants"]) else [])
+
+
+async def apply_product_update(product_id: str, vendor_id: str, body: VendorProductIn, actor: dict, request: Request,
+                               review: bool = True, price_note: str = "") -> dict:
+    """Apply a product change (shared by the vendor route, the product studio and revision approval, Batch 12).
+    review=True : a material change sends the product back to review and hides it until approved (the original rule).
+    review=False: an admin APPROVED this change (a revision): the product keeps its approved, listed state.
+    A change of price / GST / HSN on an approved product is appended to `price_history`."""
     # CAT-03: the edit rewrites the variants array, whose stock numbers come from the read below. The write is therefore
     # conditional on every stock number still being what was read; a reservation or adjustment landing in between makes
     # it miss, and the edit is rebuilt from a fresh read (stock is never overwritten with a stale value).
     for _attempt in range(5):
-        p = await _own_product(user, product_id)
+        p = await db.products.find_one({"id": product_id, "vendor_id": vendor_id}, P_PUBLIC)
+        if not p:
+            raise HTTPException(status_code=404, detail="Product not found.")
         if p.get("archived"):
             raise HTTPException(status_code=409, detail="Restore this product from the archive before editing it.")
-        data = _clean_product_payload(body, p.get("variants"), user["_vendor"]["id"])
+        data = _clean_product_payload(body, p.get("variants"), vendor_id)
         new_skus = [x["sku"] for x in data["variants"] if x["sku"] not in {y["sku"] for y in p.get("variants") or []}]
         if new_skus and await db.products.find_one({"id": {"$ne": product_id}, "$or": [{"sku": {"$in": new_skus}}, {"variants.sku": {"$in": new_skus}}]}):
             raise HTTPException(status_code=400, detail="A variant SKU already exists on another product.")
         new = {k: v for k, v in data.items() if k not in ("sku", "stock")}    # SKU is fixed; stock changes go through /stock
         if not data["variants"] and p.get("variants"):
             raise HTTPException(status_code=400, detail="A product that has variants cannot go back to a single stock number.")
-        changed = [k for k in REVIEW_FIELDS if p.get(k) != new.get(k)] + (["variants"] if _variant_identity(p.get("variants")) != _variant_identity(data["variants"]) else [])
+        changed = changed_review_fields(p, data)
         upd = {**new, "updated_at": now_iso()}
         if data["variants"]:
             upd["stock"] = data["stock"]
-        if changed:   # material change: back to review, hidden until approved
+        if changed and review:   # material change: back to review, hidden until approved
             upd.update({"approval_status": "pending", "is_active": False, "rejection_reason": ""})
+        push = {}
+        if p.get("approval_status") == "approved" and not review and any(p.get(k) != new.get(k) for k in PRICE_FIELDS):
+            push = {"price_history": {"at": now_iso(), "by": actor["id"], "note": price_note,
+                                      "from": {k: p.get(k) for k in PRICE_FIELDS}, "to": {k: new.get(k) for k in PRICE_FIELDS}}}
         guard = [{"stock": p.get("stock")}] + [{"variants": {"$elemMatch": {"sku": v["sku"], "stock": v.get("stock")}}}
                                                 for v in (p.get("variants") or [])]
-        res = await db.products.update_one({"id": product_id, "$and": guard}, {"$set": upd})
+        res = await db.products.update_one({"id": product_id, "$and": guard}, {"$set": upd, **({"$push": push} if push else {})})
         if res.matched_count == 1:
             break
     else:
@@ -394,9 +499,19 @@ async def vendor_update_product(product_id: str, body: VendorProductIn, request:
     for x in data["variants"]:       # brand-new variants record their opening stock
         if x["sku"] in new_skus and x["stock"]:
             await db.stock_movements.insert_one({"id": new_id(), "product_id": product_id, "variant_sku": x["sku"], "delta": x["stock"],
-                                                 "reason": "initial_stock", "actor_id": user["id"], "created_at": now_iso()})
-    await log_audit(user, "vendor_product_updated", "product", product_id,
+                                                 "reason": "initial_stock", "actor_id": actor["id"], "created_at": now_iso()})
+    await log_audit(actor, "vendor_product_updated" if review else "product_revision_applied", "product", product_id,
                     old_value={k: p.get(k) for k in changed if k in p}, new_value={"changed": changed}, request=request)
+    return await db.products.find_one({"id": product_id}, P_PUBLIC)
+
+
+@router.put("/vendor/products/{product_id}")
+async def vendor_update_product(product_id: str, body: VendorProductIn, request: Request,
+                                user: dict = Depends(require_approved_vendor)):
+    pending = await db.products.find_one({"id": product_id, "vendor_id": user["_vendor"]["id"], "pending_revision.status": "pending"}, {"_id": 1})
+    if pending:
+        raise HTTPException(status_code=409, detail="A change to this product is waiting for review. Wait for the decision, or open it in the product studio.")
+    await apply_product_update(product_id, user["_vendor"]["id"], body, user, request)
     return await _own_product(user, product_id)
 
 
@@ -639,6 +754,7 @@ VENDOR_VISIBLE_PAYMENT = ("paid", "partially_refunded", "refunded", "cod_pending
 # Moving goods forward (accept/pack/dispatch/deliver) additionally needs money that is not fully refunded.
 FULFILLABLE_PAYMENT = ("paid", "partially_refunded", "cod_pending")
 FORWARD_STEPS = ("accepted", "packed", "dispatched", "delivered")
+ORDER_CLOSED = ("cancelled", "refunded")
 
 
 def _orders_base(vid: str) -> dict:
@@ -761,10 +877,16 @@ async def vendor_update_fulfilment(order_id: str, body: FulfilIn, request: Reque
         raise HTTPException(status_code=404, detail="Order not found.")
     f = next(x for x in o["fulfilments"] if x["vendor_id"] == vid)
     cur, nxt = f["status"], body.status
+    # Batch 12 (Phase 5): each fulfilment step needs its own staff permission (accept / pack / dispatch)
+    from vendor_staff import FULFILMENT_PERMISSION, require_member_permission
+    require_member_permission(user, FULFILMENT_PERMISSION.get(nxt, "orders.accept"))
     if nxt not in FLOW.get(cur, set()):
         raise HTTPException(status_code=400, detail=f"Cannot move this order from '{cur}' to '{nxt}'.")
     if nxt in FORWARD_STEPS and o.get("payment_status") not in FULFILLABLE_PAYMENT:
         raise HTTPException(status_code=409, detail="This order's payment is not verified (or it was refunded). Do not ship it.")
+    if nxt in FORWARD_STEPS and o.get("status") in ORDER_CLOSED:
+        # Batch 12 (audit C-5c): a cancelled order cannot be moved forward (and so cannot be revived to "delivered").
+        raise HTTPException(status_code=409, detail="This order was cancelled. Do not ship it; contact HOME GENIES if the goods already left.")
     if nxt in ("rejected", "cancelled", "delivery_failed") and len(body.note.strip()) < 5:
         raise HTTPException(status_code=400, detail="Please give a reason (at least 5 characters).")
     if nxt == "dispatched" and not (body.carrier.strip() and body.tracking_number.strip()):
@@ -774,6 +896,8 @@ async def vendor_update_fulfilment(order_id: str, body: FulfilIn, request: Reque
 
     event = {"status": nxt, "at": now_iso(), "by": user["id"], "note": body.note.strip()}
     sets = {"fulfilments.$.status": nxt, "updated_at": now_iso()}
+    if nxt == "delivered":
+        sets["fulfilments.$.delivered_at"] = event["at"]
     if nxt == "dispatched":
         sets.update({"fulfilments.$.carrier": body.carrier.strip(), "fulfilments.$.tracking_number": body.tracking_number.strip(),
                      "fulfilments.$.tracking_url": body.tracking_url.strip()})
@@ -784,8 +908,9 @@ async def vendor_update_fulfilment(order_id: str, body: FulfilIn, request: Reque
         if o.get("payment_status") in ("paid", "partially_refunded"):
             sets["fulfilments.$.refund_due"] = True       # G2: the customer must be refunded for this vendor's lines
     flt = {"id": order_id, "fulfilments": {"$elemMatch": {"vendor_id": vid, "status": cur}}}
-    if nxt in FORWARD_STEPS:              # write-time check too: a refund landing mid-request must win
+    if nxt in FORWARD_STEPS:              # write-time check too: a refund or cancellation landing mid-request must win
         flt["payment_status"] = {"$in": list(FULFILLABLE_PAYMENT)}
+        flt["status"] = {"$nin": list(ORDER_CLOSED)}
     res = await db.orders.update_one(flt, {"$set": sets, "$push": push})
     if res.modified_count != 1:
         raise HTTPException(status_code=409, detail="This order was just updated. Please refresh.")
@@ -797,11 +922,15 @@ async def vendor_update_fulfilment(order_id: str, body: FulfilIn, request: Reque
         from returns_routes import settle_vendor_rejection   # paid: one refund case for this vendor's lines (+ GST share)
         await settle_vendor_rejection(order_id, vid)
 
-    # Roll the overall order status forward when every vendor group has delivered.
+    # Roll the overall order status forward when every vendor group is finished and at least one delivered (a vendor that
+    # rejected or cancelled its part no longer keeps the rest of the order "shipped" forever - audit C-7). Never on a closed
+    # order (audit C-5c).
+    from eligibility import NOT_SUPPLIED
     fresh = await db.orders.find_one({"id": order_id}, {"_id": 0, "fulfilments": 1})
     states = [x["status"] for x in fresh.get("fulfilments", [])]
-    if states and all(s == "delivered" for s in states):
-        await db.orders.update_one({"id": order_id}, {"$set": {"status": "delivered", "delivered_at": now_iso()}})
+    if states and all(s in ("delivered", *NOT_SUPPLIED) for s in states) and "delivered" in states:
+        await db.orders.update_one({"id": order_id, "status": {"$nin": list(ORDER_CLOSED) + ["delivered"]}},
+                                   {"$set": {"status": "delivered", "delivered_at": now_iso()}})
     elif nxt == "dispatched":
         await db.orders.update_one({"id": order_id, "status": {"$nin": ["delivered", "cancelled", "refunded"]}}, {"$set": {"status": "shipped"}})
 
@@ -947,6 +1076,9 @@ async def admin_product_decision(product_id: str, body: ProductDecision, request
         raise HTTPException(status_code=404, detail="Product not found.")
     if p.get("approval_status") != "pending":
         raise HTTPException(status_code=400, detail="Only products awaiting review can be decided.")
+    if body.action == "approve" and p.get("created_on_behalf_by") == admin["id"]:
+        # Batch 12: an admin who prepared a product on a vendor's behalf does not also approve it
+        raise HTTPException(status_code=403, detail="You prepared this product for the vendor, so a different admin must approve it.")
     if body.action == "approve":
         v = await db.vendors.find_one({"id": p["vendor_id"]}, {"_id": 0, "status": 1, "user_id": 1})
         cur = await db.products.find_one({"id": product_id}, {"_id": 0, "archived": 1, "admin_takedown": 1})
@@ -959,7 +1091,11 @@ async def admin_product_decision(product_id: str, body: ProductDecision, request
     else:
         raise HTTPException(status_code=400, detail="Unknown action.")
     sets.update({"reviewed_by": admin["id"], "reviewed_at": now_iso(), "updated_at": now_iso()})
-    await db.products.update_one({"id": product_id, "approval_status": "pending"}, {"$set": sets})
+    upd = {"$set": sets}
+    if body.action == "approve":      # the price the product goes live with starts its price history
+        upd["$push"] = {"price_history": {"at": now_iso(), "by": admin["id"], "note": "approved",
+                                          "from": None, "to": {k: p.get(k) for k in PRICE_FIELDS}}}
+    await db.products.update_one({"id": product_id, "approval_status": "pending"}, upd)
     v = await db.vendors.find_one({"id": p["vendor_id"]}, {"_id": 0, "user_id": 1})
     if v:
         await create_notification(v["user_id"], "vendor", "Product review",

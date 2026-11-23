@@ -100,6 +100,20 @@ import financial_approvals  # noqa: E402
 app.include_router(financial_approvals.router)
 import vendor_applications  # noqa: E402
 app.include_router(vendor_applications.router)
+import pim  # noqa: E402  (Batch 12, Phase 4: product information management)
+app.include_router(pim.router)
+import customer_routes  # noqa: E402  (Batch 13, Phase 7: address book, wishlist)
+app.include_router(customer_routes.router)
+import homegenie_metrics  # noqa: E402  (Batch 13, Phase 8: HomeGenie dashboard metrics)
+app.include_router(homegenie_metrics.router)
+import admin_order_ops  # noqa: E402  (Batch 13, Phase 9: admin order operations)
+app.include_router(admin_order_ops.router)
+import discovery  # noqa: E402  (Batch 13, Phase 11: search and discovery)
+app.include_router(discovery.router)
+import merchandising  # noqa: E402  (Batch 13, Phase 10: merchandising)
+app.include_router(merchandising.router)
+import payment_events  # noqa: E402  (Batch 14: payment webhook reconciliation)
+app.include_router(payment_events.router)
 
 _cors_raw = os.environ.get("CORS_ALLOWED_ORIGINS") or os.environ.get("CORS_ORIGINS", "")
 _cors = [o.strip() for o in _cors_raw.split(",") if o.strip() and o.strip() != "*"]

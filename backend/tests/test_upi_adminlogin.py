@@ -24,6 +24,20 @@ ADMIN_USERNAME = os.environ.get("TEST_ADMIN_USERNAME", ADMIN_EMAIL)
 DEMO_EMAIL = "demo.distributor@homegenies.example.com"
 DEMO_PASSWORD = os.environ.get("TEST_DEMO_PASSWORD", "Demo@1234")
 
+
+_ADMIN_TOKEN = {}
+
+
+def _amt(order_id):
+    """Batch 13: UPI confirmation must state the exact amount received (payment-integrity rule, Batch 1). The amount is read
+    from the order itself through the admin order view; an unknown order gets a placeholder (the server answers 404)."""
+    if "t" not in _ADMIN_TOKEN:
+        r = requests.post(f"{API}/auth/admin-login", json={"username": os.environ.get("TEST_ADMIN_USERNAME", ADMIN_EMAIL),
+                                                           "password": ADMIN_PASSWORD}, timeout=25)
+        _ADMIN_TOKEN["t"] = r.json().get("token") if r.status_code == 200 else ""
+    r = requests.get(f"{API}/admin/order-ops/orders/{order_id}", headers={"Authorization": f"Bearer {_ADMIN_TOKEN['t']}"}, timeout=25)
+    return r.json()["order"]["total"] if r.status_code == 200 else 1.0
+
 ADDRESS = {"full_name": "QA Tester", "mobile": "9812345678", "line1": "1 QA Street",
            "city": "Pune", "state": "MH", "pincode": "411001"}
 
@@ -45,7 +59,11 @@ def dist():
 
 @pytest.fixture(scope="module")
 def admin():
-    token, user = _auth(ADMIN_EMAIL, ADMIN_PASSWORD)
+    # Batch 13: administrators sign in through the admin login only (SEC-11); the member login refuses them
+    r = requests.post(f"{API}/auth/admin-login", json={"username": ADMIN_USERNAME, "password": ADMIN_PASSWORD}, timeout=20)
+    if r.status_code != 200:
+        pytest.fail(f"admin login failed: {r.status_code} {r.text[:300]}")
+    token, user = r.json()["token"], r.json()["user"]
     s = requests.Session()
     s.headers.update({"Authorization": f"Bearer {token}", "Content-Type": "application/json"})
     return s, user
@@ -56,7 +74,9 @@ def starter_product():
     r = requests.get(f"{API}/products", timeout=20)
     assert r.status_code == 200, r.text
     items = r.json() if isinstance(r.json(), list) else r.json().get("products", r.json().get("items", []))
-    kit = [p for p in items if p.get("is_activation_product")] or [p for p in items if p.get("sku") == "ANJ-STARTER"]
+    # Batch 13: the separate "activation product" (ANJ-STARTER) is retired; any product on sale serves for a purchase
+    kit = [p for p in items if p.get("is_activation_product")] or [p for p in items if p.get("sku") == "ANJ-STARTER"] or \
+        [p for p in items if (p.get("stock") or 0) > 0]
     assert kit, f"No activation product found in /api/products: {items[:1]}"
     return kit[0]
 
@@ -100,7 +120,7 @@ class TestManualUpi:
             "claimed order not visible in /api/admin/orders"
 
         # admin confirm
-        c = adm.put(f"{API}/admin/payments/upi-confirm/{oid}", json={"reference": "QA-UTR-1"}, timeout=30)
+        c = adm.put(f"{API}/admin/payments/upi-confirm/{oid}", json={"reference": "QA-UTR-1", "amount": _amt(oid)}, timeout=30)
         assert c.status_code == 200, c.text
 
         g2 = ds.get(f"{API}/orders/{oid}", timeout=20)
@@ -110,7 +130,7 @@ class TestManualUpi:
         assert od2.get("invoice_number"), "invoice_number not generated"
 
         # idempotency: second confirm must not change anything
-        c2 = adm.put(f"{API}/admin/payments/upi-confirm/{oid}", json={"reference": "QA-UTR-1"}, timeout=30)
+        c2 = adm.put(f"{API}/admin/payments/upi-confirm/{oid}", json={"reference": "QA-UTR-1", "amount": _amt(oid)}, timeout=30)
         assert c2.status_code == 200, c2.text
         od3 = ds.get(f"{API}/orders/{oid}", timeout=20).json()
         assert od3["invoice_number"] == od2["invoice_number"], "invoice regenerated on repeat confirm"
@@ -121,7 +141,7 @@ class TestManualUpi:
         adm, _ = admin
         order = _create_order(ds, starter_product["id"])
         ds.post(f"{API}/payments/upi-claim", json={"order_id": order["id"]}, timeout=25)
-        adm.put(f"{API}/admin/payments/upi-confirm/{order['id']}", json={"reference": "QA-UTR-2"}, timeout=30)
+        adm.put(f"{API}/admin/payments/upi-confirm/{order['id']}", json={"reference": "QA-UTR-2", "amount": _amt(order['id'])}, timeout=30)
         r = ds.post(f"{API}/payments/upi-claim", json={"order_id": order["id"]}, timeout=25)
         assert r.status_code == 400, f"expected 400 for paid order, got {r.status_code} {r.text[:200]}"
 
@@ -137,14 +157,14 @@ class TestManualUpi:
     def test_confirm_requires_admin(self, dist, starter_product):
         ds, _ = dist
         order = _create_order(ds, starter_product["id"])
-        r = ds.put(f"{API}/admin/payments/upi-confirm/{order['id']}", json={"reference": "QA-UTR-3"}, timeout=20)
+        r = ds.put(f"{API}/admin/payments/upi-confirm/{order['id']}", json={"reference": "QA-UTR-3", "amount": _amt(order['id'])}, timeout=20)
         assert r.status_code == 403, f"distributor must not confirm payments, got {r.status_code}"
         # order must stay pending
         assert ds.get(f"{API}/orders/{order['id']}", timeout=20).json()["payment_status"] == "pending"
 
     def test_confirm_unknown_order_404(self, admin):
         adm, _ = admin
-        r = adm.put(f"{API}/admin/payments/upi-confirm/{uuid.uuid4()}", json={"reference": "QA-UTR-4"}, timeout=20)
+        r = adm.put(f"{API}/admin/payments/upi-confirm/{uuid.uuid4()}", json={"reference": "QA-UTR-4", "amount": _amt(uuid.uuid4())}, timeout=20)
         assert r.status_code == 404, r.status_code
 
     def test_cannot_claim_other_users_order(self, admin, dist, starter_product):
@@ -157,11 +177,18 @@ class TestManualUpi:
 
 
 # ---------------- Stripe checkout regression ----------------
+def _skip_if_card_checkout_unconfigured(r):
+    # Batch 13: an isolated test server has no card-gateway credentials (live payment credentials must never be used in tests)
+    if r.status_code == 503 and "not configured" in r.text:
+        pytest.skip("card checkout is not configured on this test server (no gateway credentials); run against staging")
+
+
 class TestStripeRegression:
     def test_checkout_returns_url(self, dist, starter_product):
         ds, _ = dist
         order = _create_order(ds, starter_product["id"])
         r = ds.post(f"{API}/payments/checkout", json={"order_id": order["id"], "origin_url": BASE_URL}, timeout=40)
+        _skip_if_card_checkout_unconfigured(r)
         assert r.status_code == 200, f"{r.status_code} {r.text[:400]}"
         d = r.json()
         assert d.get("checkout_url", "").startswith("http"), d
@@ -175,8 +202,9 @@ class TestStripeRegression:
         adm, _ = admin
         order = _create_order(ds, starter_product["id"])
         ds.post(f"{API}/payments/upi-claim", json={"order_id": order["id"]}, timeout=25)
-        adm.put(f"{API}/admin/payments/upi-confirm/{order['id']}", json={"reference": "QA-UTR-2"}, timeout=30)
+        adm.put(f"{API}/admin/payments/upi-confirm/{order['id']}", json={"reference": "QA-UTR-2", "amount": _amt(order['id'])}, timeout=30)
         r = ds.post(f"{API}/payments/checkout", json={"order_id": order["id"], "origin_url": BASE_URL}, timeout=40)
+        _skip_if_card_checkout_unconfigured(r)
         assert r.status_code == 400, r.status_code
 
 
