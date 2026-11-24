@@ -92,12 +92,17 @@ async def payout_block(order: Optional[dict], now: Optional[datetime] = None, ho
         return "refund_due"
     if any(d.get("status") == "refund_due" for d in order.get("duplicate_payments") or []):
         return "duplicate_payment_refund_due"
+    # Programme 01 (B-001): a vendor group that ended without supplying (rejected / cancelled / returned to origin) carries
+    # `refund_due` until its refund case exists. Until then nothing that depends on it may be paid: the whole-order
+    # commission always waits; a vendor's own settlement waits only for its own group.
+    if any(f.get("refund_due") and (vendor_id is None or f.get("vendor_id") == vendor_id) for f in order.get("fulfilments") or []):
+        return "refund_due"
     d = delivered_at(order, vendor_id)
     if not d:
         return "not_delivered"
     days = max(hold_days or 0, await return_window_days() if window is None else window)
     if now < d + timedelta(days=days):
         return "return_window_open"
-    if await has_open_case(order["id"]):
+    if await has_open_case(order["id"], vendor_id=vendor_id):
         return "open_return_or_refund"
     return None

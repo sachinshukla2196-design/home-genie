@@ -206,9 +206,25 @@ export function Field({ label, htmlFor, hint, error, children, className = "" })
   );
 }
 
-/** Downloads an authenticated CSV (the token lives in the API client, so a plain <a href> would not work). */
+/** A failed blob request carries its JSON error as a Blob; turn it back into JSON so apiError() shows the server's message
+ *  (e.g. "This export has 6,000 rows; the limit is 5,000…") instead of a generic one. */
+async function blobError(e) {
+  const b = e?.response?.data;
+  if (typeof Blob !== "undefined" && b instanceof Blob) {
+    try { e.response.data = JSON.parse(await b.text()); } catch { /* not JSON: keep the generic message */ }
+  }
+  return e;
+}
+
+/** Downloads an authenticated CSV (the token lives in the API client, so a plain <a href> would not work). Nothing is saved when
+ *  the server refuses or fails (the promise rejects with the server's message). */
 export async function downloadCsv(url, filename, params) {
-  const { data } = await API.get(url, { params, responseType: "blob" });
+  let data;
+  try {
+    ({ data } = await API.get(url, { params, responseType: "blob" }));
+  } catch (e) {
+    throw await blobError(e);
+  }
   const href = URL.createObjectURL(data);
   const a = document.createElement("a");
   a.href = href; a.download = filename; document.body.appendChild(a); a.click(); a.remove();

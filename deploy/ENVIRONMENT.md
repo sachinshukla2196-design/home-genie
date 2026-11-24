@@ -52,6 +52,16 @@ the audit log, and **all admin sessions issued before the change are signed out*
 | `STRIPE_WEBHOOK_SECRET` | `whsec_…` signing secret for `/api/webhook/stripe` (Vercel/official-SDK path). Unset → webhooks are rejected; payments are still confirmed when the customer returns via `/api/payments/status`. |
 | `PENDING_PAYMENT_TTL_MINUTES` | Minutes an unpaid ONLINE order keeps its reserved stock before it is cancelled and the stock returned (default `15`). COD orders are never expired. |
 | `ADMIN_PASSCODE` | **Unused** — the admin passcode was removed. Delete it from any environment. |
+| `PAYMENT_IN_PROGRESS_GRACE_MINUTES` | Programme 01 (B-006): extra minutes an unpaid online order keeps its stock when the gateway has already reported a payment for it (default `60`). |
+| `ORDER_CREATE_PER_USER_10MIN` | Programme 01 (B-006): orders one account may place per 10 minutes (default `10`; `RATE_LIMIT_SCALE` applies). |
+| `ORDER_CREATE_PER_IP_10MIN` | Programme 01 (B-006): orders one IP address may place per 10 minutes across accounts (default `60`, generous for shared networks). |
+| `ORDER_OPEN_UNPAID_MAX` | Programme 01 (B-006): open orders per account still awaiting payment or seller acceptance before new orders are refused (default `5`). |
+| `ORDER_SUBMIT_WINDOW_SECONDS` | Programme 01 (B-006): the same cart submitted again within this many seconds returns the same order (default `60`). |
+| `CRON_RUN_BUDGET_SECONDS` | Programme 01 (B-005): seconds one cron run spends on repair / release sweeps before stopping with a checkpoint (default `40`; the platform stops functions at 60). |
+
+**Programme 01 deployment prerequisite:** money writes are refused (HTTP 503 `FIN_INDEX_NOT_READY`) until the protective unique indexes
+exist. Run `backend/scripts/vendor_foundation_migrate.py --apply` against the production database after a verified backup BEFORE deploying
+this code (see `docs/PROGRAMME_01_TECHNICAL_SPECIFICATIONS.md` §4).
 
 ## Rotating the admin password safely
 1. `python3 backend/scripts/hash_admin_password.py --generate` (or without `--generate` to type your own).

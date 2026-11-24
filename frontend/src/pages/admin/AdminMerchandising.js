@@ -7,6 +7,9 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { PageHeader, SectionCard } from "@/components/PageHeader";
 import { ImageInput } from "@/components/vendor/ImageInput";
 import { API, apiError } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
+import { can } from "@/lib/roles";
+import { RoleNote } from "@/components/RoleGate";
 
 const KIND_LABEL = { banner: "Banner", collection: "Collection", featured_products: "Featured products", featured_categories: "Featured categories",
   new_arrivals: "New arrivals (automatic)", bestsellers: "Bestsellers (from real sales)" };
@@ -19,6 +22,8 @@ const fromLocal = (v) => (v ? `${v}:00+05:30` : null);
 
 /** Batch 13, Phase 10: merchandising sections (super_admin / admin edit; every change audited). */
 export default function AdminMerchandising() {
+  const { user } = useAuth();
+  const canEdit = can(user, "contentEditor");        // W7: the server refuses every change from other roles; they still view and preview
   const [d, setD] = useState(null);
   const [edit, setEdit] = useState(null);
   const [preview, setPreview] = useState(null);
@@ -36,22 +41,23 @@ export default function AdminMerchandising() {
   return (
     <div className="space-y-5">
       <PageHeader title="Merchandising" subtitle="Banners and product sections on the shop home. Only approved products on sale are shown." icon={Megaphone}
-        actions={<Button className="hg-btn h-11 rounded-full px-5" onClick={() => setEdit({ kind: "collection", title: "", subtitle: "", product_ids: [], categories: [], limit: 8, window_days: 30, image_desktop: "", image_mobile: "", alt: "", link: "" })} data-testid="merch-add"><Plus size={16} /> New section</Button>} />
+        actions={canEdit && <Button className="hg-btn h-11 rounded-full px-5" onClick={() => setEdit({ kind: "collection", title: "", subtitle: "", product_ids: [], categories: [], limit: 8, window_days: 30, image_desktop: "", image_mobile: "", alt: "", link: "" })} data-testid="merch-add"><Plus size={16} /> New section</Button>} />
+      {!canEdit && <RoleNote set="contentEditor" what="Changing merchandising" testid="merch-readonly" />}
       {d.sections.length === 0 ? <p className="text-sm text-muted2">No sections yet. The shop home shows its normal product list.</p> : (
         <ul className="space-y-2" data-testid="merch-list">
           {d.sections.map((s, i) => (
             <li key={s.id} className="hg-card flex flex-wrap items-center gap-3 p-3 text-sm">
-              <div className="flex flex-col"><button aria-label="Move up" onClick={() => move(i, -1)} disabled={i === 0} className="disabled:opacity-30"><ArrowUp size={15} /></button>
-                <button aria-label="Move down" onClick={() => move(i, 1)} disabled={i === d.sections.length - 1} className="disabled:opacity-30"><ArrowDown size={15} /></button></div>
+              {canEdit && <div className="flex flex-col"><button aria-label="Move up" onClick={() => move(i, -1)} disabled={i === 0} className="disabled:opacity-30"><ArrowUp size={15} /></button>
+                <button aria-label="Move down" onClick={() => move(i, 1)} disabled={i === d.sections.length - 1} className="disabled:opacity-30"><ArrowDown size={15} /></button></div>}
               <div className="min-w-0 flex-1"><div className="font-medium text-ink">{s.title}</div>
                 <div className="text-xs text-muted2">{KIND_LABEL[s.kind]}{s.starts_at ? ` · from ${toLocal(s.starts_at).replace("T", " ")}` : ""}{s.ends_at ? ` · until ${toLocal(s.ends_at).replace("T", " ")}` : ""} IST</div></div>
               <span className={`rounded-full px-2.5 py-0.5 text-[11px] font-semibold ${STATE_TONE[s.state] || ""}`}>{s.state}</span>
               <Button variant="outline" size="sm" className="rounded-full" onClick={() => API.get(`/admin/merch/sections/${s.id}/preview`).then(({ data }) => setPreview({ s, data })).catch((e) => toast.error(apiError(e)))}><Eye size={14} /> Preview</Button>
-              <Button variant="outline" size="sm" className="rounded-full" onClick={() => setEdit({ ...s, starts_local: toLocal(s.starts_at), ends_local: toLocal(s.ends_at) })}><Pencil size={14} /> Edit</Button>
+              {canEdit && <><Button variant="outline" size="sm" className="rounded-full" onClick={() => setEdit({ ...s, starts_local: toLocal(s.starts_at), ends_local: toLocal(s.ends_at) })}><Pencil size={14} /> Edit</Button>
               {s.status !== "published"
                 ? <Button size="sm" className="hg-btn rounded-full" onClick={() => act(() => API.post(`/admin/merch/sections/${s.id}/status`, { action: "publish" }), "Published")} data-testid={`merch-publish-${i}`}>Publish</Button>
                 : <Button variant="outline" size="sm" className="rounded-full" onClick={() => act(() => API.post(`/admin/merch/sections/${s.id}/status`, { action: "unpublish" }), "Unpublished")}>Unpublish</Button>}
-              <Button variant="ghost" size="sm" className="rounded-full text-danger" aria-label="Delete section" onClick={() => window.confirm("Delete this section?") && act(() => API.post(`/admin/merch/sections/${s.id}/status`, { action: "delete" }), "Deleted")}><Trash2 size={14} /></Button>
+              <Button variant="ghost" size="sm" className="rounded-full text-danger" aria-label="Delete section" onClick={() => window.confirm("Delete this section?") && act(() => API.post(`/admin/merch/sections/${s.id}/status`, { action: "delete" }), "Deleted")}><Trash2 size={14} /></Button></>}
             </li>
           ))}
         </ul>
@@ -104,8 +110,8 @@ function Editor({ value, onClose, onSaved }) {
         <label className="text-sm font-medium">Ends (IST, optional)<Input type="datetime-local" className="mt-1 h-11 rounded-xl" value={f.ends_local || ""} onChange={(e) => setF({ ...f, ends_local: e.target.value })} /></label>
         <label className="text-sm font-medium sm:col-span-2">Link (a page of this shop, optional)<Input className="mt-1 h-11 rounded-xl" placeholder="/app/products?category=Sarees" value={f.link || ""} onChange={(e) => setF({ ...f, link: e.target.value })} /></label>
         {f.kind === "banner" && <>
-          <div className="sm:col-span-2"><div className="text-sm font-medium">Desktop image</div><ImageInput value={f.image_desktop ? [f.image_desktop] : []} max={1} onChange={(v) => setF({ ...f, image_desktop: v[0] || "" })} testid="merch-img-d" /></div>
-          <div className="sm:col-span-2"><div className="text-sm font-medium">Mobile image (optional)</div><ImageInput value={f.image_mobile ? [f.image_mobile] : []} max={1} onChange={(v) => setF({ ...f, image_mobile: v[0] || "" })} testid="merch-img-m" /></div>
+          <div className="sm:col-span-2"><div className="text-sm font-medium">Desktop image</div><ImageInput admin kind="merchandising" value={f.image_desktop ? [f.image_desktop] : []} max={1} onChange={(v) => setF({ ...f, image_desktop: v[0] || "" })} testid="merch-img-d" /></div>
+          <div className="sm:col-span-2"><div className="text-sm font-medium">Mobile image (optional)</div><ImageInput admin kind="merchandising" value={f.image_mobile ? [f.image_mobile] : []} max={1} onChange={(v) => setF({ ...f, image_mobile: v[0] || "" })} testid="merch-img-m" /></div>
           <label className="text-sm font-medium sm:col-span-2">Image description (alternative text)<Input className="mt-1 h-11 rounded-xl" maxLength={125} value={f.alt || ""} onChange={(e) => setF({ ...f, alt: e.target.value })} /></label>
         </>}
         {f.kind === "featured_categories" && <div className="flex flex-wrap gap-2 sm:col-span-2">{PILLARS.map((c) => { const on = (f.categories || []).includes(c); return (

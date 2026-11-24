@@ -2,7 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import { Link, Navigate, useLocation, Outlet } from "react-router-dom";
 import { MotionConfig, motion } from "framer-motion";
 import {
-  LayoutDashboard, Package, ClipboardList, Store, LogOut, Bell, Boxes, Truck, Undo2, BarChart3, Landmark, Banknote, LifeBuoy, ShieldCheck, Menu, FileBarChart, TrendingUp, Users, FileText,
+  LayoutDashboard, Package, ClipboardList, Store, LogOut, Bell, Boxes, Truck, BarChart3, Landmark, Banknote, LifeBuoy, ShieldCheck, Menu, FileBarChart, TrendingUp, Users, FileText,
 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";

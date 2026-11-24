@@ -26,7 +26,6 @@ SPECS = [
     {"coll": "orders", "keys": [("id", 1)], "name": "orders_id"},
     {"coll": "products", "keys": [("id", 1)], "name": "products_id"},
     {"coll": "payment_transactions", "keys": [("session_id", 1)], "name": "payment_transactions_session"},
-    {"coll": "kyc_records", "keys": [("user_id", 1)], "name": "kyc_records_user"},
     {"coll": "login_attempts", "keys": [("identifier", 1)], "name": "login_attempts_identifier"},
     {"coll": "contact_change_requests", "keys": [("user_id", 1), ("status", 1)], "name": "contact_change_user_status"},
     {"coll": "products", "keys": [("sku", 1)], "name": "products_sku_unique", "unique": True},
@@ -113,6 +112,65 @@ SPECS = [
      "partialFilterExpression": PARTIAL_STR("application_id")},
     {"coll": "users", "keys": [("vendor_application_id", 1)], "name": "users_vendor_application_unique", "unique": True,
      "partialFilterExpression": PARTIAL_STR("vendor_application_id")},
+    # Programme 01: open-order count per account (B-006), duplicate-submission claims expire (B-006), completion markers (B-003)
+    {"coll": "orders", "keys": [("user_id", 1), ("payment_status", 1)], "name": "orders_user_payment_status"},
+    {"coll": "order_submissions", "keys": [("expires_at", 1)], "name": "order_submissions_expires", "expireAfterSeconds": 0},
+    {"coll": "orders", "keys": [("completion_due", 1)], "name": "orders_completion_due", "partialFilterExpression": {"completion_due": True}},
+    # Programme 02 / W5 — each index below serves a named query (see HOME_GENIES_DATABASE_INDEX_AND_REPAIR_AUDIT_W5.md §5 for the
+    # query, its frequency and the write cost). All are additive; none is unique except the three integrity constraints at the end.
+    {"coll": "stock_txns", "keys": [("id", 1)], "name": "stock_txns_id"},                         # stock._status per journal step
+    {"coll": "stock_movements", "keys": [("txn_id", 1), ("line", 1)], "name": "stock_movements_txn_line"},   # _log_movement per line
+    {"coll": "stock_movements", "keys": [("product_id", 1), ("created_at", -1)], "name": "stock_movements_product_created"},
+    {"coll": "stock_movements", "keys": [("order_id", 1)], "name": "stock_movements_order"},
+    {"coll": "commissions", "keys": [("id", 1)], "name": "commissions_id"},
+    {"coll": "commissions", "keys": [("order_id", 1)], "name": "commissions_order"},
+    {"coll": "order_refunds", "keys": [("id", 1)], "name": "order_refunds_id"},
+    {"coll": "order_refunds", "keys": [("order_id", 1), ("created_at", 1)], "name": "order_refunds_order_created"},
+    {"coll": "refund_cases", "keys": [("id", 1)], "name": "refund_cases_id"},
+    {"coll": "refund_cases", "keys": [("order_id", 1), ("created_at", 1)], "name": "refund_cases_order_created"},
+    {"coll": "return_cases", "keys": [("id", 1)], "name": "return_cases_id"},
+    {"coll": "return_cases", "keys": [("order_id", 1), ("created_at", 1)], "name": "return_cases_order_created"},
+    {"coll": "settlements", "keys": [("id", 1)], "name": "settlements_id"},
+    {"coll": "withdrawal_requests", "keys": [("id", 1)], "name": "withdrawal_requests_id"},
+    {"coll": "payment_transactions", "keys": [("order_id", 1), ("created_at", 1)], "name": "payment_transactions_order_created"},
+    {"coll": "users", "keys": [("role", 1)], "name": "users_role"},
+    {"coll": "users", "keys": [("sponsor_user_id", 1), ("status", 1)], "name": "users_sponsor_status"},
+    {"coll": "referral_relationships", "keys": [("sponsor_id", 1)], "name": "referral_relationships_sponsor"},
+    {"coll": "referral_relationships", "keys": [("referred_user_id", 1)], "name": "referral_relationships_referred"},
+    {"coll": "referral_codes", "keys": [("code", 1)], "name": "referral_codes_code"},
+    {"coll": "files", "keys": [("storage_path", 1)], "name": "files_storage_path"},              # every /api/files request
+    {"coll": "audit_logs", "keys": [("entity_id", 1), ("created_at", -1)], "name": "audit_logs_entity_created"},
+    {"coll": "audit_logs", "keys": [("created_at", -1)], "name": "audit_logs_created"},
+    {"coll": "vendor_agreements", "keys": [("vendor_id", 1), ("status", 1), ("effective_from", -1)], "name": "vendor_agreements_vendor_status"},
+    {"coll": "password_reset_tokens", "keys": [("token_hash", 1)], "name": "password_reset_tokens_hash"},
+    {"coll": "orders", "keys": [("payment_status", 1), ("created_at", -1)], "name": "orders_payment_status_created_at"},
+    {"coll": "job_failures", "keys": [("job", 1)], "name": "job_failures_job"},                  # read at the start of every sweep
+    # Login: `{"$or": [{"email": x}, {"mobile": x}, {"distributor_id": x}]}` cannot use the PARTIAL unique e-mail index (the planner
+    # does not infer `$type: string` from an equality), and one unindexed $or branch makes the whole query scan every user - on
+    # every member login. A plain lookup index beside the unique one (same keys, no filter; MongoDB allows both) fixes the branch;
+    # uniqueness stays with users_email_partial_unique. Admin login / team checks look users up by `username` (no index at all).
+    {"coll": "users", "keys": [("email", 1)], "name": "users_email_lookup"},
+    {"coll": "users", "keys": [("username", 1)], "name": "users_username"},
+    # Repair sweeps that run INSIDE requests (checkout / order views run journal recovery and restock intents; the returns page runs
+    # the refund-obligation sweeps). Their selections key on a rare state, but the runner sorts by `id`, so without these the planner
+    # walked every order / journal row on every such request (measured: 30,000-120,000 documents examined with nothing to repair).
+    # Equality / `$ne` on the leading field lets the index skip settled rows; the partial ones hold only flagged documents.
+    {"coll": "stock_txns", "keys": [("finalized", 1), ("status", 1), ("updated_at", 1)], "name": "stock_txns_unfinalized"},
+    {"coll": "stock_txns", "keys": [("bound", 1), ("kind", 1), ("status", 1), ("updated_at", 1)], "name": "stock_txns_unbound"},
+    {"coll": "stock_txns", "keys": [("pruned", 1), ("updated_at", 1)], "name": "stock_txns_unpruned"},
+    {"coll": "orders", "keys": [("updated_at", 1)], "name": "orders_restock_intents_open",
+     "partialFilterExpression": {"restock_intents.0": {"$exists": True}}},
+    {"coll": "orders", "keys": [("needs_refund", 1)], "name": "orders_needs_refund", "partialFilterExpression": {"needs_refund": True}},
+    {"coll": "orders", "keys": [("fulfilments.refund_due", 1)], "name": "orders_fulfilment_refund_due",
+     "partialFilterExpression": {"fulfilments.refund_due": True}},
+    {"coll": "orders", "keys": [("refund_due_cancel", 1)], "name": "orders_refund_due_cancel", "partialFilterExpression": {"refund_due_cancel": True}},
+    {"coll": "commissions", "keys": [("release.applied", 1)], "name": "commissions_release_unapplied",
+     "partialFilterExpression": {"release.applied": False}},
+    # integrity: one counter per sequence (two first-time upserts issued the same invoice / refund / settlement number), one cron run
+    # per delivery id, one KYC record per member (a double submission created two). Each is refused by apply() while duplicates exist.
+    {"coll": "counters", "keys": [("id", 1)], "name": "counters_id_unique", "unique": True},
+    {"coll": "cron_runs", "keys": [("run_id", 1)], "name": "cron_runs_run_id_unique", "unique": True},
+    {"coll": "kyc_records", "keys": [("user_id", 1)], "name": "kyc_records_user_unique", "unique": True},
 ]
 
 # Indexes that a spec replaces. Dropped only after the replacement is confirmed safe to create (no duplicates). A legacy index with
@@ -124,10 +182,14 @@ LEGACY = [
      "reason": "invited members have no user yet, so the uniqueness must apply only to members who have one"},
     {"coll": "vendor_members", "name": "members_user", "replaced_by": "members_user_unique",
      "reason": "one staff login may belong to one vendor only"},
+    {"coll": "kyc_records", "name": "kyc_records_user", "replaced_by": "kyc_records_user_unique",
+     "reason": "W5: one KYC record per member (a double submission created two); same keys, so the non-unique index must go"},
 ]
 
-# Each index key pattern, with the options that define it.
-OPTION_KEYS = ("unique", "sparse", "partialFilterExpression", "expireAfterSeconds")
+# Each index key pattern, with the options that define it. W5: collation is part of the definition (a case-insensitive unique
+# index enforces a different rule), so an unexpected collation is a conflict, not a match.
+OPTION_KEYS = ("unique", "sparse", "partialFilterExpression", "expireAfterSeconds", "collation")
+TEXT_LANGUAGE = "none"                       # every text index is created without stemming / stop words (Batch 13)
 
 
 def _key(spec_or_info):
@@ -135,7 +197,10 @@ def _key(spec_or_info):
 
 
 def _options(d):
-    return {k: d[k] for k in OPTION_KEYS if k in d and d[k] is not None}
+    out = {k: d[k] for k in OPTION_KEYS if k in d and d[k] is not None}
+    if "collation" in out:                   # the server reports the ICU `version`; it is not an input option
+        out["collation"] = {k: v for k, v in dict(out["collation"]).items() if k != "version"}
+    return out
 
 
 def _info_as_spec(info: dict) -> dict:
@@ -150,9 +215,16 @@ def _is_text(spec_or_info) -> bool:
 def _matches(info: dict, spec: dict) -> bool:
     # Batch 13: MongoDB reports a text index as ("_fts", "text") + ("_ftsx", 1) with its field weights, so it is compared by
     # its weights (which list the indexed fields) instead of its key pattern.
+    # W5: the language is compared too (another default language would stem and drop stop words, changing search results).
     if _is_text(spec):
-        return _is_text(info) and info.get("weights") == spec.get("weights")
+        return (_is_text(info) and info.get("weights") == spec.get("weights")
+                and info.get("default_language", "english") == TEXT_LANGUAGE and "collation" not in info)
     return _key(info) == _key(spec) and _options(_info_as_spec(info)) == _options(spec)
+
+
+def _same_slot(info: dict, spec: dict) -> bool:
+    """True when `info` occupies the place of `spec`: same key pattern (or, for text, any text index - one per collection)."""
+    return _key(info) == _key(spec) or (_is_text(spec) and _is_text(info))
 
 
 async def _existing(coll: str) -> dict:
@@ -166,14 +238,25 @@ async def plan() -> dict:
     """Read-only. Compares the database with SPECS and LEGACY."""
     existing = {c: await _existing(c) for c in {s["coll"] for s in SPECS} | {l["coll"] for l in LEGACY}}
     legacy_names = {(l["coll"], l["name"]) for l in LEGACY}
+    spec_names = {(s["coll"], s["name"]) for s in SPECS}
     present, missing, conflict = [], [], []
     for s in SPECS:
         infos = existing[s["coll"]]
-        # a legacy index is expected to be replaced, so it is not a conflict
-        others = {n: i for n, i in infos.items() if (s["coll"], n) not in legacy_names}
-        if any(_matches(i, s) for i in infos.values()):
+        # a legacy index is expected to be replaced, so it is not a conflict; another SPECIFIED index on the same keys (W5: the
+        # plain e-mail lookup index beside the partial unique one) is judged under its own spec, so it is not a conflict either
+        others = {n: i for n, i in infos.items() if (s["coll"], n) not in legacy_names and (s["coll"], n) not in spec_names}
+        # W5: present means the index exists UNDER ITS OWN NAME with exactly this definition - the same test money_guard applies.
+        # (An identical index under another name used to count as present here while the guard refused it, so apply() never
+        # repaired the state and the money area stayed blocked.)
+        if s["name"] in infos and _matches(infos[s["name"]], s):
             present.append(s["name"])
-        elif s["name"] in infos or any(_key(i) == _key(s) for i in others.values()) or (_is_text(s) and any(_is_text(i) for i in others.values())):
+        elif s["name"] in infos:
+            conflict.append({"index": s["name"], "collection": s["coll"], "reason": "the index exists under this name with a different definition"})
+        elif any(_matches(i, s) for i in others.values()):
+            other = next(n for n, i in others.items() if _matches(i, s))
+            conflict.append({"index": s["name"], "collection": s["coll"],
+                             "reason": f"the same definition exists under another name ({other}); rename it deliberately"})
+        elif any(_same_slot(i, s) for i in others.values()):
             conflict.append({"index": s["name"], "collection": s["coll"], "reason": "an index on the same keys has different options or name"})
         else:
             missing.append(s["name"])
@@ -190,15 +273,66 @@ async def check_missing() -> dict:
     return result
 
 
-async def _duplicates(spec: dict) -> int:
-    """How many key values are held by more than one document (for a unique index). Counts only."""
+def duplicate_pipeline(spec: dict, with_ids: bool = False) -> list:
+    """Aggregation that yields one row per key value held by MORE THAN ONE DOCUMENT, exactly as the unique index would see it
+    (W5 corrections):
+      - array (multikey) fields are unwound, so a value shared by two documents' arrays is found even when the arrays differ;
+        repeats inside one document's own array are not duplicates for a unique index and are not counted;
+      - a missing field and an explicit null are the same key (MongoDB indexes a missing field as null);
+      - the partial filter / sparse rule limits the documents considered, as it limits the index."""
     match = dict(spec.get("partialFilterExpression") or {})
     if spec.get("sparse"):
         match.update({f: {"$exists": True} for f, _ in spec["keys"]})
-    group_id = {f.replace(".", "_"): f"${f}" for f, _ in spec["keys"]}
-    rows = await db[spec["coll"]].aggregate([{"$match": match}, {"$group": {"_id": group_id, "n": {"$sum": 1}}},
-                                             {"$match": {"n": {"$gt": 1}}}, {"$count": "dups"}]).to_list(1)
+    pipe = [{"$match": match}]
+    for prefix in sorted({f.split(".")[0] for f, _ in spec["keys"] if "." in f}):
+        pipe.append({"$unwind": {"path": f"${prefix}", "preserveNullAndEmptyArrays": True}})
+    for f, _ in spec["keys"]:
+        if "." not in f:                     # a top-level array of scalars is multikey too
+            pipe.append({"$unwind": {"path": f"${f}", "preserveNullAndEmptyArrays": True}})
+    group_id = {f.replace(".", "_"): {"$ifNull": [f"${f}", None]} for f, _ in spec["keys"]}
+    ident = {"$ifNull": ["$id", {"$toString": "$_id"}]}
+    pipe += [{"$group": {"_id": group_id, "docs": {"$addToSet": "$_id"}, **({"ids": {"$addToSet": ident}} if with_ids else {})}},
+             {"$match": {"docs.1": {"$exists": True}}}]
+    return pipe
+
+
+async def _duplicates(spec: dict) -> int:
+    """How many key values are held by more than one document (for a unique index). Counts only."""
+    rows = await db[spec["coll"]].aggregate(duplicate_pipeline(spec) + [{"$count": "dups"}]).to_list(1)
     return rows[0]["dups"] if rows else 0
+
+
+def spec_version() -> str:
+    """W5: a fingerprint of SPECS + LEGACY (name, collection, keys, options). Migration runs record it, so it is always known which
+    definition set a database was last migrated to; any change to an index definition changes it."""
+    import hashlib
+    import json
+    canon = [{"c": s["coll"], "n": s["name"], "k": [list(k) for k in s["keys"]], "o": _options(s), "w": s.get("weights")}
+             for s in sorted(SPECS, key=lambda x: x["name"])] + [{"legacy": l["coll"] + "." + l["name"], "by": l["replaced_by"]} for l in LEGACY]
+    return hashlib.sha256(json.dumps(canon, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+async def dry_run() -> dict:
+    """W5: read-only preview of apply(): every index it would create, every create it would refuse (with the number of duplicate
+    key values - counts only, never the values), every legacy index it would replace, and every conflict it will leave for a
+    person. Nothing is written."""
+    p = await plan()
+    by_name = {s["name"]: s for s in SPECS}
+    legacy_by_replacement = {l["replaced_by"]: l for l in LEGACY}
+    would_create, would_fail, would_replace = [], [], []
+    for name in p["missing"]:
+        spec = by_name[name]
+        dups = await _duplicates(spec) if spec.get("unique") else 0
+        row = {"index": name, "collection": spec["coll"], "keys": [list(k) for k in spec["keys"]], "options": _options(spec)}
+        if dups:
+            would_fail.append({**row, "duplicates": dups, "reason": "duplicate key values must be resolved by a person first"})
+            continue
+        would_create.append(row)
+        legacy = legacy_by_replacement.get(name)
+        if legacy and legacy["name"] in await _existing(spec["coll"]):
+            would_replace.append({"index": legacy["name"], "collection": spec["coll"], "replaced_by": name, "reason": legacy["reason"]})
+    return {"spec_version": spec_version(), "present": len(p["present"]), "would_create": would_create, "would_fail": would_fail,
+            "would_replace": would_replace, "conflict": p["conflict"]}
 
 
 async def apply() -> dict:
@@ -220,7 +354,7 @@ async def apply() -> dict:
             await db[spec["coll"]].drop_index(legacy["name"])
         try:
             await db[spec["coll"]].create_index(spec["keys"], name=name, **_options(spec),
-                                                **({"weights": spec["weights"], "default_language": "none"} if _is_text(spec) else {}))
+                                                **({"weights": spec["weights"], "default_language": TEXT_LANGUAGE} if _is_text(spec) else {}))
         except Exception as e:
             if legacy_info is not None:        # put the legacy index back exactly as it was
                 await db[spec["coll"]].create_index(_key(legacy_info), name=legacy["name"], **_options(_info_as_spec(legacy_info)))
@@ -229,5 +363,7 @@ async def apply() -> dict:
         report["created"].append(name)
         if legacy_info is not None:
             report["dropped"].append({"index": legacy["name"], "collection": spec["coll"], "replaced_by": name, "reason": legacy["reason"]})
+    from money_guard import reset_cache       # Programme 01 (B-004): the money guard re-reads the indexes after a migration
+    reset_cache()
     return report
 

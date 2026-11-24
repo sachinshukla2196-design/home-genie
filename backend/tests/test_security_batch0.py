@@ -221,14 +221,17 @@ def test_no_report_or_export_leaks_credentials_or_aadhaar(c):
         assert r.status_code == 200
         _assert_clean(r.json(), name)
         assert all(set(row) <= set(fields) for row in r.json()["rows"])
-        csv_text = c.get(f"/api/admin/reports/{name}/export", headers=_hdr("sup")).text
+        # Programme 02 / W4: report CSVs follow the export roles (super_admin, admin, accounts_admin); support_admin still VIEWS the
+        # reports (above) but its export is refused - so the export is checked as the super admin, with the same assertions.
+        assert c.get(f"/api/admin/reports/{name}/export", headers=_hdr("sup")).status_code == 403
+        csv_text = c.get(f"/api/admin/reports/{name}/export", headers=_hdr("super")).text
         assert "password_hash" not in csv_text and RAW_AADHAAR not in csv_text and "$2b$" not in csv_text
         assert csv_text.splitlines()[0].split(",") == fields
 
 
 def test_csv_export_neutralises_formulas(c):
     _run(c, lambda: db.users.update_one({"id": S["m7"]["id"]}, {"$set": {"full_name": "=HYPERLINK(\"http://x\")"}}))
-    csv_text = c.get("/api/admin/reports/registrations/export", headers=_hdr("sup")).text
+    csv_text = c.get("/api/admin/reports/registrations/export", headers=_hdr("super")).text   # W4: support_admin cannot export
     assert "'=HYPERLINK" in csv_text and "\n=HYPERLINK" not in csv_text and ",=HYPERLINK" not in csv_text
 
 

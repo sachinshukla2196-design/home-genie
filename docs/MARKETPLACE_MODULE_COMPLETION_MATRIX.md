@@ -54,3 +54,22 @@ noted. Nothing here is production-verified.
 | Category / attribute management screens | NOT STARTED | templates live in code |
 | Platform role expansion | BLOCKED BY OWNER DECISION | D-16 |
 | Settings authorisation for money-affecting values | BLOCKED BY OWNER DECISION | D-05 |
+
+## Programme 00 update (2026-11-23)
+This matrix is kept for history. It is **superseded** by `docs/HOME_GENIES_MODULE_COMPLETION_MATRIX.md`: modules A–O,
+266 sub-capabilities, status 1–9, and the evidence for each. Corrections to the rows above, found in the Programme 00 audit at
+`d31cb74`:
+- "Cart, checkout, payment (online / UPI / COD)": the default "Place order" uses Stripe and fails with 503 when Stripe is not
+  configured, leaving a pending order that holds stock (B-015). A prepaid order returned to origin has no refund path (B-001).
+- "Operations … refunds, returns": a refund case can be confirmed with nothing booked (B-002); refunds are recorded, not paid
+  through the gateway.
+- "Merchandising": admin image upload fails (403, B-009); the merchandising screen accepts any https image URL.
+- "Reports with sensitive-data restrictions": the old reports export full mobile numbers and e-mail addresses to every admin role,
+  and the export is not audited (B-019).
+- Vendor profile (VEN-05): implemented in Batch 14, no tests; a regression on contact save (B-008).
+
+
+---
+**Reconciliation 2026-11-24 (pointer; history above unchanged).** Current, authoritative documents: `HOME_GENIES_MASTER_ROADMAP_CURRENT.md`,
+`HOME_GENIES_CURRENT_MODULE_COMPLETION_MATRIX.md`, `HOME_GENIES_OWNER_DECISION_REGISTER.md`, `HOME_GENIES_PROGRAMME_02_READINESS.md`,
+`HOME_GENIES_REMAINING_WORK_REGISTER.md`.

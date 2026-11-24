@@ -7,12 +7,9 @@ Privacy: the customer's account contact (mobile / e-mail) is masked in lists and
 roles that deal with customers (super_admin, admin, support_admin). The delivery address snapshot is shown in the detail (needed
 to resolve delivery and returns) and is never exported.
 """
-import csv
-import io
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from core import db, require_admin
 from money import paise_of
@@ -20,6 +17,7 @@ from money import paise_of
 router = APIRouter(prefix="/api/admin/order-ops", tags=["admin-order-ops"])
 CONTACT_ROLES = ("super_admin", "admin", "support_admin")
 EXPORT_ROLES = ("super_admin", "admin", "accounts_admin")
+EXPORT_MAX_ROWS = 5000
 SORTS = {"created": "created_at", "total": "total_paise", "number": "order_number"}
 
 
@@ -119,30 +117,42 @@ async def list_orders(q: Optional[str] = None, vendor_id: Optional[str] = None, 
 async def export_orders(q: Optional[str] = None, vendor_id: Optional[str] = None, payment_status: Optional[str] = None,
                         status: Optional[str] = None, fulfilment: Optional[str] = None, method: Optional[str] = None,
                         refund: Optional[str] = None, has_return: Optional[bool] = None, frm: Optional[str] = None,
-                        to: Optional[str] = None, admin: dict = Depends(require_admin)):
-    """CSV of the filtered orders (max 5,000). No addresses; customer contact masked; text is formula-injection safe."""
-    from catalogue import csv_safe
+                        to: Optional[str] = None, request: Request = None, admin: dict = Depends(require_admin)):
+    """CSV of the filtered orders (max 5,000 - W4: a larger result is refused with 413, never silently cut). No addresses; customer
+    contact masked; every cell formula-injection safe; every attempt audited (exports.audit_export)."""
     from core import log_audit
+    from exports import audit_export, check_size, csv_response, csv_text, new_export_id
+    eid = new_export_id()
+    filters = {k: v for k, v in dict(q=q, vendor_id=vendor_id, payment_status=payment_status, status=status, fulfilment=fulfilment,
+                                     method=method, refund=refund, has_return=has_return).items() if v not in (None, "")}
+    ctx = {"date_from": frm, "date_to": to, "filters": filters}
     if admin.get("role") not in EXPORT_ROLES:
+        await audit_export(admin, request, "orders", eid, status="refused", reason="role", **ctx)
         raise HTTPException(status_code=403, detail="Your role cannot export orders.")
     flt = await _query(q, vendor_id, payment_status, status, fulfilment, method, refund, has_return, frm, to)
-    rows = await db.orders.find(flt, {"_id": 0}).sort("created_at", -1).limit(5000).to_list(5000)
-    users = {u["id"]: u for u in await db.users.find({"id": {"$in": list({r.get("user_id") for r in rows})}},
-                                                      {"_id": 0, "id": 1, "full_name": 1, "mobile": 1, "distributor_id": 1}).to_list(None)}
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    w.writerow(["order_number", "created_at", "status", "payment_method", "payment_status", "total", "refunded", "lines", "vendors",
-                "customer_account", "customer_mobile"])
-    for o in rows:
-        r = _row(o, users)
-        w.writerow([csv_safe(r["order_number"]), r["created_at"], r["status"], r["payment_method"], r["payment_status"],
-                    r["total_paise"] / 100, r["refunded_paise"] / 100, r["lines"], r["vendors"], csv_safe(r["customer"]["account_id"] or ""),
-                    r["customer"]["mobile"]])
-    await log_audit(admin, "orders_exported", "orders", "", new_value={"rows": len(rows), "filters": {k: v for k, v in
-                    dict(q=q, vendor_id=vendor_id, payment_status=payment_status, status=status, fulfilment=fulfilment, method=method,
-                         refund=refund, has_return=has_return, frm=frm, to=to).items() if v not in (None, "")}})
-    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
-                             headers={"Content-Disposition": "attachment; filename=orders.csv"})
+    await check_size(admin, request, "orders", eid, await db.orders.count_documents(flt), EXPORT_MAX_ROWS, **ctx)
+    try:
+        rows = await db.orders.find(flt, {"_id": 0}).sort("created_at", -1).limit(EXPORT_MAX_ROWS).to_list(EXPORT_MAX_ROWS)
+        users = {u["id"]: u for u in await db.users.find({"id": {"$in": list({r.get("user_id") for r in rows})}},
+                                                          {"_id": 0, "id": 1, "full_name": 1, "mobile": 1, "distributor_id": 1}).to_list(None)}
+        out = []
+        for o in rows:
+            r = _row(o, users)
+            out.append([r["order_number"], r["created_at"], r["status"], r["payment_method"], r["payment_status"],
+                        r["total_paise"] / 100, r["refunded_paise"] / 100, r["lines"], r["vendors"], r["customer"]["account_id"] or "",
+                        r["customer"]["mobile"]])
+        text = csv_text(["order_number", "created_at", "status", "payment_method", "payment_status", "total", "refunded", "lines",
+                         "vendors", "customer_account", "customer_mobile"], out)
+    except HTTPException:
+        raise
+    except Exception as e:
+        await audit_export(admin, request, "orders", eid, status="failed", reason=type(e).__name__, **ctx)
+        raise HTTPException(status_code=500, detail="The export could not be created. Nothing was downloaded.")
+    # the long-standing record stays (existing reports and tests read it); the W4 record adds role, range, format and export id
+    await log_audit(admin, "orders_exported", "orders", "", new_value={"rows": len(rows), "filters": {**{k: v for k, v in filters.items() if k != "q"},
+                    **({"q": "(search)"} if q else {}), **({"frm": frm} if frm else {}), **({"to": to} if to else {})}, "export_id": eid}, request=request)
+    await audit_export(admin, request, "orders", eid, rows=len(rows), **ctx)
+    return csv_response(text, "orders.csv", eid)
 
 
 @router.get("/orders/{order_id}")

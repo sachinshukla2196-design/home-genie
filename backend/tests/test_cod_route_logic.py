@@ -28,7 +28,9 @@ class _Coll:
         self.log.append(("update", q, upd))
         for d in self.docs:
             if all(d.get(k) == v for k, v in q.items()):
-                d.update(upd["$set"])
+                d.update(upd.get("$set", {}))
+                for k in upd.get("$unset", {}):          # Programme 01: the completion marker is cleared with $unset
+                    d.pop(k, None)
                 return type("R", (), {"modified_count": 1})()
         return type("R", (), {"modified_count": 0})()
 
@@ -44,6 +46,7 @@ class _Db:
         self.writes = []
         self.orders = _Coll([order], self.writes)
         self.users = _Coll([], self.writes)
+        self.commission_plans = _Coll([], self.writes)   # read by the shared completion step (Programme 01, B-003)
 
 
 def _order(**kw):
@@ -73,9 +76,18 @@ def env(monkeypatch):
     monkeypatch.setattr("commission.distribute_sale_commissions", distribute)
     monkeypatch.setattr("ledger.post_order_collected", ledger)
 
+    # Programme 01 (B-004): an in-memory fake cannot hold real unique indexes; the index guard itself is covered against
+    # MongoDB in test_programme01_money_guard.py, so here (fake DB only) it is replaced by a no-op.
+    monkeypatch.setattr("money_guard.ensure", noop)
+    import order_completion       # Programme 01 (B-003): the paid COD order is finished by the shared completion step
+    monkeypatch.setattr(order_completion, "log_audit", noop)
+    monkeypatch.setattr(order_completion, "create_notification", noop)
+    monkeypatch.setattr(order_completion, "next_sequence", seq)
+
     def make(order=None):
         fake = _Db(order or _order())
         monkeypatch.setattr(shop_routes, "db", fake)
+        monkeypatch.setattr(order_completion, "db", fake)
         return fake
     return make, calls
 

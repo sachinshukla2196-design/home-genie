@@ -1,11 +1,10 @@
 import React, { useState } from "react";
 import { ShieldCheck, KeyRound, CheckCircle2, Circle } from "lucide-react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PageHeader, SectionCard } from "@/components/PageHeader";
 import { useI18n } from "@/context/I18nContext";
-import { API, apiError } from "@/lib/api";
+import { API } from "@/lib/api";
 import { Field, useAction } from "@/components/vendor/kit";
 
 export const passwordChecks = (pw) => ({ length: pw.length >= 8, letters: /[A-Za-z]/.test(pw), digits: /\d/.test(pw) });

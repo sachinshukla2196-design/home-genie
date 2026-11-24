@@ -45,11 +45,18 @@ async def post_entry(vendor_id: str, etype: str, amount_paise: int, source_key: 
                      actor: str = "system", reason: str = "", reverses: Optional[str] = None, meta: Optional[dict] = None):
     """Append one entry. Returns (entry, created). Posting an existing `source_key` returns the original, unchanged."""
     assert etype in TYPES and isinstance(amount_paise, int) and amount_paise != 0, (etype, amount_paise)
+    from money_guard import ensure as _money_guard          # Programme 01 (B-004): fail closed without the unique indexes
+    await _money_guard("ledger")
     now = now_iso()
     e = {"id": new_id(), "vendor_id": vendor_id, "type": etype, "amount_paise": amount_paise,
          "amount": paise_to_float(amount_paise), "currency": "INR", "order_id": order_id, "source_key": source_key,
          "reverses": reverses, "reason": reason, "actor": actor, "meta": meta or {}, "status": "posted",
          "posted_at": now, "effective_at": now}
+    # Programme 01 (B-005): repair passes mostly meet entries that already exist; look the key up first (one round trip).
+    # The unique index on source_key still decides any race between two writers.
+    existing = await db.vendor_ledger.find_one({"source_key": source_key}, {"_id": 0})
+    if existing:
+        return existing, False
     try:
         await db.vendor_ledger.insert_one(dict(e))
         return e, True
@@ -160,19 +167,53 @@ async def post_refund_shares(order: dict, refund: dict) -> int:
     return n
 
 
-async def reconcile_ledger(limit: int = 500) -> dict:
-    """Repair sweep: derive every missing entry from the order records. Safe to run any time, any number of times."""
-    sales = reversals = refunds = 0
+async def _missing_entries(o: dict) -> int:
+    """Read-only (dry run): how many ledger entries reconcile_ledger would post for this order."""
+    n = 0
+    for f in o.get("fulfilments", []):
+        vid = f["vendor_id"]
+        has_sale = await db.vendor_ledger.find_one({"source_key": f"sale:{o['id']}:{vid}"}, {"_id": 1})
+        if _sale_eligible(o, f) and not has_sale and vendor_lines_paise(o, vid) > 0:
+            n += 1
+        if f.get("status") in SALE_BLOCKING_FULFILMENT and has_sale and \
+                not await db.vendor_ledger.find_one({"source_key": f"salerev:{o['id']}:{vid}"}, {"_id": 1}):
+            n += 1
+    async for r in db.order_refunds.find({"order_id": o["id"], "status": "completed"}, {"_id": 0, "id": 1, "vendor_id": 1}):
+        for f in o.get("fulfilments", []):
+            if r.get("vendor_id") and r["vendor_id"] != f["vendor_id"]:
+                continue
+            if await db.vendor_ledger.find_one({"source_key": f"sale:{o['id']}:{f['vendor_id']}"}, {"_id": 1}) and \
+                    not await db.vendor_ledger.find_one({"source_key": f"refund:{r['id']}:{f['vendor_id']}"}, {"_id": 1}):
+                n += 1
+    return n
+
+
+async def reconcile_ledger(limit: int = 500, dry_run: bool = False, max_seconds: Optional[float] = None) -> dict:
+    """Repair sweep: derive every missing entry from the order records. Safe to run any time, any number of times.
+
+    Programme 01 (B-005): it used to read only the 500 oldest paid orders and stop. It now walks EVERY paid order with vendor
+    goods in pages of `limit`, by order id, resuming from its checkpoint after an interruption (sweeps.run_sweep). Entries are
+    only ever ADDED under their unique business key; an existing entry is never changed or deleted. `dry_run` writes nothing
+    and counts the orders that would get entries."""
+    from sweeps import run_sweep
+    tot = {"sales": 0, "reversals": 0, "refunds": 0}
     q = {"payment_status": {"$in": ["paid", "partially_refunded", "refunded"]}, "needs_refund": {"$ne": True},
          "fulfilments.0": {"$exists": True}}
-    async for o in db.orders.find(q, {"_id": 0}).sort("paid_at", 1).limit(limit):
-        sales += await post_order_collected(o)
+
+    async def handle(o, dry):
+        if dry:
+            return "eligible" if await _missing_entries(o) else "skipped"
+        before = dict(tot)
+        tot["sales"] += await post_order_collected(o)
         for f in o.get("fulfilments", []):
             if f.get("status") in SALE_BLOCKING_FULFILMENT and await post_sale_reversal(o, f["vendor_id"]):
-                reversals += 1
+                tot["reversals"] += 1
         async for r in db.order_refunds.find({"order_id": o["id"], "status": "completed"}, {"_id": 0}).sort("created_at", 1):
-            refunds += await post_refund_shares(o, r)
-    return {"sales": sales, "reversals": reversals, "refunds": refunds}
+            tot["refunds"] += await post_refund_shares(o, r)
+        return "updated" if tot != before else "skipped"
+    sweep = await run_sweep("ledger_reconcile", "orders", q, handle, batch=limit, dry_run=dry_run, max_seconds=max_seconds,
+                            projection={"_id": 0})
+    return {**tot, "sweep": sweep}
 
 
 async def _eligible_paise(vendor_id: str):

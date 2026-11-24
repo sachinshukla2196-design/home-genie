@@ -13,6 +13,7 @@ import { PageHeader, SectionCard } from "@/components/PageHeader";
 import { StatCard } from "@/components/StatCard";
 import { useI18n } from "@/context/I18nContext";
 import { useAuth } from "@/context/AuthContext";
+import { can } from "@/lib/roles";
 import { API, apiError } from "@/lib/api";
 
 const STATUSES = ["payment_pending", "paid", "processing", "packed", "shipped", "delivered", "cancelled", "refunded"];
@@ -244,7 +245,7 @@ export default function AdminOrders() {
                 <td className="px-4 py-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className={`whitespace-nowrap rounded-full px-2.5 py-0.5 text-xs font-semibold ring-1 ${PAY_PILL(o.payment_status)}`}>{o.payment_status}</span>
-                    {o.payment_method === "cod" && o.payment_status === "cod_pending" && <button onClick={() => openCod(o)} className="whitespace-nowrap rounded-full bg-hg-gold px-3 py-1 text-xs font-semibold text-hg-bg transition-transform hover:-translate-y-0.5" data-testid={`cod-collect-${o.order_number}`}>Cash collected</button>}
+                    {o.payment_method === "cod" && o.payment_status === "cod_pending" && can(user, "codConfirm") && <button onClick={() => openCod(o)} className="whitespace-nowrap rounded-full bg-hg-gold px-3 py-1 text-xs font-semibold text-hg-bg transition-transform hover:-translate-y-0.5" data-testid={`cod-collect-${o.order_number}`}>Cash collected</button>}
                     {isFinance && o.payment_status === "claimed" && <button onClick={() => rejectUpi(o)} className="whitespace-nowrap rounded-full border border-danger/40 px-3 py-1 text-xs font-semibold text-danger hover:bg-danger/10" data-testid={`upi-reject-${o.order_number}`}>Reject UPI</button>}
                     {isFinance && o.payment_status === "claimed" && <button onClick={() => { setConfirmFor(o); setReference(o.upi_reference || ""); setConfirmAmount(""); }} className="hg-btn whitespace-nowrap rounded-full px-3 py-1 text-xs font-semibold text-white transition-transform hover:-translate-y-0.5" data-testid={`upi-confirm-${o.order_number}`}>Confirm UPI</button>}
                   </div>

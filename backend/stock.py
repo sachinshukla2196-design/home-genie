@@ -28,6 +28,10 @@ from pymongo.errors import DuplicateKeyError
 from core import db, now_iso, new_id, create_notification, log_audit
 
 PENDING_ONLINE_TTL_MINUTES = int(os.environ.get("PENDING_PAYMENT_TTL_MINUTES", "15"))
+# Programme 01 (B-006): an order whose payment the gateway has already reported (a payment id is recorded on its attempt - the
+# customer paid, capture or confirmation is still on its way) keeps its stock this much longer before it may expire. A payment
+# that still arrives after expiry is handled by the existing late-payment rule (revive if the stock is there, else refund owed).
+PAYMENT_IN_PROGRESS_GRACE_MINUTES = int(os.environ.get("PAYMENT_IN_PROGRESS_GRACE_MINUTES", "60"))
 RECOVERY_MIN_AGE_S = int(os.environ.get("STOCK_RECOVERY_MIN_AGE_SECONDS", "120"))
 SYSTEM = {"id": "system", "email": None, "role": "system"}
 EXPIRY_REASON = "payment_timeout"
@@ -106,6 +110,8 @@ def _sign(kind: str) -> int:
 
 
 async def _new_txn(key: str, kind: str, order_id: str, reason: str, actor_id: str, lines: list):
+    from money_guard import ensure as _money_guard          # Programme 01 (B-004): fail closed without the unique indexes
+    await _money_guard("stock")
     now = now_iso()
     doc = {"id": new_id(), "key": key, "kind": kind, "order_id": order_id, "reason": reason, "actor_id": actor_id,
            "lines": lines, "status": "pending", "finalized": False, "bound": False, "created_at": now, "updated_at": now}
@@ -151,9 +157,17 @@ async def _run_txn(txn: dict) -> str:
         if txn["status"] == "committed":
             return "committed"
     if txn["status"] == "rolling_back":
+        # DEF-03: a reservation that had COMMITTED (its movement is on the journal) and is now abandoned because its order was
+        # never saved gets a compensating movement, so stock_movements keeps agreeing with the counter. A rollback of a
+        # transaction that never committed (a short line) logs nothing, as before (net zero, no forward row).
+        after_commit = bool(txn.get("abandoned_after_commit"))
         for ln in txn["lines"]:
+            if after_commit:
+                await _log_movement(txn, ln, sign)             # the reservation being undone is on the journal (idempotent)
             _fault("before_compensate", txn=txn, line=ln)
             await _compensate_line(txn["id"], ln, sign * ln["quantity"])
+            if after_commit:
+                await _log_undo(txn, ln, sign)
         await _arbiter(txn["id"], "rolling_back", "rolled_back")
     return (await _status(txn["id"]))["status"]
 
@@ -186,7 +200,7 @@ async def _log_movement(txn: dict, ln: dict, sign: int):
     """One movement row per (transaction, line), even when several runners finalize the same transaction at once.
     The row's _id is derived from the transaction and line, so a concurrent second insert is refused by MongoDB itself
     (an upsert on a non-unique filter could insert twice). A row written before this change (random _id) is found first."""
-    if await db.stock_movements.find_one({"txn_id": txn["id"], "line": ln["i"]}, {"_id": 1}):
+    if await db.stock_movements.find_one({"txn_id": txn["id"], "line": ln["i"], "compensates": {"$ne": True}}, {"_id": 1}):
         return
     try:
         await db.stock_movements.insert_one({
@@ -195,6 +209,17 @@ async def _log_movement(txn: dict, ln: dict, sign: int):
             "actor_id": txn["actor_id"], "created_at": now_iso()})
     except DuplicateKeyError:
         pass                                          # another runner logged this line first
+
+
+async def _log_undo(txn: dict, ln: dict, sign: int):
+    """DEF-03: the compensating journal row of an abandoned, previously committed reservation line. Exactly once (derived _id)."""
+    try:
+        await db.stock_movements.insert_one({
+            "_id": f"mv:{txn['id']}:{ln['i']}:undo", "id": new_id(), "txn_id": txn["id"], "line": ln["i"], "product_id": ln["product_id"],
+            "variant_sku": ln.get("variant_sku"), "delta": -sign * ln["quantity"], "reason": "reservation_abandoned", "compensates": True,
+            "order_id": txn["order_id"], "actor_id": "system", "created_at": now_iso()})
+    except DuplicateKeyError:
+        pass
 
 
 async def _low_stock_alert(txn: dict, ln: dict):
@@ -238,7 +263,7 @@ async def abandon_reservation(order_id: str):
     """The order could not be saved after its stock was reserved: give the stock back right away (recovery would do it
     later anyway). Idempotent."""
     res = await db.stock_txns.update_one({"key": f"reserve:{order_id}", "status": "committed", "bound": {"$ne": True}},
-                                         {"$set": {"status": "rolling_back", "updated_at": now_iso()}})
+                                         {"$set": {"status": "rolling_back", "abandoned_after_commit": True, "updated_at": now_iso()}})
     if res.modified_count == 1:
         t = await db.stock_txns.find_one({"key": f"reserve:{order_id}"}, {"_id": 0})
         await _run_txn(t)
@@ -394,8 +419,24 @@ async def handle_late_payment(order: dict, allow_revive: bool = True) -> bool:
 
 
 # ---------------------------------------------------------------------------------------------- expiry
+async def payment_in_progress(order_id: str) -> bool:
+    """True while a gateway has reported a payment for this order that is not applied yet and the grace period has not ended."""
+    tx = await db.payment_transactions.find_one(
+        {"order_id": order_id, "payment_status": {"$ne": "paid"},
+         "$or": [{"razorpay_payment_id": {"$exists": True, "$nin": [None, ""]}}, {"gateway_events.0": {"$exists": True}}]},
+        {"_id": 0, "created_at": 1})
+    if not tx:
+        return False
+    o = await db.orders.find_one({"id": order_id}, {"_id": 0, "created_at": 1})
+    limit = (datetime.now(timezone.utc) - timedelta(minutes=PENDING_ONLINE_TTL_MINUTES + PAYMENT_IN_PROGRESS_GRACE_MINUTES)).isoformat()
+    return bool(o) and (o.get("created_at") or "") > limit
+
+
 async def expire_one(order_id: str) -> bool:
-    """Cancel one overdue unpaid online order and return its stock. Safe to call concurrently / repeatedly."""
+    """Cancel one overdue unpaid online order and return its stock. Safe to call concurrently / repeatedly.
+    Programme 01 (B-006): not while a reported gateway payment is still within its grace period."""
+    if await payment_in_progress(order_id):
+        return False
     now = now_iso()
     claim = await db.orders.update_one(   # a payment that lands first wins: only a still-unpaid pending online order expires
         {"id": order_id, "payment_method": "online", "payment_status": "pending", "status": "payment_pending",
@@ -454,40 +495,89 @@ async def expire_upi_claim(order_id: str, hours: float) -> bool:
     return True
 
 
-async def expire_upi_claims(limit: int = 100) -> int:
+async def expire_upi_claims(limit: int = 100, max_seconds: Optional[float] = None) -> int:
     from core import get_settings
     hours = float((await get_settings()).get("upi_claim_expiry_hours") or 24)
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-    ids = [o["id"] for o in await db.orders.find(
-        {"payment_status": "claimed", "status": {"$ne": "cancelled"},
-         "$or": [{"claimed_at": {"$lt": cutoff}}, {"claimed_at": {"$exists": False}, "updated_at": {"$lt": cutoff}}]},
-        {"_id": 0, "id": 1}).limit(limit).to_list(limit)]
+    from sweeps import run_sweep       # Programme 01 (B-006): every overdue claim, not only the first `limit`
     n = 0
-    for oid in ids:
-        if await expire_upi_claim(oid, hours):
+
+    async def one(o, _dry):
+        nonlocal n
+        if await expire_upi_claim(o["id"], hours):
             n += 1
+            return "updated"
+        return "skipped"
+    await run_sweep("expire_upi_claims", "orders",
+                    {"payment_status": "claimed", "status": {"$ne": "cancelled"},
+                     "$or": [{"claimed_at": {"$lt": cutoff}}, {"claimed_at": {"$exists": False}, "updated_at": {"$lt": cutoff}}]},
+                    one, batch=limit, max_seconds=max_seconds, projection={"_id": 0, "id": 1})
     return n
 
 
-async def expire_pending_online_orders(limit: int = 100) -> int:
-    """Sweep: expire overdue unpaid online orders, finish interrupted expiries, and run crash recovery."""
-    ids = [o["id"] for o in await db.orders.find(
-        {"payment_method": "online", "payment_status": "pending", "status": "payment_pending",
-         "created_at": {"$lt": _cutoff_iso()}}, {"_id": 0, "id": 1}).limit(limit).to_list(limit)]
+async def expire_pending_online_orders(limit: int = 100, max_seconds: Optional[float] = None) -> int:
+    """Sweep: expire overdue unpaid online orders, finish interrupted expiries, and run crash recovery.
+
+    Programme 01 (B-006): every overdue order is reached (resumable keyset sweep; `limit` is the page size) instead of only the
+    first `limit`. Only ONLINE orders still `pending` expire: a paid order, a UPI claim under review (its own 24 h rule) and every
+    cash-on-delivery order are never touched here - COD follows the seller's fulfilment (accept / reject) and the customer's
+    own cancellation, and no automatic COD expiry exists (owner decision, see OWNER_DECISION_REGISTER)."""
+    from sweeps import run_sweep
     n = 0
-    for oid in ids:
-        if await expire_one(oid):
+
+    async def one(o, _dry):
+        nonlocal n
+        if await expire_one(o["id"]):
             n += 1
-    n += await expire_upi_claims(limit)
+            return "updated"
+        return "skipped"
+    await run_sweep("expire_pending_online", "orders",
+                    {"payment_method": "online", "payment_status": "pending", "status": "payment_pending",
+                     "created_at": {"$lt": _cutoff_iso()}}, one, batch=limit, max_seconds=max_seconds, projection={"_id": 0, "id": 1})
+    n += await expire_upi_claims(limit, max_seconds=max_seconds)
     # Self-heal: cancelled by expiry but interrupted before the stock was returned (e.g. a function timeout).
-    stuck = await db.orders.find(
-        {"$or": [{"cancel_reason": EXPIRY_REASON, "payment_status": "pending"},
-                 {"cancel_reason": UPI_CLAIM_EXPIRED, "payment_status": "claim_expired"}], "stock_reserved": True,
-         "items": {"$elemMatch": {"stock_released": {"$ne": True}}}}, {"_id": 0, "id": 1}).limit(limit).to_list(limit)
-    for o in stuck:
-        if await release_stock(o["id"], "order_payment_timeout", "system"):
+    n += await heal_stuck_expiries(limit, max_seconds=max_seconds)
+    await run_recovery(limit=20, max_seconds=max_seconds)     # DEF-03: 20 is the page size now, not a per-run ceiling
+    return n
+
+
+# DEF-03: an order whose expiry (payment timeout, or UPI claim expiry) was recorded but whose stock was not fully returned
+STUCK_EXPIRY_Q = {"$or": [{"cancel_reason": EXPIRY_REASON, "payment_status": "pending"},
+                          {"cancel_reason": UPI_CLAIM_EXPIRED, "payment_status": "claim_expired"}], "stock_reserved": True,
+                  "items": {"$elemMatch": {"stock_released": {"$ne": True}}}}
+
+
+async def _unreleased_lines(order_id: str) -> int:
+    o = await db.orders.find_one({"id": order_id}, {"_id": 0, "items.stock_released": 1})
+    return sum(1 for li in (o or {}).get("items", []) if li.get("stock_released") is not True)
+
+
+async def heal_stuck_expiries(limit: int = 100, dry_run: bool = False, max_seconds: Optional[float] = None) -> int:
+    """DEF-03 (2026-11-24): return the stock of EVERY expired order whose release was interrupted.
+
+    It used to read `find(stuck).limit(limit)` with no order: a record that kept failing stayed first and starved the rest, and
+    one exception stopped the whole call. Now it is a resumable keyset sweep (sweeps.run_sweep: id order, checkpoint, per-record
+    isolation, failures recorded and retried, dry run, time budget). Each order is RE-CHECKED just before its release, so an order
+    a late payment revived meanwhile (payment no longer pending) is left alone. The release itself is the existing exactly-once
+    `release_stock` (journal key per line and generation), so a retry or a second worker never returns stock twice."""
+    from sweeps import run_sweep
+    n = 0
+
+    async def one(o, dry):
+        nonlocal n
+        if not await db.orders.find_one({"$and": [STUCK_EXPIRY_Q, {"id": o["id"]}]}, {"_id": 1}):
+            return "skipped"                                   # no longer stuck (finished elsewhere, or revived)
+        if dry:
+            n += 1                                             # dry run: the number of orders that would be healed
+            return "eligible"
+        before = await _unreleased_lines(o["id"])
+        await release_stock(o["id"], "order_payment_timeout", "system")
+        if await _unreleased_lines(o["id"]) < before:          # counts a release finished here even if an earlier call created it
             n += 1
-    await run_recovery(limit=20)
+            return "updated"
+        return "skipped"
+    await run_sweep("stock_expiry_self_heal", "orders", STUCK_EXPIRY_Q, one, batch=limit, dry_run=dry_run, max_seconds=max_seconds,
+                    projection={"_id": 0, "id": 1})
     return n
 
 
@@ -544,62 +634,120 @@ async def run_intents(order_id: str) -> int:
 
 
 # ---------------------------------------------------------------------------------------------- recovery
-async def recover_stock_txns(limit: int = 50, min_age_s: Optional[int] = None) -> int:
-    """Finish interrupted transactions older than the minimum age."""
-    cutoff = _age_cutoff(min_age_s)
-    q = {"updated_at": {"$lt": cutoff}, "$or": [
+def _recoverable_txn_q(min_age_s: Optional[int] = None) -> dict:
+    return {"updated_at": {"$lt": _age_cutoff(min_age_s)}, "$or": [
         {"status": {"$in": ["pending", "rolling_back"]}},
         {"status": "committed", "finalized": {"$ne": True}},
         {"kind": {"$in": ["reserve", "revive"]}, "status": {"$in": ["committed", "rolled_back"]}, "bound": {"$ne": True}}]}
+
+
+async def recover_stock_txns(limit: int = 50, min_age_s: Optional[int] = None, dry_run: bool = False,
+                             max_seconds: Optional[float] = None) -> int:
+    """Finish interrupted transactions older than the minimum age.
+
+    DEF-03 (2026-11-24): every recoverable transaction is reached - a resumable keyset sweep over `stock_txns` by `id` (page size
+    `limit`) instead of `find(q).limit(limit)` with no order, where a transaction that kept failing starved the others and one
+    exception stopped the run. Each transaction is re-checked just before it is driven (a live request may have finished it); the
+    drive itself is the existing arbiter / per-line marker engine, so a retry or a concurrent worker can never apply a line twice."""
+    from sweeps import run_sweep
+    q = _recoverable_txn_q(min_age_s)
     n = 0
-    for t in await db.stock_txns.find(q, {"_id": 0}).limit(limit).to_list(limit):
-        status = await _run_txn(t)
-        if status == "committed":
-            await _finalize(t)
-        t = await _status(t["id"])
-        if t["kind"] == "reserve" and not t.get("bound"):
-            if await db.orders.find_one({"id": t["order_id"]}, {"_id": 1}):
-                await _mark_bound(t["key"])                       # order exists: the reservation is real
-            elif t["status"] == "committed":                      # reserved stock but no order: abandon + give it back
-                res = await db.stock_txns.update_one({"id": t["id"], "status": "committed", "bound": {"$ne": True}},
-                                                     {"$set": {"status": "rolling_back", "updated_at": now_iso()}})
-                if res.modified_count == 1:
-                    await _run_txn(t)
-                    await _mark_bound(t["key"])
-            else:
-                await _mark_bound(t["key"])
-        elif t["kind"] == "revive" and not t.get("bound"):
-            if t["status"] == "committed":
-                await finish_revival(t["order_id"], t["id"], distribute=True)
-            else:
-                await _flag_refund(t["order_id"], "paid_after_timeout_out_of_stock")
-            await _mark_bound(t["key"])
+
+    async def one(doc, dry):
+        nonlocal n
+        t = await db.stock_txns.find_one({"$and": [q, {"id": doc["id"]}]}, {"_id": 0})
+        if not t:
+            return "skipped"                                   # finished meanwhile by its own request or another worker
+        if dry:
+            n += 1                                             # dry run: the number of transactions that would be driven
+            return "eligible"
+        await _recover_one_txn(t)
         n += 1
+        return "updated"
+    await run_sweep("stock_txn_recovery", "stock_txns", q, one, batch=limit, dry_run=dry_run, max_seconds=max_seconds,
+                    projection={"_id": 0, "id": 1})
     return n
 
 
-async def process_restock_intents(limit: int = 50, min_age_s: Optional[int] = None) -> int:
-    cutoff = _age_cutoff(min_age_s)
-    ids = [o["id"] for o in await db.orders.find({"restock_intents.0": {"$exists": True}, "updated_at": {"$lt": cutoff}},
-                                                 {"_id": 0, "id": 1}).limit(limit).to_list(limit)]
-    return sum([await run_intents(oid) for oid in ids])
+async def _recover_one_txn(t: dict) -> None:
+    """The unchanged per-transaction recovery step (moved out of the loop for DEF-03)."""
+    status = await _run_txn(t)
+    if status == "committed":
+        await _finalize(t)
+    t = await _status(t["id"])
+    if t["kind"] == "reserve" and not t.get("bound"):
+        if await db.orders.find_one({"id": t["order_id"]}, {"_id": 1}):
+            await _mark_bound(t["key"])                       # order exists: the reservation is real
+        elif t["status"] == "committed":                      # reserved stock but no order: abandon + give it back
+            res = await db.stock_txns.update_one({"id": t["id"], "status": "committed", "bound": {"$ne": True}},
+                                                 {"$set": {"status": "rolling_back", "abandoned_after_commit": True, "updated_at": now_iso()}})
+            if res.modified_count == 1:
+                await _run_txn(t)
+                await _mark_bound(t["key"])
+        else:
+            await _mark_bound(t["key"])
+    elif t["kind"] == "revive" and not t.get("bound"):
+        if t["status"] == "committed":
+            await finish_revival(t["order_id"], t["id"], distribute=True)
+        else:
+            await _flag_refund(t["order_id"], "paid_after_timeout_out_of_stock")
+        await _mark_bound(t["key"])
 
 
-async def prune_stock_markers(days: int = 7, limit: int = 200) -> int:
-    """Housekeeping: drop idempotency markers of long-finished transactions (they are never replayed once terminal)."""
+async def process_restock_intents(limit: int = 50, min_age_s: Optional[int] = None, dry_run: bool = False,
+                                  max_seconds: Optional[float] = None) -> int:
+    """Replay durable restock intents left on orders by an interrupted request. DEF-03: resumable keyset sweep over every such
+    order (page size `limit`), each re-checked first; `run_intents` is exactly-once per line. Returns the lines restocked."""
+    from sweeps import run_sweep
+    q = {"restock_intents.0": {"$exists": True}, "updated_at": {"$lt": _age_cutoff(min_age_s)}}
+    lines = 0
+
+    async def one(o, dry):
+        nonlocal lines
+        if not await db.orders.find_one({"$and": [q, {"id": o["id"]}]}, {"_id": 1}):
+            return "skipped"
+        if dry:
+            lines += 1                                         # dry run: the number of orders with intents to replay
+            return "eligible"
+        lines += await run_intents(o["id"])
+        return "updated"
+    await run_sweep("stock_restock_intents", "orders", q, one, batch=limit, dry_run=dry_run, max_seconds=max_seconds,
+                    projection={"_id": 0, "id": 1})
+    return lines
+
+
+async def prune_stock_markers(days: int = 7, limit: int = 200, max_seconds: Optional[float] = None) -> int:
+    """Housekeeping: drop idempotency markers of long-finished transactions (they are never replayed once terminal).
+
+    Programme 02 / W5: this used `find(q).limit(200)` with no order, once per daily maintenance run, so (a) at most 200 transactions
+    were pruned per day and a larger daily volume left product `stock_ops` growing without bound, and (b) records it must skip
+    (unbound reservations) stayed in the result and, once 200 of them existed, filled every batch so nothing was pruned again.
+    Now it is a resumable keyset sweep (sweeps.run_sweep: id order, checkpoint, per-record isolation, time budget); `limit` is the
+    page size. The selection and the skip rule are unchanged. Returns the number of transactions pruned in this run."""
+    from sweeps import run_sweep
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    n = 0
     q = {"status": {"$in": ["committed", "rolled_back"]}, "finalized": True, "pruned": {"$ne": True}, "updated_at": {"$lt": cutoff}}
-    for t in await db.stock_txns.find(q, {"_id": 0}).limit(limit).to_list(limit):
+    pruned = [0]
+
+    async def one(t: dict, dry_run: bool) -> str:
         if t["kind"] in ("reserve", "revive") and not t.get("bound"):
-            continue
+            return "skipped"                    # recovery must bind or compensate it first; its markers stay
         for ln in t["lines"]:
             await db.products.update_one({"id": ln["product_id"]}, {"$unset": {f"stock_ops.{_mk('m', t['id'], ln['i'])}": "",
                                                                               f"stock_ops.{_mk('c', t['id'], ln['i'])}": ""}})
-        await db.stock_txns.update_one({"id": t["id"]}, {"$set": {"pruned": True}})
-        n += 1
-    return n
+        r = await db.stock_txns.update_one({"id": t["id"], "pruned": {"$ne": True}}, {"$set": {"pruned": True}})
+        if r.modified_count:
+            pruned[0] += 1
+            return "updated"
+        return "skipped"                        # a concurrent run pruned it first
+    await run_sweep("stock_marker_prune", "stock_txns", q, one, batch=limit, max_seconds=max_seconds,
+                    projection={"_id": 0, "id": 1, "kind": 1, "bound": 1, "lines": 1})
+    return pruned[0]
 
 
-async def run_recovery(limit: int = 50, min_age_s: Optional[int] = None) -> dict:
-    return {"txns": await recover_stock_txns(limit, min_age_s), "intents": await process_restock_intents(limit, min_age_s)}
+async def run_recovery(limit: int = 50, min_age_s: Optional[int] = None, dry_run: bool = False,
+                       max_seconds: Optional[float] = None) -> dict:
+    """Stock crash recovery: interrupted journal transactions, then durable restock intents. DEF-03: both are complete, resumable
+    sweeps; `limit` is the page size. A dry run reports what would be recovered and writes nothing."""
+    return {"txns": await recover_stock_txns(limit, min_age_s, dry_run=dry_run, max_seconds=max_seconds),
+            "intents": await process_restock_intents(limit, min_age_s, dry_run=dry_run, max_seconds=max_seconds)}

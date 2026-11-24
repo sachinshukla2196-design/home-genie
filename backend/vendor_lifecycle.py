@@ -14,7 +14,7 @@ from typing import Optional
 
 from fastapi import HTTPException
 
-from core import db, next_sequence, now_iso
+from core import db, new_id, next_sequence, now_iso
 from vendor_history import record_vendor_status
 
 STATUSES = ("onboarding", "ready_for_review",                                   # Vendor Pillar: admin-run onboarding
@@ -96,6 +96,20 @@ async def migrate(apply: bool = False) -> dict:
     """Repeatable, non-destructive foundation migration. A dry run unless `apply` is True. It never deletes or overwrites data
     except filling a missing vendor_code, and it reports duplicates instead of fixing them."""
     report = {"apply": apply, "duplicates": {}, "backfilled": [], "sequence_moved_to": None, "indexes_failed": []}
+    # Programme 02 / W5: every applying run is recorded in `index_migrations` (spec fingerprint, start, outcome). A run still marked
+    # "running" when the next one starts was interrupted (crash, killed process); it is reported and marked so. Re-running is the
+    # recovery: every step below is idempotent. A dry run writes nothing (it only reads the last record).
+    import db_indexes as _dbi
+    if apply:
+        stale = await db.index_migrations.find({"status": "running"}, {"_id": 1, "started_at": 1, "spec_version": 1}).to_list(None)
+        if stale:
+            await db.index_migrations.update_many({"_id": {"$in": [s["_id"] for s in stale]}},
+                                                  {"$set": {"status": "interrupted", "detected_at": now_iso()}})
+        run_id = new_id()
+        await db.index_migrations.insert_one({"_id": run_id, "spec_version": _dbi.spec_version(), "started_at": now_iso(), "status": "running"})
+        report["migration_run"] = {"id": run_id, "spec_version": _dbi.spec_version(), "interrupted_previous": stale}
+    else:
+        report["last_migration"] = await db.index_migrations.find_one({}, sort=[("started_at", -1)])
     for field in ("id", "user_id", "vendor_code"):
         dups = await db.vendors.aggregate([
             {"$match": {field: {"$type": "string"}}}, {"$group": {"_id": f"${field}", "n": {"$sum": 1}}}, {"$match": {"n": {"$gt": 1}}}]).to_list(100)
@@ -118,10 +132,22 @@ async def migrate(apply: bool = False) -> dict:
         if apply:
             await db.counters.update_one({"id": "vendor"}, {"$max": {"seq": top}}, upsert=True)
     from db_indexes import apply as apply_indexes, plan as plan_indexes     # the single place where indexes change
+    from money_guard import duplicate_report                              # Programme 01 (B-004): read-only, names records
+    report["money_duplicates"] = await duplicate_report()
     if apply:
         result = await apply_indexes()
         report["indexes"] = result
         report["indexes_failed"] = [f["index"] for f in result["failed"]]
     else:
         report["indexes_plan"] = await plan_indexes()                       # read-only
+        report["index_dry_run"] = await _dbi.dry_run()                      # W5: read-only preview incl. duplicate counts
+    from money_guard import readiness, reset_cache
+    reset_cache()
+    report["money_protection"] = await readiness(force=True)              # which money areas would still be blocked
+    if apply:
+        res = report["indexes"]
+        await db.index_migrations.update_one({"_id": report["migration_run"]["id"]}, {"$set": {
+            "status": "done" if not (res["failed"] or res["conflict"]) else "incomplete", "finished_at": now_iso(),
+            "created": res["created"], "dropped": [d["index"] for d in res["dropped"]], "failed": [f["index"] for f in res["failed"]],
+            "conflict": [c["index"] for c in res["conflict"]], "money_protection_ready": report["money_protection"]["ready"]}})
     return report

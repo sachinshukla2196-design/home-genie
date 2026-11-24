@@ -146,6 +146,26 @@ class CreateOrder(BaseModel):
 async def create_order(body: CreateOrder, request: Request, user: dict = Depends(get_current_user)):
     if not body.items:
         raise HTTPException(status_code=400, detail="Your cart is empty.")
+    from money_guard import ensure as _money_guard          # Programme 01 (B-004): fail closed without the unique indexes
+    await _money_guard("orders", "stock")
+    # Programme 01 (B-006): protection BEFORE anything is reserved - one order per identical submission, then the per-account
+    # and per-IP rate limits and the open-order cap (order_protection). A refused or failed attempt releases its claim.
+    from order_protection import fingerprint, claim_submission, bind_submission, release_submission, check_limits
+    fp = fingerprint(user["id"], body)
+    claimed, existing = await claim_submission(fp)
+    if not claimed:
+        return {**existing, "duplicate_submission": True}
+    try:
+        await check_limits(user, request)
+        order = await _create_order(body, request, user)
+    except Exception:
+        await release_submission(fp)
+        raise
+    await bind_submission(fp, order["id"])
+    return order
+
+
+async def _create_order(body: CreateOrder, request: Request, user: dict):
     # the delivery address is settled BEFORE anything is reserved: a saved one is copied (snapshot), a typed one was validated
     if body.address_id:
         from customer_routes import address_snapshot
@@ -258,7 +278,7 @@ async def create_order(body: CreateOrder, request: Request, user: dict = Depends
     } for v in vendor_ids]
 
     # Free stock held by overdue unpaid online orders before reserving (15-minute payment window).
-    await expire_pending_online_orders(limit=50)
+    await expire_pending_online_orders(limit=50, max_seconds=2)     # B-006: bounded inline; the cron finishes the rest
 
     # Reserve stock for every line, all-or-nothing, as a journaled transaction (survives crashes; see stock.py).
     short = await reserve_for_order(oid, line_items, user["id"])
@@ -309,6 +329,9 @@ async def cod_collected(order_id: str, request: Request, user: dict = Depends(ge
         raise HTTPException(status_code=400, detail="This is not a cash-on-delivery order.")
     refuse_own_sale(user, order)
     if order.get("payment_status") == "paid":
+        if order.get("completion_due"):     # Programme 01 (B-003): a repeated confirmation finishes an interrupted completion
+            from order_completion import complete_paid_order
+            await complete_paid_order(order_id, request, source="cod_collection_retry", notify=False)
         return {"ok": True, "already": True}
     if order.get("payment_status") == "cod_discrepancy":
         return {"ok": True, "discrepancy": True, "already": True}
@@ -350,20 +373,19 @@ async def cod_collected(order_id: str, request: Request, user: dict = Depends(ge
                   "cod_collected_by_id": user.get("distributor_id"),
                   "cod_collected_role": "admin",
                   "cod_collection": {**evidence, "expected_paise": expected_p, "collected_paise": collected_p},
-                  "cod_collected_at": now_iso(), "paid_at": now_iso(), "updated_at": now_iso()}})
+                  "cod_collected_at": now_iso(), "paid_at": now_iso(), "updated_at": now_iso(),
+                  "completion_due": True}})          # Programme 01 (B-003): durable marker, written with the claim
+    from order_completion import complete_paid_order
     if claim.modified_count != 1:
+        # A repeated confirmation of a collection that was already claimed finishes an interrupted completion (idempotent).
+        if (await db.orders.find_one({"id": order_id}, {"_id": 0, "completion_due": 1}) or {}).get("completion_due"):
+            await complete_paid_order(order_id, request, source="cod_collection_retry", notify=False)
         return {"ok": True, "already": True}
 
+    # invoice, vendor sales and the commission plan (refused unless the collection is proven) through the shared step
+    done = await complete_paid_order(order_id, request, source="cod_collection", notify=False)
     order = await db.orders.find_one({"id": order_id}, {"_id": 0})
-    buyer = await db.users.find_one({"id": order["user_id"]}, {"_id": 0})
-    if not order.get("invoice_number"):
-        inv = await next_sequence("invoice", "INV", 6)
-        await db.orders.update_one({"id": order_id}, {"$set": {"invoice_number": inv}})
-        order["invoice_number"] = inv
-    from commission import distribute_sale_commissions
-    result = await distribute_sale_commissions(order, buyer or {}, request)
-    from ledger import post_order_collected
-    await post_order_collected(order)                       # vendor sale recorded now that the cash is confirmed
+    result = done.get("commissions")
     await log_audit(user, "cod_collected", "order", order_id,
                     new_value={"amount": order.get("total"), "commissions": result}, request=request)
     await create_notification(order["user_id"], "order", "Order delivered",
@@ -375,7 +397,7 @@ async def cod_collected(order_id: str, request: Request, user: dict = Depends(ge
 
 @router.get("/orders")
 async def my_orders(user: dict = Depends(get_current_user)):
-    await expire_pending_online_orders(limit=50)
+    await expire_pending_online_orders(limit=50, max_seconds=2)     # B-006: bounded inline; the cron finishes the rest
     return await db.orders.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(200)
 
 
@@ -597,7 +619,7 @@ async def _reverse_commission(c: dict, event: dict, order: dict) -> int:
 
 async def reverse_order_financials(order_id: str, actor: dict = None, request: Request = None,
                                    refund_amount: float = None, reference: str = "", reason: str = "",
-                                   case_id: str = None, vendor_id: str = None):
+                                   case_id: str = None, vendor_id: str = None, exact: bool = False):
     """Refund and clawback in EXACT integer paise, crash-safe and idempotent per refund event.
 
     Steps, in order: (1) the refund EVENT is recorded (keyed by order and reference); (2) the amount is RESERVED on the
@@ -605,19 +627,40 @@ async def reverse_order_financials(order_id: str, actor: dict = None, request: R
     refund cases are settled; (5) only then is the event marked completed. A crash at any step is resumed by calling this
     function again with the same reference: completed steps are skipped, and the stored event amount is used, so a retry
     never recomputes the refund.
+
+    Programme 01 (B-002) `exact=True` (refund-case confirmation): the amount is booked exactly or not at all. More than is still
+    refundable is REJECTED instead of silently lowered, and a reference whose earlier booking was rejected (nothing was booked)
+    may be booked again once - the rejected event is re-claimed atomically, so concurrent retries still book at most once.
     """
     order = await db.orders.find_one({"id": order_id})
     if not order or order.get("payment_status") not in ("paid", "refunded", "partially_refunded"):
-        return {"reversed": 0, "refund_amount": 0.0}
+        return {"reversed": 0, "refund_amount": 0.0, "rejected": exact, "why": "order_not_refundable"}
+    from money_guard import ensure as _money_guard          # Programme 01 (B-004): fail closed without the unique indexes
+    await _money_guard("ledger", "wallet")
     event_id = f"{order_id}:refund:{reference or 'full'}"
     event = await db.order_refunds.find_one({"id": event_id}, {"_id": 0})
+    if exact and event is not None and event["status"] == "rejected":
+        total_p = refundable_total_paise(order, paise_of(order, "total_paise", "total"))
+        already_p = paise_of(order, "refunded_paise", "refunded_amount")
+        amt_p = to_paise(refund_amount) if refund_amount is not None else total_p - already_p
+        if amt_p <= 0 or amt_p > total_p - already_p:
+            return {"reversed": 0, "refund_amount": 0.0, "rejected": True, "why": "exceeds_refundable"}
+        retried = await db.order_refunds.find_one_and_update(
+            {"id": event_id, "status": "rejected"},
+            {"$set": {"status": "processing", "amount": paise_to_float(amt_p), "amount_paise": amt_p,
+                      "closes_order": already_p + amt_p >= total_p, "case_id": case_id, "vendor_id": vendor_id, "reason": reason,
+                      "retried_at": now_iso(), "actor_id": (actor or {}).get("id")}, "$inc": {"attempts": 1}},
+            projection={"_id": 0}, return_document=True)
+        event = retried or await db.order_refunds.find_one({"id": event_id}, {"_id": 0})
     if event is None:
         total_p = refundable_total_paise(order, paise_of(order, "total_paise", "total"))
         already_p = paise_of(order, "refunded_paise", "refunded_amount")
         remaining_p = total_p - already_p
         amt_p = remaining_p if refund_amount is None else to_paise(refund_amount)
         if amt_p <= 0 or remaining_p <= 0:
-            return {"reversed": 0, "refund_amount": 0.0}
+            return {"reversed": 0, "refund_amount": 0.0, "rejected": exact, "why": "nothing_refundable"}
+        if exact and amt_p > remaining_p:
+            return {"reversed": 0, "refund_amount": 0.0, "rejected": True, "why": "exceeds_refundable"}
         amt_p = min(amt_p, remaining_p)
         event = {"_id": event_id, "id": event_id, "order_id": order_id, "amount": paise_to_float(amt_p), "amount_paise": amt_p,
                  "closes_order": already_p + amt_p >= total_p, "reference": reference, "case_id": case_id,
@@ -710,6 +753,15 @@ async def _process_paid_order(session_id: str, request: Request = None):
         if order.get("payment_status") == "paid":
             if paid_by and paid_by != session_id:
                 await _flag_unapplied_capture(order, tx, "order_already_paid")
+            elif paid_by == session_id:
+                # Programme 01 (B-003): this payment's claim landed earlier. If the process died before finishing, the same
+                # payment reported again finishes it (transaction record + completion), idempotently, instead of returning early.
+                if tx.get("payment_status") != "paid":
+                    await db.payment_transactions.update_one({"session_id": session_id},
+                                                             {"$set": {"status": "completed", "payment_status": "paid", "updated_at": now_iso()}})
+                if order.get("completion_due"):
+                    from order_completion import complete_paid_order
+                    await complete_paid_order(order["id"], request, source=f"retry:{tx.get('provider') or 'gateway'}")
             return  # already processed (the same payment reported again is a no-op)
         if not is_payable_online(order):
             logger.warning("payment for order %s ignored: payment_status=%s method=%s is not payable", order["id"],
@@ -720,7 +772,8 @@ async def _process_paid_order(session_id: str, request: Request = None):
         # A payment for an already-cancelled order must never silently re-open it (its stock may have been returned).
         cancelled = order.get("status") == "cancelled"
         revivable = cancelled and order.get("cancel_reason") == EXPIRY_REASON   # expired by the 15-minute rule
-        paid_set = {"payment_status": "paid", "paid_at": now_iso(), "updated_at": now_iso(), "paid_session_id": session_id}
+        paid_set = {"payment_status": "paid", "paid_at": now_iso(), "updated_at": now_iso(), "paid_session_id": session_id,
+                    "completion_due": True}     # B-003: durable "finish me" marker, written atomically with the claim
         if not cancelled:      # the invoice is written atomically with the claim (a lost claim only leaves a numbering gap)
             paid_set.update({"status": "processing", "invoice_number": await next_sequence("invoice", "INV", 6)})
         claim = await db.orders.update_one({"id": order["id"], "payment_status": {"$in": list(PAYABLE_PAYMENT_STATES)},
@@ -730,35 +783,23 @@ async def _process_paid_order(session_id: str, request: Request = None):
             break
     else:
         return  # the order kept changing; a later webhook / verify / status poll finishes it
-    invoice_number = paid_set.get("invoice_number")
     await db.payment_transactions.update_one(
         {"session_id": session_id},
         {"$set": {"status": "completed", "payment_status": "paid", "updated_at": now_iso()}},
     )
+    from order_completion import complete_paid_order
+    source = f"payment:{tx.get('provider') or 'gateway'}"
     if cancelled:
         # Expired order: take the stock back if still available. Admin-cancelled order: flag for refund. Otherwise refund.
         if not await handle_late_payment(order, allow_revive=revivable):
+            await complete_paid_order(order["id"], request, source=source)   # clears the marker: a refund is owed, nothing earns
             return  # no commission / no invoice for an order that cannot be fulfilled
-        invoice_number = await next_sequence("invoice", "INV", 6)
-        await db.orders.update_one({"id": order["id"]}, {"$set": {"invoice_number": invoice_number}})
+        # the revived order gets its invoice inside the shared completion (only when missing)
 
-    from ledger import post_order_collected
-    fresh_order = await db.orders.find_one({"id": order["id"]}, {"_id": 0})
-    await post_order_collected(fresh_order)   # vendor sale: payment is confirmed
-    from core import notify_order_vendors
-    await notify_order_vendors(fresh_order, "New order", f"New paid order {fresh_order.get('order_number')}: please accept and pack it.")
-    user = await db.users.find_one({"id": order["user_id"]})
-    if not user:
-        return
-    await create_notification(user["id"], "payment_success", "Payment successful",
-                              f"Payment received for order {order['order_number']}. Invoice {invoice_number} generated.",
-                              "भुगतान सफल",
-                              f"ऑर्डर {order['order_number']} का भुगतान प्राप्त हुआ। इनवॉइस {invoice_number} बन गया।")
-
-    # ---- HOME GENIES commission engine (30% direct / 10% referral / 5% team) ----
-    # Credited as PENDING points; released after the return window by the points cron.
-    from commission import distribute_sale_commissions
-    await distribute_sale_commissions(order, user, request)
+    # Programme 01 (B-003): vendor sales, the invoice, the HomeGenie commission plan (30% direct / 10% referral / 5% team,
+    # credited as PENDING and released after the return window by the points cron) and the one-time notifications are all
+    # done by ONE idempotent step shared by every payment path; a crash here is finished by a retry or the repair sweep.
+    await complete_paid_order(order["id"], request, source=source)
 
 
 # Positional TEAM SALES commission matrix (FINAL, locked). Position 1 = buyer's IMMEDIATE sponsor.

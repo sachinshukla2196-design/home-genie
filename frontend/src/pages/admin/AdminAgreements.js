@@ -1,5 +1,4 @@
 import React, { useCallback, useEffect, useState } from "react";
-import { toast } from "sonner";
 import { Handshake } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

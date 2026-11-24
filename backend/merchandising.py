@@ -185,6 +185,8 @@ async def _validate_products(ids: List[str]) -> None:
 @router.post("/admin/merch/sections")
 async def create_section(body: SectionIn, request: Request, admin: dict = Depends(require_vendor_admin)):
     _check(body)
+    from governance_routes import validate_platform_images          # Programme 01 (B-009): validated uploads only
+    await validate_platform_images([body.image_desktop, body.image_mobile], request)
     if body.product_ids:
         await _validate_products(body.product_ids)
     n = await db.merch_sections.count_documents({"status": {"$ne": "deleted"}})
@@ -202,6 +204,8 @@ async def update_section(sid: str, body: SectionIn, request: Request, admin: dic
     if body.kind != s["kind"]:
         raise HTTPException(status_code=400, detail="The section type cannot change. Create a new section instead.")
     _check(body)
+    from governance_routes import validate_platform_images          # Programme 01 (B-009): validated uploads only
+    await validate_platform_images([body.image_desktop, body.image_mobile], request)
     if body.product_ids:
         await _validate_products(body.product_ids)
     now = now_iso()

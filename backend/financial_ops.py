@@ -26,17 +26,24 @@ logger = logging.getLogger("homegenies")
 OPEN_REFUND_CASE_STATES = ["awaiting_review", "initiated", "failed"]
 
 
-async def has_open_case(order_id: str) -> bool:
-    """True while the order has an unresolved refund case or an active return case."""
+async def has_open_case(order_id: str, vendor_id: str = None) -> bool:
+    """True while the order has an unresolved refund case or an active return case.
+
+    Programme 01 (B-001): with `vendor_id` (one vendor's settlement), a case that belongs to ANOTHER vendor's goods does not hold
+    this vendor's money - its refund is that vendor's share alone (ledger.post_refund_shares). Order-wide cases (no vendor) and
+    this vendor's own cases still hold it. Without `vendor_id` (HomeGenie commission, per order) every open case holds."""
     from returns_routes import ACTIVE_RETURN_STATES
-    if await db.refund_cases.find_one({"order_id": order_id, "status": {"$in": OPEN_REFUND_CASE_STATES}}, {"_id": 1}):
+    mine = {} if vendor_id is None else {"vendor_id": {"$in": [vendor_id, None]}}
+    if await db.refund_cases.find_one({"order_id": order_id, "status": {"$in": OPEN_REFUND_CASE_STATES}, **mine}, {"_id": 1}):
         return True
     return bool(await db.return_cases.find_one(
-        {"order_id": order_id, "status": {"$in": list(ACTIVE_RETURN_STATES) + ["refund_pending"]}}, {"_id": 1}))
+        {"order_id": order_id, "status": {"$in": list(ACTIVE_RETURN_STATES) + ["refund_pending"]}, **mine}, {"_id": 1}))
 
 
 async def ensure_ledger(row: dict) -> None:
     """Insert a ledger row once per op_key. The check is followed by the unique index, which closes the race."""
+    from money_guard import ensure as _money_guard          # Programme 01 (B-004): fail closed without the unique indexes
+    await _money_guard("wallet")
     if await db.wallet_transactions.find_one({"op_key": row["op_key"]}, {"_id": 1}):
         return
     try:
@@ -47,6 +54,8 @@ async def ensure_ledger(row: dict) -> None:
 
 async def move_wallet_once(user_id: str, deltas_paise: dict, op_key: str) -> bool:
     """Move wallet aggregates by exact paise, at most once per op_key. Returns False when op_key was already applied."""
+    from money_guard import ensure as _money_guard          # Programme 01 (B-004): fail closed without the unique indexes
+    await _money_guard("wallet")
     await get_or_create_wallet(user_id)
     inc = {}
     for field, delta in deltas_paise.items():

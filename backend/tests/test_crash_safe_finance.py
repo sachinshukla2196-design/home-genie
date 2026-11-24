@@ -119,6 +119,15 @@ def _release(c, when=FUTURE):
     return _run(c, lambda: release_due_points(when))
 
 
+def _release_crashing(c):
+    """Programme 01 (B-005): the release job is a sweep that isolates a failing record (it is counted, reported and the run goes
+    on) instead of aborting. A simulated crash inside one commission therefore shows up as a failed record, and the stored state
+    it leaves is exactly what a real process crash at that point leaves - which is what the assertions below check."""
+    res = _release(c)
+    assert res["failed"] >= 1 and any("SimulatedCrash" in f["error"] for x in res["sweeps"].values() for f in x["failures"]), res
+    return res
+
+
 def _op_rows(c, op_key):
     return _run(c, lambda: db.wallet_transactions.count_documents({"op_key": op_key}))
 
@@ -149,8 +158,7 @@ def test_crash_after_the_release_claim_and_before_the_ledger_is_finished_by_the_
     order = _order(c, t)
     _distribute(c, t, order)
     crash_at(monkeypatch, financial_ops, "ensure_ledger", nth=1)
-    with pytest.raises(SimulatedCrash):
-        _release(c)
+    _release_crashing(c)
     # the intent exists and says the commission is released, but no ledger row and no money yet
     issues = _run(c, wallet_reconcile.reconcile)["commission_issues"]
     assert any(i["issue"] == "release_ledger_missing" for i in issues)
@@ -168,8 +176,7 @@ def test_crash_after_the_ledger_but_before_the_applied_marker_does_not_pay_twice
     order = _order(c, t)
     _distribute(c, t, order)
     crash_at(monkeypatch, financial_ops, "_mark_applied", nth=1)
-    with pytest.raises(SimulatedCrash):
-        _release(c)
+    _release_crashing(c)
     monkeypatch.undo()
     _release(c)
     _release(c)                                                        # and once more, for good measure
@@ -182,8 +189,7 @@ def test_crash_after_the_wallet_moved_but_before_the_marker_does_not_pay_twice(c
     order = _order(c, t)
     _distribute(c, t, order)
     crash_at(monkeypatch, financial_ops, "move_wallet_once", nth=1, after=True)
-    with pytest.raises(SimulatedCrash):
-        _release(c)
+    _release_crashing(c)
     monkeypatch.undo()
     _release(c)
     assert _seller_amounts(c, t) == (30000, 0, 30000)
@@ -196,8 +202,7 @@ def test_the_releases_of_a_partial_refund_are_each_finished_once_after_a_crash(c
     _distribute(c, t, order)
     _refund(c, order["id"], PARTIAL_P / 100)
     crash_at(monkeypatch, financial_ops, "move_wallet_once", nth=2)
-    with pytest.raises(SimulatedCrash):
-        _release(c)
+    _release_crashing(c)
     monkeypatch.undo()
     _release(c)
     _release(c)

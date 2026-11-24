@@ -59,6 +59,7 @@ import AdminVendors from "@/pages/admin/AdminVendors";
 import AdminVendorCreate from "@/pages/admin/AdminVendorCreate";
 import AdminAgreements from "@/pages/admin/AdminAgreements";
 import AdminBenefits from "@/pages/admin/AdminBenefits";
+import { RoleGate } from "@/components/RoleGate";      // Programme 02 / W7: no request a role would be refused
 import VendorTerms from "@/pages/vendor/VendorTerms";
 import VendorOwnerInvite from "@/pages/vendor/VendorOwnerInvite";
 import VendorDashboard from "@/pages/vendor/VendorDashboard";
@@ -173,21 +174,21 @@ function AppRoutes() {
                   <Route path="catalogue/studio/:draftId" element={<AdminCatalogueStudio />} />
                   <Route path="orders" element={<AdminOrderOps />} />
                   <Route path="orders/exceptions" element={<AdminOrders />} />
-                  <Route path="orders/events" element={<AdminPaymentEvents />} />
-                  <Route path="activations" element={<AdminActivations />} />
+                  <Route path="orders/events" element={<RoleGate set="finance" what="Payment events"><AdminPaymentEvents /></RoleGate>} />
+                  <Route path="activations" element={<RoleGate set="activationApprover" what="HomeGenie activation"><AdminActivations /></RoleGate>} />
                   <Route path="withdrawals" element={<AdminWithdrawals />} />
                   <Route path="kyc" element={<AdminKyc />} />
                   <Route path="operations" element={<AdminOperations />} />
                   <Route path="vendors" element={<AdminVendors />} />
                   <Route path="vendors/new" element={<AdminVendorCreate />} />
-                  <Route path="vendor-applications" element={<AdminVendorApplications />} />
+                  <Route path="vendor-applications" element={<RoleGate set="vendorApplications" what="Vendor applications"><AdminVendorApplications /></RoleGate>} />
                   <Route path="vendors/:id/onboarding" element={<AdminVendorOnboarding />} />
                   <Route path="agreements" element={<AdminAgreements />} />
-                  <Route path="benefits" element={<AdminBenefits />} />
+                  <Route path="benefits" element={<RoleGate set="finance" what="Advancement benefits"><AdminBenefits /></RoleGate>} />
                   <Route path="reports" element={<AdminReports />} />
                   <Route path="settings" element={<AdminSettings />} />
                   <Route path="audit" element={<AdminAuditLogs />} />
-                  <Route path="team" element={<AdminTeam />} />
+                  <Route path="team" element={<RoleGate set="superAdmin" what="The admin team"><AdminTeam /></RoleGate>} />
                 </Route>
 
                 <Route path="/vendor/login" element={<VendorLogin />} />

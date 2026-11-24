@@ -49,6 +49,34 @@ INDIAN_STATES = (
     "Jharkhand", "Karnataka", "Kerala", "Ladakh", "Lakshadweep", "Madhya Pradesh", "Maharashtra", "Manipur", "Meghalaya", "Mizoram",
     "Nagaland", "Odisha", "Puducherry", "Punjab", "Rajasthan", "Sikkim", "Tamil Nadu", "Telangana", "Tripura", "Uttar Pradesh",
     "Uttarakhand", "West Bengal")
+# Programme 01 (B-008): two-letter codes already stored on older vendor records (ISO 3166-2:IN codes plus the common
+# vehicle-registration aliases). Accepted as valid representations; never used to rewrite stored records.
+STATE_CODES = {
+    "AN": "Andaman and Nicobar Islands", "AP": "Andhra Pradesh", "AR": "Arunachal Pradesh", "AS": "Assam", "BR": "Bihar",
+    "CH": "Chandigarh", "CT": "Chhattisgarh", "CG": "Chhattisgarh", "DH": "Dadra and Nagar Haveli and Daman and Diu",
+    "DN": "Dadra and Nagar Haveli and Daman and Diu", "DD": "Dadra and Nagar Haveli and Daman and Diu", "DL": "Delhi", "GA": "Goa",
+    "GJ": "Gujarat", "HR": "Haryana", "HP": "Himachal Pradesh", "JK": "Jammu and Kashmir", "JH": "Jharkhand", "KA": "Karnataka",
+    "KL": "Kerala", "LA": "Ladakh", "LD": "Lakshadweep", "MP": "Madhya Pradesh", "MH": "Maharashtra", "MN": "Manipur",
+    "ML": "Meghalaya", "MZ": "Mizoram", "NL": "Nagaland", "OR": "Odisha", "OD": "Odisha", "PY": "Puducherry", "PB": "Punjab",
+    "RJ": "Rajasthan", "SK": "Sikkim", "TN": "Tamil Nadu", "TG": "Telangana", "TS": "Telangana", "TR": "Tripura",
+    "UP": "Uttar Pradesh", "UT": "Uttarakhand", "UK": "Uttarakhand", "WB": "West Bengal"}
+_STATE_BY_LOWER = {s.lower(): s for s in INDIAN_STATES}
+
+
+def normalise_indian_state(value: str):
+    """Return the accepted stored form of a state (canonical name, or the upper-case two-letter code), or None if invalid."""
+    v = " ".join((value or "").split())
+    if not v:
+        return None
+    if v.upper() in STATE_CODES and len(v) == 2:
+        return v.upper()
+    return _STATE_BY_LOWER.get(v.lower())
+
+
+def state_name(value: str):
+    """The full state name for a stored value (name or code), or None."""
+    s = normalise_indian_state(value)
+    return STATE_CODES.get(s, s) if s else None
 
 MOBILE = re.compile(r"[6-9]\d{9}")
 EMAIL = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")

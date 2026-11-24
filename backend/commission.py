@@ -291,49 +291,72 @@ RELEASE_BLOCK_TEXT = {
 }
 
 
-async def release_due_points(now: datetime = None) -> dict:
+async def release_due_points(now: datetime = None, dry_run: bool = False, max_seconds: float = None, batch: int = 500) -> dict:
     """Release commissions whose hold period has passed, for the UNREVERSED remainder only.
 
     Crash-safe (see financial_ops): first the releases recorded by an earlier, interrupted run are finished; then each
     eligible commission gets a release INTENT in one conditional update that matches the record exactly as read, and the
     intent is finished. A commission is held while its order has an unresolved return or refund case. A fully reversed
     commission is REVERSED and is never released. Repeated and concurrent runs cannot pay the same commission twice.
+
+    Programme 01 (B-005): each of the three phases used to read at most 5,000 records and silently ignore the rest. Each is
+    now a resumable keyset sweep over the WHOLE collection (sweeps.run_sweep: stable id order, checkpoint, per-record error
+    isolation). `dry_run` decides without writing (it reports what would be released); `max_seconds` bounds one run and the
+    next run continues from the checkpoint. The release rule itself is unchanged.
     """
     from financial_ops import finish_release
+    from sweeps import run_sweep
     now = now or datetime.now(timezone.utc)
-    finished = released = skipped = invalid = held = 0
-    for plan in await db.commission_plans.find({"completed_at": None}, {"_id": 1}).to_list(5000):
+    n = {"finished": 0, "released": 0, "skipped": 0, "invalid": 0, "held": 0, "would_release": 0}
+    sweeps = {}
+
+    async def resume(plan, dry):
+        if dry:
+            return "eligible"
         await resume_distribution(plan["_id"])          # an interrupted distribution is completed before anything is released
-    for c in await db.commissions.find({"release.applied": False}, {"_id": 0}).to_list(5000):
+        return "updated"
+    sweeps["plans"] = await run_sweep("commission_plans_resume", "commission_plans", {"completed_at": None}, resume, key="_id",
+                                      batch=batch, dry_run=dry_run, projection={"_id": 1})
+
+    async def finish(c, dry):
+        if dry:
+            return "eligible"
         if await finish_release(c):
-            finished += 1
-    cursor = db.commissions.find({"status": {"$in": ["PENDING", "PARTIALLY_REVERSED"]}, "released_at": None, "manual_hold": {"$ne": True},
-                                  "distribution.applied": {"$ne": False}}, {"_id": 0})
+            n["finished"] += 1
+            return "updated"
+        return "skipped"
+    sweeps["interrupted"] = await run_sweep("commission_release_finish", "commissions", {"release.applied": False}, finish,
+                                            batch=batch, dry_run=dry_run, projection={"_id": 0})
+
     from eligibility import payout_block, return_window_days
     window = await return_window_days()
-    for c in await cursor.to_list(5000):
+
+    async def release(c, dry):
         days = release_days(c.get("release_after_days"))
         if days is None:
-            invalid += 1
+            n["invalid"] += 1
             logger.error("commission %s has an invalid release_after_days; not released", c.get("id"))
-            continue
+            return "blocked"
         order = await db.orders.find_one({"id": c["order_id"]}, {"_id": 0})
         if order and order.get("payment_method") == "cod" and not collection_is_proven(order):
-            skipped += 1        # same rule as distribution and manual release: unproven, short or legacy COD never releases
-            continue
+            n["skipped"] += 1        # same rule as distribution and manual release: unproven, short or legacy COD never releases
+            return "skipped"
         # Decision 2: payable only after delivery + the return window (the longer of the policy window and this commission's
         # frozen hold), with no open return/refund case and no payment problem. Delivery, not payment, starts the clock.
         block = await payout_block(order, now, hold_days=days, window=window)
         if block == "open_return_or_refund":
-            held += 1           # the remainder waits until the return or refund case is resolved
-            continue
+            n["held"] += 1           # the remainder waits until the return or refund case is resolved
+            return "blocked"
         if block:
-            skipped += 1
-            continue
+            n["skipped"] += 1
+            return "skipped"
         amount_p = remaining_paise(c)
         if amount_p <= 0:
-            skipped += 1
-            continue
+            n["skipped"] += 1
+            return "skipped"
+        if dry:
+            n["would_release"] += 1
+            return "eligible"
         op = f"release:{c['id']}"
         intent = await db.commissions.update_one(
             {"id": c["id"], **snapshot_filter(c)},
@@ -341,12 +364,21 @@ async def release_due_points(now: datetime = None) -> dict:
                       "released_amount": paise_to_float(amount_p),
                       "release": {"op_key": op, "amount_paise": amount_p, "applied": False}}})
         if intent.modified_count != 1:
-            continue            # a refund or another run changed this record first; it is re-read on the next run
+            return "skipped"         # a refund or another run changed this record first; it is re-read on the next run
         if await finish_release(await db.commissions.find_one({"id": c["id"]}, {"_id": 0})):
-            released += 1
+            n["released"] += 1
+            return "updated"
+        return "skipped"
+    sweeps["release"] = await run_sweep("commission_release", "commissions",
+                                        {"status": {"$in": ["PENDING", "PARTIALLY_REVERSED"]}, "released_at": None,
+                                         "manual_hold": {"$ne": True}, "distribution.applied": {"$ne": False}},
+                                        release, batch=batch, dry_run=dry_run, max_seconds=max_seconds, projection={"_id": 0})
     logger.info("points release: %s released, %s finished, %s skipped, %s held, %s invalid",
-                released, finished, skipped, held, invalid)
-    return {"released": released, "finished_interrupted": finished, "skipped": skipped, "held": held, "invalid": invalid}
+                n["released"], n["finished"], n["skipped"], n["held"], n["invalid"])
+    return {"released": n["released"], "finished_interrupted": n["finished"], "skipped": n["skipped"], "held": n["held"],
+            "invalid": n["invalid"], "would_release": n["would_release"], "dry_run": dry_run,
+            "failed": sum(x["failed"] for x in sweeps.values()), "complete": all(x["complete"] for x in sweeps.values()),
+            "sweeps": sweeps}
 
 
 async def release_commission_now(commission_id: str, now: datetime = None) -> dict:

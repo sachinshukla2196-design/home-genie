@@ -4,9 +4,15 @@ import { Briefcase, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader, SectionCard } from "@/components/PageHeader";
-import { StatusBadge } from "@/components/StatusBadge";
+import { Pill } from "@/components/vendor/kit";
 import { useAuth } from "@/context/AuthContext";
 import { API, apiError } from "@/lib/api";
+
+// Programme 01: these queues show the record's own status (the member badge only knows active / selling role pending, so every
+// refund, return, settlement and ticket used to read "Selling role pending"). Existing pill component; no new styling.
+const STATUS_TONE = { confirmed: "ok", resolved: "ok", paid: "ok", refunded: "ok", approved: "ok", closed: "ok",
+  failed: "bad", rejected: "bad", cancelled: "bad", initiated: "info", awaiting_review: "warn", requested: "warn", open: "warn" };
+const CaseStatus = ({ status }) => <Pill tone={STATUS_TONE[status] || "muted"} testid="case-status">{String(status || "").replace(/_/g, " ")}</Pill>;
 
 /** OPS-02: one place for the operational queues that previously had no screen. Every tab reads and acts on the real API;
  *  the server enforces every rule (roles, maker-checker, eligibility). Buttons a role cannot use are hidden as a convenience. */
@@ -16,15 +22,17 @@ const rs = (v) => (v == null ? "—" : `₹${Number(v).toLocaleString("en-IN")}`
 const day = (s) => (s || "").slice(0, 10);
 const ask = (q, def = "") => { const v = window.prompt(q, def); return v === null ? null : v.trim(); };
 
-function useList(url, params) {
+// Programme 02 / W7: `enabled=false` makes no request at all (a tab the role cannot use must not fire a request the server refuses).
+function useList(url, params, enabled = true) {
   const [state, setState] = useState({ rows: null, error: "" });
   const key = JSON.stringify(params || {});
   const load = useCallback(() => {
+    if (!enabled) { setState({ rows: [], error: "" }); return; }
     setState({ rows: null, error: "" });
     API.get(url, { params: JSON.parse(key) })
       .then(({ data }) => setState({ rows: Array.isArray(data) ? data : data.items || [], error: "", extra: data }))
       .catch((e) => setState({ rows: [], error: apiError(e) }));
-  }, [url, key]);
+  }, [url, key, enabled]);
   useEffect(() => { load(); }, [load]);
   return [state, load];
 }
@@ -57,7 +65,7 @@ async function run(fn, ok, reload) {
 }
 
 function Approvals({ fin }) {
-  const [s, reload] = useList("/admin/finance/approvals", { status: "pending" });
+  const [s, reload] = useList("/admin/finance/approvals", { status: "pending" }, fin);
   if (!fin) return <p className="text-sm text-muted2">Finance administrators only.</p>;
   return <Table testid="ops-approvals" state={s} empty="Nothing waiting for a second approval." columns={[
     { h: "Action", r: (a) => <><b>{a.label}</b><div className="text-xs text-muted2">{day(a.created_at)}</div></> },
@@ -80,7 +88,7 @@ function Refunds({ fin }) {
     <Table testid="ops-refunds" state={s} empty="No refund cases here." columns={[
       { h: "Case", r: (c) => <><b className="font-mono">{c.number}</b><div className="text-xs text-muted2">{c.kind} · order {c.order_number || c.order_id?.slice(0, 8)}</div></> },
       { h: "Amount", r: (c) => rupees(c.amount_paise) },
-      { h: "Status", r: (c) => <StatusBadge status={c.status} /> },
+      { h: "Status", r: (c) => <CaseStatus status={c.status} /> },
       { h: "", r: (c) => <>
         {["awaiting_review", "failed"].includes(c.status) && <Act onClick={() => { const m = ask("Refund method (e.g. upi, bank, gateway):", "upi"); if (m) act(c, { action: c.status === "failed" ? "retry" : "initiate", method: m }, "Refund initiated"); }}>Initiate</Act>}
         {fin && c.status === "initiated" && <Act onClick={() => { const ref = ask("Refund reference (UTR / gateway refund id):"); if (!ref) return; const note = ask("How you verified it (at least 10 characters):", "Verified in bank statement"); if (note) act(c, { action: "confirm", reference: ref, confirmation_type: "manual_reconciliation", note }, "Refund confirmed"); }}>Confirm (other admin)</Act>}
@@ -96,7 +104,7 @@ function Returns() {
   return <Table testid="ops-returns" state={s} empty="No contested returns need a decision." columns={[
     { h: "Return", r: (r) => <><b className="font-mono">{r.number}</b><div className="text-xs text-muted2">{r.kind} · {day(r.created_at)}</div></> },
     { h: "Reason", r: (r) => r.reason || "—" },
-    { h: "Status", r: (r) => <StatusBadge status={r.status} /> },
+    { h: "Status", r: (r) => <CaseStatus status={r.status} /> },
     { h: "", r: (r) => <>
       <Act onClick={() => { const n = ask("Note for approving this return (at least 5 characters):"); if (n) run(() => API.post(`/admin/returns/${r.id}/decision`, { decision: "approve", note: n }), "Return approved", reload); }}>Approve</Act>
       <Act danger onClick={() => { const n = ask("Reason for rejecting (at least 5 characters):"); if (n) run(() => API.post(`/admin/returns/${r.id}/decision`, { decision: "reject", note: n }), "Return rejected", reload); }}>Reject</Act>
@@ -123,7 +131,7 @@ function Settlements({ fin }) {
     <Table testid="ops-settlements" state={s} empty="No settlements yet." columns={[
       { h: "Settlement", r: (st) => <><b className="font-mono">{st.number || st.id.slice(0, 8)}</b><div className="text-xs text-muted2">{day(st.created_at)}</div></> },
       { h: "Amount", r: (st) => rupees(st.amount_paise) },
-      { h: "Status", r: (st) => <StatusBadge status={st.status} /> },
+      { h: "Status", r: (st) => <CaseStatus status={st.status} /> },
       { h: "", r: (st) => fin && <>
         {st.status === "requested" && <Act onClick={() => act(st, { action: "approve" }, "Approved")}>Approve (not the requester)</Act>}
         {st.status === "approved" && <Act onClick={() => { const ref = ask("Payout reference (UTR / transfer id):"); if (ref) act(st, { action: "mark_paid", reference: ref }, "Marked paid"); }}>Mark paid (not the approver)</Act>}
@@ -150,7 +158,7 @@ function Cod({ fin }) {
 }
 
 function Duplicates({ fin }) {
-  const [s, reload] = useList("/admin/payments/duplicates", {});
+  const [s, reload] = useList("/admin/payments/duplicates", {}, fin);
   if (!fin) return <p className="text-sm text-muted2">Finance administrators only.</p>;
   return <Table testid="ops-duplicates" state={s} empty="No duplicate payments waiting for a refund." columns={[
     { h: "Order", r: (d) => <b className="font-mono">{d.order_number}</b> },
@@ -177,7 +185,7 @@ function Support() {
   return <Table testid="ops-support" state={s} empty="No open support tickets." columns={[
     { h: "Ticket", r: (t) => <><b className="font-mono">{t.number || t.id.slice(0, 8)}</b><div className="text-xs text-muted2">{t.category} · {day(t.created_at)}</div></> },
     { h: "Subject", r: (t) => t.subject },
-    { h: "Status", r: (t) => <StatusBadge status={t.status} /> },
+    { h: "Status", r: (t) => <CaseStatus status={t.status} /> },
     { h: "", r: (t) => <Act onClick={() => { const b = ask(`Reply to "${t.subject}":`); if (b) run(() => API.post(`/admin/support/tickets/${t.id}/reply`, { body: b }), "Reply sent", reload); }}>Reply</Act> },
   ]} />;
 }

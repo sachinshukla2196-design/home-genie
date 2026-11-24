@@ -73,6 +73,8 @@ def normalise(event: dict, header_event_id: str = "") -> dict:
 
 async def claim(ev: dict) -> bool:
     """True when THIS delivery should process the event (exactly one concurrent delivery wins)."""
+    from money_guard import ensure as _money_guard          # Programme 01 (B-004): fail closed without the unique indexes
+    await _money_guard("webhooks")          # 503: the gateway retries the delivery later; nothing was recorded
     now = datetime.now(timezone.utc)
     try:
         await db.webhook_events.insert_one({**ev, "provider": "razorpay", "status": "processing", "claimed_at": now.isoformat(),
@@ -148,13 +150,9 @@ async def complete_paid_order(order: dict, request: Optional[Request] = None) ->
     """Finish the money effects of a payment that THIS attempt applied, so a retry completes what a crash interrupted.
     Both steps are idempotent: the vendor sale per (order, vendor) has a unique ledger key, and the commission plan is
     frozen once per order. An order that must be refunded (late / cancelled) earns nothing here."""
-    if order.get("needs_refund") or order.get("status") == "cancelled" or order.get("payment_status") not in ("paid", "partially_refunded"):
-        return
-    from ledger import post_order_collected
-    from commission import distribute_sale_commissions
-    await post_order_collected(order)
-    buyer = await db.users.find_one({"id": order.get("user_id")}, {"_id": 0}) or {}
-    await distribute_sale_commissions(order, buyer, request)
+    # Programme 01 (B-003): the one shared, idempotent completion step used by every payment path.
+    from order_completion import complete_paid_order as _complete
+    await _complete(order["id"], request, source="razorpay_webhook")
 
 
 @router.post("/webhook/razorpay")

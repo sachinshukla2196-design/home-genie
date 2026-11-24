@@ -4,6 +4,8 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime, timezone, timedelta
 
+from pymongo.errors import DuplicateKeyError
+
 from money import to_paise, paise_to_float, paise_of
 from core import (db, now_iso, new_id, get_current_user, get_settings, get_or_create_wallet, wallet_apply,
                   add_wallet_transaction, create_notification, log_audit)
@@ -134,7 +136,14 @@ async def submit_kyc(body: KycBody, request: Request, user: dict = Depends(get_c
         rec["id"] = new_id()
         rec["created_at"] = now_iso()
         rec["version"] = 1
-        await db.kyc_records.insert_one(dict(rec))
+        try:
+            await db.kyc_records.insert_one(dict(rec))
+        except DuplicateKeyError:
+            # W5: a concurrent submission (double click, two tabs) created the member's record first (unique index
+            # kyc_records_user_unique); this submission updates that record exactly like a resubmission, never a second record.
+            for k in ("id", "created_at", "version"):
+                rec.pop(k, None)
+            await db.kyc_records.update_one({"user_id": user["id"]}, {"$set": rec, "$inc": {"version": 1}})
     await db.users.update_one({"id": user["id"]}, {"$set": {"kyc_status": "pending", "updated_at": now_iso()}})
     await create_notification(user["id"], "kyc", "KYC submitted",
                               "Your KYC has been submitted and is under review.",

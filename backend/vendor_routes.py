@@ -23,7 +23,6 @@ from vendor_lifecycle import (move, ADMIN_ACTIONS, REASON_REQUIRED, SELLING, CON
                               ONBOARDING, admin_actor)
 from vendor_staff import authorize_staff, VENDOR_STAFF_ROLE
 import catalogue as cat
-from fastapi.responses import Response
 from core import (db, now_iso, new_id, get_current_user, require_admin, require_vendor_admin, create_notification, log_audit,
                   create_token, clean_user, next_sequence, P_PUBLIC)
 
@@ -43,6 +42,11 @@ FLOW = {
 # Stock returns automatically only when the goods never left (reject / pre-dispatch cancel). Goods that come BACK
 # (returned_to_origin) are restocked only after the vendor records receipt + inspection (see return-inspection).
 RESTOCK_ON = {"rejected", "cancelled"}
+# Programme 01 (B-001): every way a vendor group ends WITHOUT supplying the goods has the same money effect on a paid order:
+# the refund obligation is recorded atomically with the transition (`refund_due`), the vendor's sale and platform commission
+# for that group are reversed, and ONE refund case for that group's lines is opened. Returned-to-origin goods are restocked
+# separately, only after the vendor's receipt inspection. No money is paid out here: the case follows the two-person refund flow.
+NOT_SUPPLIED_MONEY = {"rejected", "cancelled", "returned_to_origin"}
 LOW_STOCK = 5
 STATUS_TEXT = {
     "accepted": "accepted by the seller", "packed": "packed", "dispatched": "dispatched",
@@ -147,14 +151,19 @@ APPROVAL_FIELDS = {"business_name": "Ask HOME GENIES support to change the regis
 def _validate_contact(d: dict) -> None:
     """Server-side checks for the contact fields (Batch 14, VEN-05). Empty optional values are allowed."""
     import re as _re
-    from vendor_onboarding import INDIAN_STATES
+    from vendor_onboarding import normalise_indian_state
     phone = re.sub(r"[\s-]", "", d.get("phone") or "")
     if not _re.fullmatch(r"(\+91)?[6-9]\d{9}", phone):
         raise HTTPException(status_code=400, detail="Enter a valid 10-digit mobile number for the business.")
     if d.get("pincode") and not _re.fullmatch(r"[1-9]\d{5}", d["pincode"].strip()):
         raise HTTPException(status_code=400, detail="Enter a valid 6-digit PIN code.")
-    if d.get("state") and d["state"] not in INDIAN_STATES:
-        raise HTTPException(status_code=400, detail="Choose the state from the list.")
+    if d.get("state"):
+        # Programme 01 (B-008): accept the canonical names (any letter case) and the two-letter codes older records hold;
+        # anything else is rejected. The accepted form is written back (canonical name spelling, or the upper-case code).
+        st = normalise_indian_state(d["state"])
+        if not st:
+            raise HTTPException(status_code=400, detail="Choose the state from the list.")
+        d["state"] = st
     if d.get("support_email") and not _re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", d["support_email"].strip()):
         raise HTTPException(status_code=400, detail="Enter a valid support e-mail address, or leave it blank.")
     for k in ("contact_person", "address", "city", "return_address"):
@@ -210,6 +219,8 @@ async def vendor_save(body: VendorProfileIn, request: Request, user: dict = Depe
         # Approved/active/suspended vendors may update contact details only; legal/bank changes go through admin.
         allowed = {k: getattr(body, k) for k in ("contact_person", "phone", "support_email", "address", "city",
                                                   "state", "pincode", "return_address")}
+        if v.get("state") and not (allowed.get("state") or "").strip():
+            raise HTTPException(status_code=400, detail="Choose the state from the list.")   # B-008: cannot blank a stored state
         _validate_contact(allowed)          # Batch 14 (VEN-05)
         await db.vendors.update_one({"user_id": user["id"]}, {"$set": {**allowed, "updated_at": now_iso()}})
         await log_audit(user, "vendor_profile_updated", "vendor", v["id"], new_value=allowed, request=request)
@@ -219,6 +230,12 @@ async def vendor_save(body: VendorProfileIn, request: Request, user: dict = Depe
     if bad:
         raise HTTPException(status_code=400, detail="Choose categories from the four HOME GENIES pillars only.")
     data = body.model_dump(exclude={"submit", "agree_terms"})
+    if data.get("state", "").strip():                  # Programme 01 (B-008): drafts may leave it blank, but never free text
+        from vendor_onboarding import normalise_indian_state
+        st = normalise_indian_state(data["state"])
+        if not st:
+            raise HTTPException(status_code=400, detail="Choose the state from the list.")
+        data["state"] = st
     # The client only ever sees masked bank/PAN values; a blank field means "keep what is stored".
     for k in ("bank_account", "pan"):
         if not data[k].strip() and v and v.get(k):
@@ -565,17 +582,29 @@ async def vendor_archive(product_id: str, body: ArchiveIn, request: Request, use
 
 
 # ---------------- CSV import / export (own catalogue only)
+PRODUCT_EXPORT_MAX = 5000     # W4: a larger catalogue is refused with a clear message instead of being silently cut
+
+
 @router.get("/vendor/products/export.csv")
-async def vendor_export_products(user: dict = Depends(require_approved_vendor)):
-    rows = await db.products.find({"vendor_id": user["_vendor"]["id"]}, P_PUBLIC).sort("created_at", 1).to_list(5000)
-    return Response(cat.products_to_csv(rows), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=my-products.csv"})
+async def vendor_export_products(request: Request, user: dict = Depends(require_approved_vendor)):
+    """This vendor's own catalogue (staff need `products.read`). W4: size-checked, audited, every cell formula-safe, no-store."""
+    from exports import audit_export, check_size, csv_response, new_export_id
+    eid, vid = new_export_id(), user["_vendor"]["id"]
+    q = {"vendor_id": vid}
+    await check_size(user, request, "vendor_products", eid, await db.products.count_documents(q), PRODUCT_EXPORT_MAX, scope=f"vendor:{vid}")
+    rows = await db.products.find(q, P_PUBLIC).sort("created_at", 1).to_list(PRODUCT_EXPORT_MAX)
+    text = cat.products_to_csv(rows)
+    await audit_export(user, request, "vendor_products", eid, rows=len(rows), scope=f"vendor:{vid}")
+    return csv_response(text, "my-products.csv", eid)
 
 
 @router.get("/vendor/products/import-template.csv")
 async def vendor_import_template(mode: str = "products", user: dict = Depends(require_approved_vendor)):
     if mode not in ("products", "stock"):
         raise HTTPException(status_code=400, detail="mode must be products or stock.")
-    return Response(cat.template_csv(mode), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename=import-{mode}.csv"})
+    # a fixed example file (no data), so no audit record; same no-store response as every export
+    from exports import csv_response, new_export_id
+    return csv_response(cat.template_csv(mode), f"import-{mode}.csv", new_export_id())
 
 
 class ImportIn(BaseModel):
@@ -839,24 +868,38 @@ async def vendor_order(order_id: str, user: dict = Depends(require_vendor_obliga
                           "cod_discrepancy": o.get("cod_discrepancy")}}
 
 
-async def sweep_dispatch_deadlines(limit: int = 500) -> int:
-    """Once per fulfilment: tell the vendor an order has passed its dispatch deadline. Idempotent (flag on the fulfilment)."""
+async def sweep_dispatch_deadlines(limit: int = 500, max_seconds: float = None) -> int:
+    """Once per fulfilment: tell the vendor an order has passed its dispatch deadline. Idempotent (flag on the fulfilment).
+    Programme 01 (B-005): orders not yet overdue stay in the query, so a plain `.limit(500)` never reached the rest; this is
+    now a resumable keyset sweep over all of them (`limit` is the page size)."""
+    from sweeps import run_sweep
     n = 0
     q = {"payment_status": {"$nin": ["pending", "failed"]}, "needs_refund": {"$ne": True}, "status": {"$nin": ["cancelled"]},
          "fulfilments": {"$elemMatch": {"status": {"$in": ["new", "accepted", "packed"]}, "deadline_notified": {"$ne": True}}}}
-    async for o in db.orders.find(q, {"_id": 0}).limit(limit):
-        for f in o["fulfilments"]:
-            if f.get("status") not in ("new", "accepted", "packed") or f.get("deadline_notified"):
-                continue
-            lines = [li for li in o.get("items", []) if li.get("vendor_id") == f["vendor_id"]]
-            if not _dispatch_deadline(o, lines, f)["dispatch_overdue"]:
-                continue
-            claim = await db.orders.update_one({"id": o["id"], "fulfilments": {"$elemMatch": {"vendor_id": f["vendor_id"], "deadline_notified": {"$ne": True}}}},
-                                               {"$set": {"fulfilments.$.deadline_notified": True}})
-            if claim.modified_count == 1:
-                v = await db.vendors.find_one({"id": f["vendor_id"]}, {"_id": 0, "user_id": 1})
-                await create_notification(v["user_id"], "order", "Dispatch deadline passed", f"Order {o.get('order_number')} is past its dispatch deadline. Please dispatch it or tell the customer why.", meta={"order_id": o["id"]})
-                n += 1
+
+    async def one(o, _dry):
+        nonlocal n
+        before = n
+        n += await _notify_overdue(o)
+        return "updated" if n > before else "skipped"
+    await run_sweep("dispatch_deadlines", "orders", q, one, batch=limit, max_seconds=max_seconds, projection={"_id": 0})
+    return n
+
+
+async def _notify_overdue(o: dict) -> int:
+    n = 0
+    for f in o["fulfilments"]:
+        if f.get("status") not in ("new", "accepted", "packed") or f.get("deadline_notified"):
+            continue
+        lines = [li for li in o.get("items", []) if li.get("vendor_id") == f["vendor_id"]]
+        if not _dispatch_deadline(o, lines, f)["dispatch_overdue"]:
+            continue
+        claim = await db.orders.update_one({"id": o["id"], "fulfilments": {"$elemMatch": {"vendor_id": f["vendor_id"], "deadline_notified": {"$ne": True}}}},
+                                           {"$set": {"fulfilments.$.deadline_notified": True}})
+        if claim.modified_count == 1:
+            v = await db.vendors.find_one({"id": f["vendor_id"]}, {"_id": 0, "user_id": 1})
+            await create_notification(v["user_id"], "order", "Dispatch deadline passed", f"Order {o.get('order_number')} is past its dispatch deadline. Please dispatch it or tell the customer why.", meta={"order_id": o["id"]})
+            n += 1
     return n
 
 
@@ -887,7 +930,7 @@ async def vendor_update_fulfilment(order_id: str, body: FulfilIn, request: Reque
     if nxt in FORWARD_STEPS and o.get("status") in ORDER_CLOSED:
         # Batch 12 (audit C-5c): a cancelled order cannot be moved forward (and so cannot be revived to "delivered").
         raise HTTPException(status_code=409, detail="This order was cancelled. Do not ship it; contact HOME GENIES if the goods already left.")
-    if nxt in ("rejected", "cancelled", "delivery_failed") and len(body.note.strip()) < 5:
+    if nxt in ("rejected", "cancelled", "delivery_failed", "returned_to_origin") and len(body.note.strip()) < 5:
         raise HTTPException(status_code=400, detail="Please give a reason (at least 5 characters).")
     if nxt == "dispatched" and not (body.carrier.strip() and body.tracking_number.strip()):
         raise HTTPException(status_code=400, detail="Carrier and tracking number are required to dispatch.")
@@ -905,8 +948,8 @@ async def vendor_update_fulfilment(order_id: str, body: FulfilIn, request: Reque
     push = {"fulfilments.$.events": event}
     if nxt in RESTOCK_ON:   # the restock decision is recorded atomically with the transition, so a crash cannot lose it
         push["restock_intents"] = intent("vendor_release", user["id"], vendor_id=vid, reason=f"order_{nxt}")
-        if o.get("payment_status") in ("paid", "partially_refunded"):
-            sets["fulfilments.$.refund_due"] = True       # G2: the customer must be refunded for this vendor's lines
+    if nxt in NOT_SUPPLIED_MONEY and o.get("payment_status") in ("paid", "partially_refunded"):
+        sets["fulfilments.$.refund_due"] = True           # G2 / B-001: the customer must be refunded for this vendor's lines
     flt = {"id": order_id, "fulfilments": {"$elemMatch": {"vendor_id": vid, "status": cur}}}
     if nxt in FORWARD_STEPS:              # write-time check too: a refund or cancellation landing mid-request must win
         flt["payment_status"] = {"$in": list(FULFILLABLE_PAYMENT)}
@@ -917,7 +960,9 @@ async def vendor_update_fulfilment(order_id: str, body: FulfilIn, request: Reque
 
     if nxt in RESTOCK_ON:   # exactly once per line; an interrupted run is replayed by recovery
         await run_intents(order_id)
-        from ledger import post_sale_reversal       # a paid order the vendor did not fulfil: take the recorded sale back
+    if nxt in NOT_SUPPLIED_MONEY:
+        # Idempotent; a crash after the transition is repaired by returns_routes.ensure_cases_for_flagged_orders (refund_due).
+        from ledger import post_sale_reversal       # a paid order the vendor did not supply: take the recorded sale back
         await post_sale_reversal(o, vid)
         from returns_routes import settle_vendor_rejection   # paid: one refund case for this vendor's lines (+ GST share)
         await settle_vendor_rejection(order_id, vid)

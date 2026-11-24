@@ -3,7 +3,7 @@ import { Link, useLocation, Outlet } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
   LayoutDashboard, Users, Package, ShoppingCart, Banknote,
-  FileBarChart, Settings, ScrollText, LogOut, ShieldCheck, Store, Handshake, Award, UserCheck, Inbox, UserCog, Briefcase, PackageCheck, ClipboardList, Megaphone,
+  FileBarChart, Settings, ScrollText, LogOut, ShieldCheck, Store, Handshake, Award, UserCheck, Inbox, UserCog, Briefcase, PackageCheck, Megaphone,
 } from "lucide-react";
 import { Logo } from "@/components/Logo";
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";

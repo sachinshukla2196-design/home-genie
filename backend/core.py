@@ -11,6 +11,7 @@ from typing import Optional
 from dotenv import load_dotenv
 from fastapi import Depends, Request, HTTPException
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo import uri_parser
 from money import to_paise, paise_to_float
 
 ROOT_DIR = Path(__file__).parent
@@ -28,6 +29,9 @@ def _make_client(url):
 
 
 try:
+    # PyMongo 4.18 (W6 upgrade) resolves mongodb+srv:// lazily inside the client; parse_uri still resolves it eagerly, so a wrong
+    # cluster host keeps raising here, at import, exactly as before the W6 upgrade (no network work for mongodb:// URLs).
+    uri_parser.parse_uri(mongo_url)
     client = _make_client(mongo_url)
 except Exception as _e:  # mongodb+srv:// resolves DNS eagerly: a wrong cluster host raises here, at import
     logger.error("MONGO_URL is not usable (%s); serving 503 until it is corrected", type(_e).__name__)
@@ -302,6 +306,8 @@ async def wallet_apply(user_id: str, deltas: dict, require_available: int = None
     """THE only place wallet balances change. `deltas` maps a balance field to a signed amount in PAISE. One atomic update
     moves the exact paise counter and the legacy float counter together. With `require_available` the update only
     happens if available_balance >= that many paise (atomic conditional debit). Returns whether it was applied."""
+    from money_guard import ensure as _money_guard          # Programme 01 (B-004): fail closed without the unique indexes
+    await _money_guard("wallet")
     await get_or_create_wallet(user_id)
     inc = {}
     for f, d in deltas.items():
@@ -318,6 +324,8 @@ async def wallet_apply(user_id: str, deltas: dict, require_available: int = None
 async def add_wallet_transaction(user_id: str, txn_type: str, amount: float, status: str,
                                  reference: str = "", description: str = "", direction: str = "credit"):
     """Immutable ledger entry + exact aggregate update (amount is rupees; stored and applied as integer paise)."""
+    from money_guard import ensure as _money_guard          # Programme 01 (B-004): fail closed without the unique indexes
+    await _money_guard("wallet")
     await get_or_create_wallet(user_id)
     paise = to_paise(amount)
     txn = {

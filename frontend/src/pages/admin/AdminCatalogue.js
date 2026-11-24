@@ -6,6 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { PageHeader, SectionCard } from "@/components/PageHeader";
 import { API, apiError } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
+import { can } from "@/lib/roles";
+import { RoleGate, RoleNote } from "@/components/RoleGate";
 import { ProductStudio } from "@/components/catalogue/ProductStudio";
 
 const TABS = [["revisions", "Changes to review"], ["new", "New products"], ["drafts", "Drafts"], ["add", "Add for a vendor"]];
@@ -27,7 +30,7 @@ export default function AdminCatalogue() {
       {tab === "revisions" && <Revisions />}
       {tab === "new" && <NewProducts />}
       {tab === "drafts" && <Drafts />}
-      {tab === "add" && <AddForVendor />}
+      {tab === "add" && <RoleGate set="contentEditor" what="Adding a product for a vendor"><AddForVendor /></RoleGate>}
     </div>
   );
 }
@@ -60,6 +63,8 @@ function Revisions() {
 }
 
 function RevisionDetail({ pid, onDecided }) {
+  const { user } = useAuth();
+  const canDecide = can(user, "contentEditor");       // W7: the server refuses decisions from other roles
   const [d, setD] = useState(null);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -87,17 +92,20 @@ function RevisionDetail({ pid, onDecided }) {
         </table>
       </div>
       {warnings.length > 0 && <ul className="mt-3 space-y-1 text-xs text-hg-gold">{warnings.map((w) => <li key={w} className="flex gap-1.5"><MessageSquareWarning size={13} className="mt-0.5 shrink-0" /> {w}</li>)}</ul>}
+      {!canDecide ? <div className="mt-3"><RoleNote set="contentEditor" what="Deciding on catalogue changes" testid="cat-readonly" /></div> : <>
       <Textarea className="mt-3" rows={2} placeholder="Reason for the vendor (needed to reject or ask for changes)" value={reason} onChange={(e) => setReason(e.target.value)} aria-label="Reason" />
       <div className="mt-3 flex flex-wrap gap-2">
         <Button onClick={() => decide("approve")} disabled={busy} className="hg-btn rounded-full" data-testid="cat-approve"><Check size={15} /> Approve</Button>
         <Button variant="outline" onClick={() => decide("request_changes")} disabled={busy || reason.trim().length < 5} className="rounded-full">Ask for changes</Button>
         <Button variant="outline" onClick={() => decide("reject")} disabled={busy || reason.trim().length < 5} className="rounded-full text-danger"><X size={15} /> Reject</Button>
-      </div>
+      </div></>}
     </SectionCard>
   );
 }
 
 function NewProducts() {
+  const { user } = useAuth();
+  const canDecide = can(user, "contentEditor");       // W7: the server refuses decisions from other roles
   const [rows, setRows] = useState(null);
   const [reason, setReason] = useState({});
   const load = useCallback(() => API.get("/admin/vendor-products", { params: { status: "pending" } }).then(({ data }) => setRows(data)).catch((e) => toast.error(apiError(e))), []);
@@ -108,7 +116,8 @@ function NewProducts() {
   };
   if (!rows) return <Loader2 className="animate-spin text-muted2" />;
   if (rows.length === 0) return <p className="text-sm text-muted2">No new products are waiting for review.</p>;
-  return (
+  return (<>
+    {!canDecide && <div className="mb-3"><RoleNote set="contentEditor" what="Approving or rejecting new products" testid="cat-new-readonly" /></div>}
     <ul className="grid gap-4 md:grid-cols-2">
       {rows.map((p) => (
         <li key={p.id} className="hg-card space-y-2 p-4" data-testid={`cat-new-${p.sku}`}>
@@ -122,15 +131,15 @@ function NewProducts() {
           {p.short_description && <p className="text-sm text-muted2">{p.short_description}</p>}
           {Object.keys(p.attributes || {}).length > 0 && <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs">{Object.entries(p.attributes).map(([k, v]) => <React.Fragment key={k}><dt className="text-muted2">{k.replace(/_/g, " ")}</dt><dd className="text-ink">{show(v)}</dd></React.Fragment>)}</dl>}
           {(p.compliance_documents || []).length > 0 && <div className="text-xs">Documents: {p.compliance_documents.map((d) => <a key={d.url} href={d.url} target="_blank" rel="noreferrer" className="mr-2 underline">{d.type}</a>)}</div>}
-          <Textarea rows={2} placeholder="Reason (needed to reject)" value={reason[p.id] || ""} onChange={(e) => setReason({ ...reason, [p.id]: e.target.value })} aria-label="Reason" />
+          {canDecide && <><Textarea rows={2} placeholder="Reason (needed to reject)" value={reason[p.id] || ""} onChange={(e) => setReason({ ...reason, [p.id]: e.target.value })} aria-label="Reason" />
           <div className="flex gap-2">
             <Button size="sm" className="hg-btn rounded-full" onClick={() => decide(p, "approve")}><Check size={14} /> Approve</Button>
             <Button size="sm" variant="outline" className="rounded-full text-danger" disabled={(reason[p.id] || "").trim().length < 5} onClick={() => decide(p, "reject")}><X size={14} /> Reject</Button>
-          </div>
+          </div></>}
         </li>
       ))}
     </ul>
-  );
+  </>);
 }
 
 function Drafts() {

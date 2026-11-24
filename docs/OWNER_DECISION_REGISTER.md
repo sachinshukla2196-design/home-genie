@@ -124,3 +124,23 @@ recorded with date).
   business customers need GST invoices in their own name.
 - **D-19 Vendor merchandising requests** — OPEN (low). Vendors cannot request placements today; only admins curate. Recommendation:
   keep admin-only for launch; add a request queue later if vendors ask.
+
+## Programme 01 (2026-11-23) — decisions needed; nothing below is approved
+Implemented behaviour is the safest interim in each case and is described in `PROGRAMME_01_TECHNICAL_SPECIFICATIONS.md`.
+
+| ID | Question | Interim behaviour now in code | Options / trade-offs |
+|---|---|---|---|
+| P1-01 | **Production index migration** (B-004): confirm a verified backup, then run `scripts/vendor_foundation_migrate.py` (dry run, then `--apply`) on production | Programme 01 code refuses every money write (503 `FIN_INDEX_NOT_READY`) until the protective indexes exist | Must happen before this code is deployed; any money duplicates the dry run lists need a finance decision per record |
+| P1-02 | **Historical returned-to-origin orders** (B-001): what is owed for vendor groups returned before Programme 01 (no refund case, vendor sale not reversed)? | Listed by `scripts/programme01_reconcile.py` (`historical_rto_without_case`); never changed automatically | (a) open a refund case for each (customer refunded, vendor sale reversed); (b) finance reviews each (some may have been refunded outside the system) |
+| P1-03 | **Closing a not-supplied refund case "without refund"** (RTO / vendor rejection): the finance `resolve` action closes it with no clawback of the HomeGenie commission on those goods | Unchanged (owner-approved G3: finance may close a case with a note) | (a) keep; (b) forbid `resolve` without refund for these kinds; (c) allow it but claw the commission back anyway |
+| P1-04 | **Unaccepted COD orders** (B-006): should a COD order no seller has accepted expire automatically and return its stock? | Never expired; protected instead by the per-account open-order cap (5) and order rate limits | (a) keep; (b) expire after N days unaccepted (customer notified); (c) require seller acceptance within the dispatch deadline |
+| P1-05 | **Order-protection limits** (B-006): 10 orders / 10 min per account, 60 / 10 min per IP, 5 open unpaid / unaccepted orders, 60 s duplicate window, 60 min grace for a payment in progress | Environment settings with these defaults (`deploy/ENVIRONMENT.md`) | Lower = stronger protection, more legitimate refusals; higher = the reverse |
+| P1-06 | **Merchandising images** (B-009): only validated uploads (our storage / platform Cloudinary folder) or bundled assets; external links refused | Enforced on create / edit; existing sections untouched until edited | Matches the earlier "storage only" rule; the alternative is an allow-list of image hosts |
+| P1-07 | **Admin roles for platform uploads** (B-009): `super_admin` and `admin` (same as merchandising / admin studio); support and accounts refused, including the older product-image upload | In code | Ties to D-16 (role expansion) |
+| P1-08 | **Operations page for non-finance admins**: the page loads the finance approvals queue, which answers 403 to `admin` (pre-existing) | Unchanged (display only) | Hide the Approvals tab for non-finance roles, or show a "finance only" note |
+
+
+---
+**Reconciliation 2026-11-24 (pointer; history above unchanged).** Current, authoritative documents: `HOME_GENIES_MASTER_ROADMAP_CURRENT.md`,
+`HOME_GENIES_CURRENT_MODULE_COMPLETION_MATRIX.md`, `HOME_GENIES_OWNER_DECISION_REGISTER.md`, `HOME_GENIES_PROGRAMME_02_READINESS.md`,
+`HOME_GENIES_REMAINING_WORK_REGISTER.md`.

@@ -72,14 +72,11 @@ if (config.enableHealthCheck) {
 let webpackConfig = {
   // Let Jest resolve the same "@/..." alias the app uses (so component tests can import app code).
   jest: { configure: { moduleNameMapper: { "^@/(.*)$": "<rootDir>/src/$1" } } },
+  // Programme 02 / W8: the build lints with .eslintrc.js (react-app rules + undefined-name, import-integrity and duplicate checks).
+  // "file" mode makes that file the single source of truth; the previous inline config merged only the react-hooks rules into
+  // CRA's near-empty base config, so undefined identifiers compiled. Any ESLint ERROR now fails `npm run build`.
   eslint: {
-    configure: {
-      extends: ["plugin:react-hooks/recommended"],
-      rules: {
-        "react-hooks/rules-of-hooks": "error",
-        "react-hooks/exhaustive-deps": "warn",
-      },
-    },
+    mode: "file",
   },
   webpack: {
     alias: {

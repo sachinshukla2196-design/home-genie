@@ -6,7 +6,7 @@ import asyncio
 import requests
 from fastapi import APIRouter, HTTPException, Request, Depends, UploadFile, File
 from fastapi.responses import Response
-from core import db, now_iso, new_id, get_current_user, require_admin
+from core import db, now_iso, new_id, get_current_user, require_vendor_admin, rate_limit, log_audit
 
 logger = logging.getLogger("homegenies")
 router = APIRouter(prefix="/api", tags=["files"])
@@ -96,7 +96,8 @@ async def _upload_image(request: Request, file: UploadFile, folder: str, owner_i
         logger.exception("Storage upload error")
         raise HTTPException(status_code=502, detail="Image upload failed. Please try again.")
     await db.files.insert_one({
-        "id": new_id(), "storage_path": result["path"], "original_filename": file.filename or "",
+        # the client's file name is kept as a label only (never used in the path), without directories, at most 120 characters
+        "id": new_id(), "storage_path": result["path"], "original_filename": os.path.basename((file.filename or "").replace("\\", "/"))[:120],
         "content_type": ctype, "size": result.get("size", len(data)), "folder": folder,
         "owner_id": owner_id, "is_deleted": False, "created_at": now_iso(),
     })
@@ -110,8 +111,26 @@ async def upload_profile_photo(request: Request, file: UploadFile = File(...), u
 
 
 @router.post("/admin/uploads/product-image")
-async def upload_product_image(request: Request, file: UploadFile = File(...), admin: dict = Depends(require_admin)):
+async def upload_product_image(request: Request, file: UploadFile = File(...), admin: dict = Depends(require_vendor_admin)):
+    # Programme 01 (B-009): only the roles that may edit platform products / merchandising (super admin, admin) may upload
+    await rate_limit("upload_sign", "admin:" + admin["id"])
     url = await _upload_image(request, file, "products", admin["id"])
+    await log_audit(admin, "admin_image_uploaded", "platform_media", "products", new_value={"url": url}, request=request)
+    return {"url": url}
+
+
+@router.post("/admin/uploads/image")
+async def upload_platform_image(request: Request, kind: str = "product", file: UploadFile = File(...),
+                                admin: dict = Depends(require_vendor_admin)):
+    """Programme 01 (B-009): server-side upload of a platform image (used when direct upload is not configured). Real image type
+    is sniffed from the bytes (the browser's type and file name are not trusted), 5 MB maximum, stored under a server-chosen
+    path (no client path, so no traversal or overwrite), recorded in `files`, audited."""
+    folders = {"product": "products", "merchandising": "merchandising"}
+    if kind not in folders:
+        raise HTTPException(status_code=400, detail="kind must be product or merchandising.")
+    await rate_limit("upload_sign", "admin:" + admin["id"])
+    url = await _upload_image(request, file, folders[kind], admin["id"])
+    await log_audit(admin, "admin_image_uploaded", "platform_media", folders[kind], new_value={"url": url}, request=request)
     return {"url": url}
 
 

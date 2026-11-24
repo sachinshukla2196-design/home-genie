@@ -308,11 +308,23 @@ def test_expiry_crash_after_cancel_is_finished_by_recovery(c):
     o = _order(c, p["id"], 2, method="online")
     _age(c, o["id"], 20)
     crash_at("after_expiry_claim")
-    with pytest.raises(Crash):
-        c.get("/api/cron/expire-pending-orders", headers=CRON)
-    assert _get(c, o["id"])["status"] == "cancelled" and _stock(c, p["id"]) == 8
-    assert c.get("/api/cron/expire-pending-orders", headers=CRON).status_code == 200      # next sweep self-heals
-    assert _stock(c, p["id"]) == 10
+    # Programme 01 (B-005/B-006): the expiry is a sweep that isolates a failing order (counted, reported) instead of aborting the
+    # whole run, so the simulated crash no longer escapes the request. What it leaves - the order cancelled, its stock still out -
+    # is checked directly at the crash point below; the same run's self-heal step then returns the stock.
+    seen = {}
+    real_release = stock.release_stock
+
+    async def watch(order_id, *a, **k):
+        seen.setdefault("before_heal", (await db.orders.find_one({"id": order_id}, {"_id": 0, "status": 1}))["status"])
+        seen.setdefault("stock_before_heal", (await db.products.find_one({"id": p["id"]}, {"_id": 0, "stock": 1}))["stock"])
+        return await real_release(order_id, *a, **k)
+    stock.release_stock = watch
+    try:
+        assert c.get("/api/cron/expire-pending-orders", headers=CRON).status_code == 200
+    finally:
+        stock.release_stock = real_release
+    assert seen == {"before_heal": "cancelled", "stock_before_heal": 8}                  # exactly the crash state ...
+    assert _stock(c, p["id"]) == 10                                                      # ... healed by the self-heal step
     c.get("/api/cron/expire-pending-orders", headers=CRON)
     assert _stock(c, p["id"]) == 10
 

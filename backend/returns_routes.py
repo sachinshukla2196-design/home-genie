@@ -94,6 +94,8 @@ async def set_policy(body: PolicyIn, request: Request, admin: dict = Depends(req
 async def open_refund_case(order: dict, kind: str, amount_paise: int, reason: str, source_key: str, *, return_case_id: str = None,
                            vendor_id: str = None):
     """Open (once per source_key) a refund case in `awaiting_review`. Returns (case, created)."""
+    from money_guard import ensure as _money_guard          # Programme 01 (B-004): fail closed without the unique indexes
+    await _money_guard("refunds")
     now = now_iso()
     case = {"id": new_id(), "number": await next_sequence("refund", "RFD", 6), "source_key": source_key, "order_id": order["id"],
             "order_number": order.get("order_number"), "user_id": order["user_id"], "kind": kind, "amount_paise": amount_paise,
@@ -185,14 +187,23 @@ async def settle_vendor_rejection(order_id: str, vendor_id: str):
     if not o or o.get("needs_refund") or o.get("payment_status") not in PAID_STATES:
         return None
     case = None
-    already = await db.refund_cases.find_one({"source_key": f"vreject:{order_id}:{vendor_id}"}, {"_id": 0})
+    # Programme 01 (B-001): goods returned to origin are the same obligation (the customer never received them) with their
+    # own case kind and key, so reports can tell a courier return from a vendor refusal.
+    grp = next((f for f in o.get("fulfilments", []) if f.get("vendor_id") == vendor_id), {})
+    rto = grp.get("status") == "returned_to_origin"
+    key = f"{'rto' if rto else 'vreject'}:{order_id}:{vendor_id}"
+    already = await db.refund_cases.find_one({"source_key": key}, {"_id": 0})
     if already:
         case = already
     else:
         amount = min(_lines_refund_paise(o, vendor_id), await refundable_paise(o) - await _open_case_total(order_id))
         if amount > 0:
-            case, _ = await open_refund_case(o, "vendor_rejection", amount, "The vendor could not fulfil a paid order",
-                                             f"vreject:{order_id}:{vendor_id}", vendor_id=vendor_id)
+            if rto:
+                case, _ = await open_refund_case(o, "returned_to_origin", amount, "The goods were returned to the seller undelivered",
+                                                 key, vendor_id=vendor_id)
+            else:
+                case, _ = await open_refund_case(o, "vendor_rejection", amount, "The vendor could not fulfil a paid order",
+                                                 key, vendor_id=vendor_id)
     states = [f.get("status") for f in o.get("fulfilments", [])]
     if states and all(st in ("rejected", "cancelled") for st in states):
         await db.orders.update_one({"id": order_id, "status": {"$nin": ["cancelled", "delivered", "refunded"]}},
@@ -201,20 +212,50 @@ async def settle_vendor_rejection(order_id: str, vendor_id: str):
     return case
 
 
-async def ensure_cases_for_flagged_orders(limit: int = 200):
+async def ensure_cases_for_flagged_orders(limit: int = 200, dry_run: bool = False, max_seconds: Optional[float] = None) -> dict:
     """Every refund obligation has its case (created once, lazily; also run by the cron):
-    late payments flagged `needs_refund`, paid orders cancelled by an admin (`refund_due_cancel`), and vendor rejections of
-    paid orders (`fulfilments.refund_due`). The markers are written atomically with the state change, so a crash between
-    the change and the case creation is repaired here."""
-    async for o in db.orders.find({"needs_refund": True, "payment_status": {"$in": ["paid", "partially_refunded"]}}, {"_id": 0}).limit(limit):
-        if not await db.refund_cases.find_one({"source_key": f"late:{o['id']}"}, {"_id": 1}):
-            await open_refund_case(o, "late_payment", await refundable_paise(o), o.get("needs_refund_reason") or "paid_after_cancellation", f"late:{o['id']}")
-    async for o in db.orders.find({"fulfilments.refund_due": True}, {"_id": 0, "id": 1, "fulfilments": 1}).limit(limit):
-        for f in o.get("fulfilments", []):
-            if f.get("refund_due"):
-                await settle_vendor_rejection(o["id"], f["vendor_id"])
-    async for o in db.orders.find({"refund_due_cancel": True}, {"_id": 0, "id": 1}).limit(limit):
+    late payments flagged `needs_refund`, paid orders cancelled by an admin (`refund_due_cancel`), and vendor groups of paid
+    orders that ended without supplying - rejected, cancelled or returned to origin (`fulfilments.refund_due`). The markers are
+    written atomically with the state change, so a crash between the change and the case creation is repaired here.
+
+    Programme 01 (B-005): each kind used to stop after `limit` orders; each is now a resumable keyset sweep over all of them
+    (`limit` is the page size). Cases are opened under their unique source key, so a repeat never opens a second one."""
+    from sweeps import run_sweep
+    out = {}
+
+    async def late(o, dry):
+        if await db.refund_cases.find_one({"source_key": f"late:{o['id']}"}, {"_id": 1}):
+            return "skipped"
+        if dry:
+            return "eligible"
+        await open_refund_case(o, "late_payment", await refundable_paise(o), o.get("needs_refund_reason") or "paid_after_cancellation", f"late:{o['id']}")
+        return "updated"
+    out["late_payment"] = await run_sweep("refund_obligations_late", "orders",
+                                          {"needs_refund": True, "payment_status": {"$in": ["paid", "partially_refunded"]}},
+                                          late, batch=limit, dry_run=dry_run, max_seconds=max_seconds, projection={"_id": 0})
+
+    async def not_supplied(o, dry):
+        due = [f for f in o.get("fulfilments", []) if f.get("refund_due")]
+        if not due:
+            return "skipped"
+        if dry:
+            return "eligible"
+        for f in due:
+            # Programme 01 (B-001): a crash between the transition and the sale reversal is repaired here too (idempotent).
+            await L.post_sale_reversal(o, f["vendor_id"])
+            await settle_vendor_rejection(o["id"], f["vendor_id"])
+        return "updated"
+    out["not_supplied"] = await run_sweep("refund_obligations_not_supplied", "orders", {"fulfilments.refund_due": True}, not_supplied,
+                                          batch=limit, dry_run=dry_run, max_seconds=max_seconds, projection={"_id": 0, "id": 1, "fulfilments": 1})
+
+    async def cancelled(o, dry):
+        if dry:
+            return "eligible"
         await settle_paid_cancellation(o["id"])
+        return "updated"
+    out["paid_cancellation"] = await run_sweep("refund_obligations_cancel", "orders", {"refund_due_cancel": True}, cancelled,
+                                               batch=limit, dry_run=dry_run, max_seconds=max_seconds, projection={"_id": 0, "id": 1})
+    return out
 
 
 async def confirm_open_cases_for_order(order_id: str, refund: dict, admin_id: str):
@@ -239,7 +280,7 @@ async def _return_refunded(return_case_id: str):
 @router.get("/admin/refund-cases")
 async def list_refund_cases(state: Optional[str] = None, page: int = 1, page_size: int = 25, admin: dict = Depends(require_admin)):
     page, page_size = clamp_page(page, page_size)
-    await ensure_cases_for_flagged_orders()
+    await ensure_cases_for_flagged_orders(max_seconds=3)        # B-005: bounded here; the cron finishes any remainder
     groups = {"open": ["awaiting_review", "initiated", "failed"], "closed": ["confirmed", "resolved"]}
     if state and state not in groups and state not in ("awaiting_review", "initiated", "confirmed", "failed", "resolved"):
         raise HTTPException(status_code=400, detail="Unknown state.")
@@ -267,6 +308,35 @@ async def verify_provider_refund(order: dict, reference: str):
     """Hook for payment-provider verification. Returns (verified, detail). No provider refund API is wired up yet, so this
     never claims verification it cannot perform."""
     return False, "Provider refund verification is not configured; use manual reconciliation with a reference and note."
+
+
+BOOKING_FAILURE_TEXT = {
+    "exceeds_refundable": "The order no longer has this much left to refund (another refund was booked). Mark this case failed and "
+                          "initiate it again with the correct amount.",
+    "nothing_refundable": "Nothing is left to refund on this order. Close the case with a note instead.",
+    "order_not_refundable": "This order is not in a refundable payment state.",
+    "zero_amount": "A refund of zero cannot be confirmed. Close the case with a note instead.",
+    "booking_rejected": "The refund could not be booked against the order. Nothing was recorded; check the amount and try again."}
+
+
+async def _release_claim(case_id: str, ref: str):
+    await db.refund_cases.update_one({"id": case_id, "confirming_reference": ref},
+                                     {"$unset": {"confirming_reference": "", "confirming_by": "", "confirming_at": ""}})
+
+
+async def _booking_failed(case: dict, admin: dict, ref: str, why: str, request: Request):
+    """Programme 01 (B-002): nothing was booked. Release the confirmation claim (so the case can be corrected or retried, even
+    with the same reference), record why on the case, audit it, and refuse the confirmation. The case stays open."""
+    now = now_iso()
+    await db.refund_cases.update_one(
+        {"id": case["id"], "confirming_reference": ref},
+        {"$unset": {"confirming_reference": "", "confirming_by": "", "confirming_at": ""},
+         "$set": {"last_booking_error": {"reason": why, "reference": ref, "at": now, "by": admin["id"]}, "updated_at": now},
+         "$push": {"events": {"status": "booking_rejected", "at": now, "by": admin["id"], "note": f"{why} (ref {ref})"}}})
+    await log_audit(admin, "refund_case_booking_rejected", "refund_case", case["id"],
+                    new_value={"reason": why, "reference": ref, "amount_paise": case["amount_paise"], "order_id": case["order_id"]},
+                    request=request)
+    raise HTTPException(status_code=409, detail=BOOKING_FAILURE_TEXT.get(why, BOOKING_FAILURE_TEXT["booking_rejected"]))
 
 
 @router.post("/admin/refund-cases/{case_id}/action")
@@ -317,6 +387,8 @@ async def refund_case_action(case_id: str, body: RefundAction, request: Request,
                 raise HTTPException(status_code=400, detail="Manual reconciliation needs a note (10+ characters) explaining how the payment return was verified.")
         else:
             raise HTTPException(status_code=400, detail="confirmation_type must be 'provider' or 'manual_reconciliation'.")
+        from money_guard import ensure as _money_guard     # B-004: refuse before claiming, so nothing is left half-done
+        await _money_guard("refunds", "ledger", "wallet")
         # D1: claim the case for ONE reference before any money moves. Only the claimant runs the refund engine; a retry
         # with the same reference continues an interrupted confirmation; any other reference is refused.
         claimed = await db.refund_cases.update_one(
@@ -327,18 +399,36 @@ async def refund_case_action(case_id: str, body: RefundAction, request: Request,
             raise HTTPException(status_code=409, detail="This refund case is already being confirmed with another reference."
                                 if current.get("confirming_reference") else "This refund case was just updated. Refresh and try again.")
         import shop_routes
+        event_id = f"{case['order_id']}:refund:{ref}"
+        if case["amount_paise"] <= 0:          # Programme 01 (B-002): a zero case is never a refund; close it with "resolve"
+            await _booking_failed(case, admin, ref, "zero_amount", request)
         res = await shop_routes.reverse_order_financials(case["order_id"], admin, request, refund_amount=paise_to_float(case["amount_paise"]),
                                                          reference=ref, reason=f"{case['number']}: {note or case['kind']}",
-                                                         case_id=case["id"], vendor_id=case.get("vendor_id"))
-        if res.get("duplicate") and not await db.order_refunds.find_one({"id": f"{case['order_id']}:refund:{ref}", "case_id": case["id"]}, {"_id": 1}):
+                                                         case_id=case["id"], vendor_id=case.get("vendor_id"), exact=True)
+        if res.get("duplicate") and not await db.order_refunds.find_one({"id": event_id, "case_id": case["id"]}, {"_id": 1}):
+            await _release_claim(case_id, ref)
             raise HTTPException(status_code=409, detail="This reference was already used for a different refund on this order.")
         if res.get("conflict"):
             raise HTTPException(status_code=409, detail="The order was just updated. Try again.")
+        # Programme 01 (B-002): the case is confirmed ONLY on a completed refund booking for THIS case of exactly its amount.
+        # A rejected or zero booking never counts: the case stays open (initiated), so every payout on the order stays held.
+        ev = await db.order_refunds.find_one({"id": event_id}, {"_id": 0})
+        if res.get("rejected") or not ev or ev.get("status") == "rejected":
+            await _booking_failed(case, admin, ref, res.get("why") or "booking_rejected", request)
+        if ev.get("status") != "completed" or ev.get("case_id") not in (case["id"], None):
+            raise HTTPException(status_code=409, detail="The refund booking has not finished yet. Confirm again with the same reference.")
+        if int(ev.get("amount_paise") or 0) <= 0:
+            await _booking_failed(case, admin, ref, "zero_amount", request)
+        if int(ev["amount_paise"]) != case["amount_paise"]:
+            # Only possible for a booking made before Programme 01 (the engine used to lower the amount silently). The booked
+            # amount is the truth; the difference is recorded so finance can see it.
+            sets["booking_shortfall_paise"] = case["amount_paise"] - int(ev["amount_paise"])
         sets.update({"reference": ref, "confirmation_type": body.confirmation_type, "confirmed_by": admin["id"],
-                     "refund_event": f"{case['order_id']}:refund:{ref}", "amount_refunded_paise": to_paise(res["refund_amount"]) if not res.get("duplicate") else case["amount_paise"]})
+                     "refund_event": event_id, "amount_refunded_paise": int(ev["amount_paise"])})
     if target in ("failed", "resolved") and case["status"] == "initiated" and case.get("confirming_reference"):
         # a confirmation was started; if its refund was recorded it must be finished, not abandoned
-        if await db.order_refunds.find_one({"id": f"{case['order_id']}:refund:{case['confirming_reference']}"}, {"_id": 1}):
+        if await db.order_refunds.find_one({"id": f"{case['order_id']}:refund:{case['confirming_reference']}",
+                                            "status": {"$ne": "rejected"}}, {"_id": 1}):     # a rejected booking booked nothing
             raise HTTPException(status_code=409, detail=f"A refund was already recorded with reference {case['confirming_reference']}. "
                                                         "Finish the confirmation with that reference.")
         unset_claim = True
@@ -709,13 +799,42 @@ async def _complete_inspection(rc: dict, actor_id: str):
     await create_notification(rc["user_id"], "order", "Return inspected", f"Your return {rc['number']} was inspected.", meta={"return_case": rc["id"]})
 
 
-async def reconcile_returns(limit: int = 100) -> int:
-    """Repair sweep: finish inspections whose restock / refund case / replacement step was interrupted. Idempotent."""
-    n = 0
-    async for rc in db.return_cases.find({"status": "inspected"}, {"_id": 0}).limit(limit):
+async def historical_rto_report(limit: int = 500) -> dict:
+    """Programme 01 (B-001), REPORT ONLY - never writes. Paid orders with a vendor group returned to origin that has no refund
+    case and no pending refund marker: these were returned before Programme 01, when a return to origin had no money effect.
+    The customer may be owed the group's value and the vendor's sale was not reversed. Finance decides each one (open a case /
+    record why none is owed); nothing here changes them."""
+    out = []
+    q = {"payment_status": {"$in": list(PAID_STATES)}, "fulfilments.status": "returned_to_origin"}
+    async for o in db.orders.find(q, {"_id": 0, "id": 1, "order_number": 1, "fulfilments": 1, "items": 1, "prices_include_gst": 1,
+                                      "subtotal_paise": 1, "gst_paise": 1, "subtotal": 1, "gst_amount": 1}).sort("id", 1):
+        for f in o.get("fulfilments", []):
+            if f.get("status") != "returned_to_origin" or f.get("refund_due"):
+                continue
+            vid = f["vendor_id"]
+            if await db.refund_cases.find_one({"order_id": o["id"], "source_key": {"$in": [f"rto:{o['id']}:{vid}", f"vreject:{o['id']}:{vid}"]}}, {"_id": 1}):
+                continue
+            sale = await db.vendor_ledger.find_one({"source_key": f"sale:{o['id']}:{vid}"}, {"_id": 0, "amount_paise": 1})
+            reversed_ = await db.vendor_ledger.find_one({"source_key": f"salerev:{o['id']}:{vid}"}, {"_id": 1})
+            if len(out) < limit:
+                out.append({"order": o.get("order_number") or o["id"], "vendor_id": vid, "group_value_paise": _lines_refund_paise(o, vid),
+                            "vendor_sale_paise": (sale or {}).get("amount_paise"), "sale_reversed": bool(reversed_)})
+    return {"count": len(out), "orders": out}
+
+
+async def reconcile_returns(limit: int = 100, dry_run: bool = False, max_seconds: Optional[float] = None) -> int:
+    """Repair sweep: finish inspections whose restock / refund case / replacement step was interrupted. Idempotent.
+    Programme 01 (B-005): every interrupted inspection is reached (resumable keyset sweep; `limit` is the page size)."""
+    from sweeps import run_sweep
+
+    async def finish(rc, dry):
+        if dry:
+            return "eligible"
         await _complete_inspection(rc, (rc.get("inspection") or {}).get("by", "system"))
-        n += 1
-    return n
+        return "updated"
+    res = await run_sweep("returns_reconcile", "return_cases", {"status": "inspected"}, finish, batch=limit, dry_run=dry_run,
+                          max_seconds=max_seconds, projection={"_id": 0})
+    return res["updated"] + res["eligible"]
 
 
 # ----------------------------------------------------------- admin side

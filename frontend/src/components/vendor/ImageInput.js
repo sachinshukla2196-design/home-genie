@@ -32,8 +32,10 @@ export function uploadSigned(file, sig, onProgress) {
   });
 }
 
-/** Gallery editor: reorder / remove / add by https link or by (server-authorised) upload. Existing image paths are kept as they are. */
-export function ImageInput({ value, onChange, max = 8, testid = "images" }) {
+/** Gallery editor: reorder / remove / add by https link or by (server-authorised) upload. Existing image paths are kept as they are.
+ *  `admin` (platform screens only): signs with the admin endpoint for platform `kind` ("product" | "merchandising") and, when direct
+ *  upload is not configured, uploads through the server instead (Programme 01, B-009). Vendor screens are unchanged. */
+export function ImageInput({ value, onChange, max = 8, testid = "images", admin = false, kind = "product" }) {
   const { t } = useI18n();
   const [link, setLink] = useState("");
   const [progress, setProgress] = useState(null);
@@ -49,8 +51,23 @@ export function ImageInput({ value, onChange, max = 8, testid = "images" }) {
     if (f.size > MAX_BYTES) { toast.error(t("vx.img.size")); return; }
     setProgress(0);
     try {
-      const { data: sig } = await API.post("/vendor/uploads/sign", { kind: "product" });
-      add(await uploadSigned(f, sig, setProgress));
+      if (admin) {
+        let url;
+        const { data: sig } = await API.post("/admin/uploads/sign", { kind });
+        if (sig.configured) {
+          url = await uploadSigned(f, sig, setProgress);
+        } else {
+          const fd = new FormData();                    // direct upload not configured: the server validates and stores it
+          fd.append("file", f);
+          const { data } = await API.post(`/admin/uploads/image?kind=${encodeURIComponent(kind)}`, fd,
+            { onUploadProgress: (e) => e.total && setProgress(Math.round((e.loaded / e.total) * 100)) });
+          url = data.url;
+        }
+        add(url);
+      } else {
+        const { data: sig } = await API.post("/vendor/uploads/sign", { kind: "product" });
+        add(await uploadSigned(f, sig, setProgress));
+      }
       toast.success(t("vx.img.uploaded"));
     } catch (err) {
       const status = err?.response?.status;

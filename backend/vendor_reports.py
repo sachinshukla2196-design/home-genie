@@ -10,8 +10,7 @@ import io
 from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, Request
 
 import ledger as L
 from core import db
@@ -159,14 +158,27 @@ async def vendor_current_report(range: str = "30d", date_from: Optional[str] = N
     return await _current(user, range, date_from, date_to)
 
 
+class _SafeWriter:
+    """W4: every cell of this multi-section CSV goes through the one formula-injection rule (exports.csv_cell)."""
+    def __init__(self, buf):
+        self._w = csv.writer(buf)
+
+    def writerow(self, row):
+        from exports import csv_cell
+        self._w.writerow([csv_cell(x) for x in row])
+
+
 @router.get("/vendor/reports/current.csv")
-async def vendor_current_csv(range: str = "30d", date_from: Optional[str] = None, date_to: Optional[str] = None,
+async def vendor_current_csv(request: Request, range: str = "30d", date_from: Optional[str] = None, date_to: Optional[str] = None,
                              user: dict = Depends(require_approved_vendor)):
+    """This vendor's current report as CSV (own data only; staff need `reports.export`). W4: audited, no-store, formula-safe."""
+    from exports import audit_export, csv_response, new_export_id
+    eid = new_export_id()
     r = await _current(user, range, date_from, date_to)
     s, e = r["sales"], r["earnings"]
     inr = lambda p: f"{paise_to_float(p):.2f}"
     buf = io.StringIO()
-    w = csv.writer(buf)
+    w = _SafeWriter(buf)
     w.writerow(["period", f"{r['range']['from']} to {r['range']['to']}"])
     w.writerow([])
     w.writerow(["metric", "value"])
@@ -205,9 +217,9 @@ async def vendor_current_csv(range: str = "30d", date_from: Optional[str] = None
     w.writerow(["stock_date", "product", "sku", "change", "before", "after", "reason"])
     for m in r["stock_movements"]["rows"]:
         w.writerow([m["created_at"], _csv_safe(m["name"]), _csv_safe(m["sku"]), m["delta"], m["before"], m["after"], _csv_safe(m["reason"])])
-    buf.seek(0)
-    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
-                             headers={"Content-Disposition": "attachment; filename=vendor-current-report.csv"})
+    await audit_export(user, request, "vendor_current_report", eid, rows=len(r["products"]) + len(r["settlement_rows"]) + len(r["stock_movements"]["rows"]),
+                       date_from=r["range"]["from"], date_to=r["range"]["to"], scope=f"vendor:{user['_vendor']['id']}")
+    return csv_response(buf.getvalue(), "vendor-current-report.csv", eid)
 
 
 async def _repeat(vid: str, f, t) -> dict:

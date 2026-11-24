@@ -92,3 +92,51 @@ products, product studio, vendor staff, admin catalogue (revision diff), custome
 
 ## Next executable task
 Phase 7: customer address book and wishlist (backend storage with ownership, tests, screens), then Phase 8 HG-03 dashboard figures.
+
+## Programme 00 — master architecture and completion audit (2026-11-23)
+Correction to the history above: Batches 12–14 are now **committed and pushed** (`main` @ `d31cb74` = `origin/main`); the
+"uncommitted" notes above describe the state at the time they were written.
+
+Programme 00 was inspection and documentation only (no code, schema, configuration or production change). Results:
+- Regression on `d31cb74` (isolated test database): **62 suites, 1,290 passed, 2 failed, 0 skipped**. The 2 failures in
+  `test_vendor_foundation` are a Batch 14 regression (vendor contact state validation rejects stored codes such as "RJ") —
+  backlog B-008. Live HTTP suites not re-run.
+- Batch 14 (VEN-05 vendor profile overview, payment reconciliation tooling, staff permissions) was not recorded in this roadmap;
+  VEN-05 has no tests (B-038).
+- Customer support tickets and notification preferences: still NOT STARTED.
+- Confirmed P0 gaps: RTO has no financial effect (B-001), refund case confirmable with nothing booked (B-002), commission lost after
+  a crash on non-webhook payment paths (B-003), idempotency depends on the index migration (B-004).
+
+The ranked backlog and the programme sequence now live in `docs/HOME_GENIES_MASTER_IMPLEMENTATION_BACKLOG.md`; the module status in
+`docs/HOME_GENIES_MODULE_COMPLETION_MATRIX.md`; the overview in `docs/HOME_GENIES_MASTER_ARCHITECTURE.md`.
+
+## Next executable task (supersedes the one above)
+Programme 01 — money and data integrity: B-001, B-002, B-003, B-004, B-005, B-006, B-008, B-009 (see backlog), each with regression
+tests. Needs no owner decision except confirming the production index migration (B-004).
+
+## Programme 01 — money and data integrity (2026-11-23)
+| Item | Status | Evidence |
+|---|---|---|
+| B-008 vendor contact state regression | COMPLETE AND VERIFIED | `test_programme01_vendor_state` 34, `test_vendor_foundation` 16/16, browser 1366 / 390 |
+| B-001 returned-to-origin money effect | COMPLETE AND VERIFIED | `test_programme01_rto` 13, cross-module, browser |
+| B-002 refund confirmation integrity | COMPLETE AND VERIFIED | `test_programme01_refund_integrity` 11, cross-module, browser |
+| B-003 shared payment completion and recovery | COMPLETE AND VERIFIED | `test_programme01_completion` 17, cross-module |
+| B-004 protective index readiness | IMPLEMENTED; production migration NOT run (owner P1-01) | `test_programme01_money_guard` 13 |
+| B-005 repair and release jobs at any volume | COMPLETE AND VERIFIED | `test_programme01_sweeps` 8 (incl. 1,100 orders) |
+| B-006 order protection and reservation expiry | COMPLETE AND VERIFIED (COD auto-expiry: owner P1-04) | `test_programme01_order_protection` 18 |
+| B-009 admin image uploads | COMPLETE AND VERIFIED | `test_programme01_admin_media` 29, browser |
+| Cross-module financial reconciliation (14 scenarios) | COMPLETE AND VERIFIED | `test_programme01_cross_module` 14 |
+
+Verification: in-process regression **71 suites, 1,449 passed, 0 failed, 0 skipped** (baseline at `d31cb74`: 62 suites, 1,290 passed,
+2 failed); live-server suites **96 passed, 6 skipped** (reasons in the engineering log); browser 72 checks passed at 1366 / 390 px;
+frontend build clean, frontend tests 7/7. Nothing is production-verified. Specifications: `PROGRAMME_01_TECHNICAL_SPECIFICATIONS.md`.
+
+## Next executable task (supersedes the one above)
+Owner: verified backup + production index migration (P1-01) before any deployment of Programme 01. Engineering: Programme 02 —
+security hardening (B-007, B-010, B-011, B-019, B-025, B-032, B-036, B-037) plus B-039 / B-040.
+
+
+---
+**Reconciliation 2026-11-24 (pointer; history above unchanged).** Current, authoritative documents: `HOME_GENIES_MASTER_ROADMAP_CURRENT.md`,
+`HOME_GENIES_CURRENT_MODULE_COMPLETION_MATRIX.md`, `HOME_GENIES_OWNER_DECISION_REGISTER.md`, `HOME_GENIES_PROGRAMME_02_READINESS.md`,
+`HOME_GENIES_REMAINING_WORK_REGISTER.md`.

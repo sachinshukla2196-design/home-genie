@@ -143,6 +143,9 @@ async def remove_document(doc_id: str, user: dict = Depends(require_vendor_user)
 
 @router.get("/admin/vendors/{vendor_id}/documents")
 async def admin_vendor_documents(vendor_id: str, admin: dict = Depends(require_admin)):
+    # Programme 02 / W4: every admin role may READ this listing (accounts_admin included - existing, tested behaviour: it cannot
+    # review documents but may read them, test_vendor_authority). Whether accounts_admin should read identity-document links is
+    # owner decision D-16 (D16-W4-6); unchanged until then.
     return {"items": await db.vendor_documents.find({"vendor_id": vendor_id, "deleted": {"$ne": True}}, {"_id": 0}).sort("created_at", -1).to_list(50)}
 
 
@@ -500,6 +503,59 @@ async def sign_upload(body: SignIn, request: Request, user: dict = Depends(requi
             "max_bytes": 5 * 1024 * 1024}
 
 
+PLATFORM_KINDS = {"product": "products", "merchandising": "merchandising"}
+
+
+@router.post("/admin/uploads/sign")
+async def admin_sign_upload(body: SignIn, request: Request, admin: dict = Depends(require_vendor_admin)):
+    """Programme 01 (B-009): server-authorised direct upload for PLATFORM content (merchandising banners, products prepared in the
+    admin product studio). Only the roles that may edit that content (super admin, admin - the same guard as merchandising and
+    the admin studio) may sign; support and accounts admins are refused. The SERVER fixes the folder
+    (homegenies/platform/<kind>), a random id, no overwrite and image formats only; the browser only sends the file. The vendor
+    signing endpoint is unchanged and stays vendor-only.
+    Without Cloudinary it answers `{"configured": false}` (not an error): the admin screen then uploads through the server."""
+    if body.kind not in PLATFORM_KINDS:
+        raise HTTPException(status_code=400, detail="kind must be product or merchandising.")
+    cfg = _cloud()
+    if not (cfg["cloud_name"] and cfg["api_key"] and cfg["api_secret"]):
+        return {"configured": False}
+    await rate_limit("upload_sign", "admin:" + admin["id"])
+    params = {"folder": f"homegenies/platform/{PLATFORM_KINDS[body.kind]}", "public_id": new_id().replace("-", ""),
+              "timestamp": int(time.time()), "overwrite": "false", "allowed_formats": "jpg,png,webp"}
+    if cfg["upload_preset"]:
+        params["upload_preset"] = cfg["upload_preset"]
+    await log_audit(admin, "admin_upload_signed", "platform_media", PLATFORM_KINDS[body.kind], new_value={"kind": body.kind}, request=request)
+    return {"configured": True, "cloud_name": cfg["cloud_name"], "api_key": cfg["api_key"], "signature": cloudinary_signature(params, cfg["api_secret"]),
+            "params": params, "upload_url": f"https://api.cloudinary.com/v1_1/{cfg['cloud_name']}/image/upload", "max_bytes": 5 * 1024 * 1024}
+
+
+async def validate_platform_images(urls: List[str], request: Request) -> None:
+    """Programme 01 (B-009): images on platform content (merchandising) must be VALIDATED uploads, not arbitrary links:
+    - a Cloudinary image of OUR cloud in the platform folder (format-checked by Cloudinary under our signed parameters), or
+    - a file uploaded through the server (`/api/files/...`, content-sniffed on upload) that is on record and not deleted, or
+    - a bundled same-site asset (a path such as /brand/...).
+    Anything else (another host, another folder, a deleted or unknown file) is refused."""
+    cloud = _cloud()["cloud_name"]
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or "").lower()
+    for u in [x for x in urls if x]:
+        p = urlparse(u)
+        if p.scheme == "https" and p.hostname == "res.cloudinary.com":
+            if cloud and p.path.startswith(f"/{cloud}/image/upload/") and "/homegenies/platform/" in p.path:
+                continue
+            raise HTTPException(status_code=400, detail="This image is not a HOME GENIES upload. Upload the image here instead of pasting a link.")
+        same_site = not p.scheme and u.startswith("/") and not u.startswith("//")
+        own_host = p.scheme in ("https", "http") and (p.netloc or "").lower() == host
+        if (same_site or own_host) and p.path.startswith("/api/files/"):
+            path = p.path[len("/api/files/"):]
+            if ".." not in path and await db.files.find_one({"storage_path": path, "is_deleted": False,
+                                                             "content_type": {"$in": ["image/jpeg", "image/png", "image/webp"]}}, {"_id": 1}):
+                continue
+            raise HTTPException(status_code=400, detail="This uploaded image could not be found. Upload it again.")
+        if same_site and ".." not in u:
+            continue
+        raise HTTPException(status_code=400, detail="Banner images must be uploaded here; links to other websites are not accepted.")
+
+
 def validate_image_ownership(urls: List[str], vendor_id: str):
     """When Cloudinary is configured, a Cloudinary URL must live in THIS vendor's folder of OUR cloud (so nobody can attach
     another vendor's or a third party's asset). Other https links and local paths keep working unchanged."""
@@ -509,5 +565,7 @@ def validate_image_ownership(urls: List[str], vendor_id: str):
     for u in urls:
         p = urlparse(u)
         if p.scheme == "https" and p.hostname == "res.cloudinary.com":
-            if not p.path.startswith(f"/{cloud}/image/upload/") or f"/homegenies/vendors/{vendor_id}/" not in p.path:
+            # B-009: a platform-folder image (uploaded by a content admin, e.g. in the admin product studio) is also ours
+            if not p.path.startswith(f"/{cloud}/image/upload/") or not (f"/homegenies/vendors/{vendor_id}/" in p.path
+                                                                       or "/homegenies/platform/" in p.path):
                 raise ValueError("This Cloudinary image does not belong to your account.")

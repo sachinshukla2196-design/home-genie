@@ -167,21 +167,24 @@ STOCK_COLUMNS = ["sku", "variant_sku", "delta", "reason"]
 
 
 def csv_safe(v) -> str:
-    """Neutralise spreadsheet formula injection in exported text."""
-    v = "" if v is None else str(v)
-    return "'" + v if v[:1] in ("=", "+", "-", "@", "\t", "\r") else v
+    """Neutralise spreadsheet formula injection in exported text. W4: one rule for every export (exports.csv_cell - also leading
+    spaces, line breaks and full-width formula characters; plain numbers untouched)."""
+    from exports import csv_cell
+    return str(csv_cell(v))
 
 
 def products_to_csv(products: List[dict]) -> str:
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(CSV_COLUMNS + ["approval_status", "is_active", "archived", "updated_at"])
-    for p in products:
-        w.writerow([csv_safe(p.get("sku")), csv_safe(p.get("name")), csv_safe(p.get("name_hi", "")), p.get("category", ""),
-                    csv_safe(p.get("subcategory", "")), csv_safe(p.get("brand", "")), csv_safe(p.get("description", "")),
+    from exports import csv_cell
+    for p in products:            # W4: every cell through the one sanitiser (category and image links were written raw)
+        w.writerow([csv_cell(x) for x in (
+                    p.get("sku"), p.get("name"), p.get("name_hi", ""), p.get("category", ""),
+                    p.get("subcategory", ""), p.get("brand", ""), p.get("description", ""),
                     p.get("mrp"), p.get("selling_price"), p.get("gst_percent"), p.get("stock"), p.get("low_stock_threshold", ""),
-                    "|".join(p.get("images") or []), (p.get("package") or {}).get("weight_g", ""), csv_safe(p.get("return_policy", "")),
-                    p.get("approval_status"), p.get("is_active"), bool(p.get("archived")), p.get("updated_at", "")])
+                    "|".join(p.get("images") or []), (p.get("package") or {}).get("weight_g", ""), p.get("return_policy", ""),
+                    p.get("approval_status"), p.get("is_active"), bool(p.get("archived")), p.get("updated_at", ""))])
     return buf.getvalue()
 
 

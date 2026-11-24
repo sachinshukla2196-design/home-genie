@@ -4,13 +4,10 @@ VENDORS can only READ their own ledger / settlements / COD records. They cannot 
 ADMINS (finance roles) manage policy, adjustments and settlements. Settlements stay disabled until an admin explicitly
 activates the settlement policy; nothing here invents a commission, fee, deduction or schedule.
 """
-import csv
-import io
 from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from pymongo.errors import DuplicateKeyError
 
@@ -91,31 +88,32 @@ def _vendor_settlement_view(s: dict) -> dict:
     return v
 
 
+STATEMENT_MAX_ROWS = 20000     # W4: a longer statement is refused (choose dates) instead of being silently cut at this row
+
+
 @router.get("/vendor/finance/statement.csv")
-async def vendor_statement(date_from: Optional[str] = None, date_to: Optional[str] = None, user: dict = Depends(require_approved_vendor)):
-    """The vendor's own ledger as a CSV statement (exact amounts, one row per entry)."""
-    from pagination import date_range
-    try:
-        dr = date_range(date_from, date_to)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"{e} must be a date like 2026-10-23.")
-    q = {"vendor_id": user["_vendor"]["id"], **({"posted_at": dr} if dr else {})}
-    rows = await db.vendor_ledger.find(q, {"_id": 0}).sort("posted_at", 1).to_list(20000)
-    buf = io.StringIO()
-    w = csv.writer(buf)
-    w.writerow(["posted_at", "entry_id", "type", "order_id", "amount_inr", "amount_paise", "reason", "reverses"])
-    for r in rows:
-        w.writerow([r["posted_at"], r["id"], r["type"], r.get("order_id") or "", f"{paise_to_float(r['amount_paise']):.2f}",
-                    r["amount_paise"], _csv_safe(r.get("reason", "")), r.get("reverses") or ""])
-    buf.seek(0)
-    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
-                             headers={"Content-Disposition": "attachment; filename=vendor-statement.csv"})
+async def vendor_statement(request: Request, date_from: Optional[str] = None, date_to: Optional[str] = None,
+                           user: dict = Depends(require_approved_vendor)):
+    """The vendor's own ledger as a CSV statement (exact amounts, one row per entry). Always this vendor only (the query is keyed by
+    the vendor of the signed-in account); staff need `finance.export`. W4: audited, size-checked, every cell formula-safe."""
+    from exports import audit_export, check_size, csv_response, csv_text, date_bounds, new_export_id
+    eid, vid = new_export_id(), user["_vendor"]["id"]
+    ctx = {"date_from": date_from, "date_to": date_to, "scope": f"vendor:{vid}"}
+    dr = date_bounds(date_from, date_to)
+    q = {"vendor_id": vid, **({"posted_at": dr} if dr else {})}
+    await check_size(user, request, "vendor_statement", eid, await db.vendor_ledger.count_documents(q), STATEMENT_MAX_ROWS, **ctx)
+    rows = await db.vendor_ledger.find(q, {"_id": 0}).sort("posted_at", 1).to_list(STATEMENT_MAX_ROWS)
+    text = csv_text(["posted_at", "entry_id", "type", "order_id", "amount_inr", "amount_paise", "reason", "reverses"],
+                    ([r["posted_at"], r["id"], r["type"], r.get("order_id") or "", f"{paise_to_float(r['amount_paise']):.2f}",
+                      r["amount_paise"], r.get("reason", ""), r.get("reverses") or ""] for r in rows))
+    await audit_export(user, request, "vendor_statement", eid, rows=len(rows), **ctx)
+    return csv_response(text, "vendor-statement.csv", eid)
 
 
 def _csv_safe(v: str) -> str:
-    """Neutralise spreadsheet formula injection in exported text."""
-    v = str(v or "")
-    return "'" + v if v[:1] in ("=", "+", "-", "@", "\t", "\r") else v
+    """Neutralise spreadsheet formula injection in exported text (W4: delegates to the single rule, exports.csv_cell)."""
+    from exports import csv_cell
+    return str(csv_cell(v or ""))
 
 
 # ================================================================== COD reconciliation (vendor view)
@@ -303,6 +301,8 @@ async def create_settlement(body: SettlementIn, request: Request, admin: dict = 
         raise HTTPException(status_code=400, detail="Amount must be between 0.01 and the available balance.")
     if amt < policy.get("min_settlement_paise", 0):
         raise HTTPException(status_code=400, detail="Amount is below the minimum settlement.")
+    from money_guard import ensure as _money_guard          # Programme 01 (B-004): fail closed without the unique indexes
+    await _money_guard("settlements", "ledger")
     num = await next_sequence("settlement", "STL", 6)
     now = now_iso()
     s = {"id": new_id(), "number": num, "vendor_id": body.vendor_id, "vendor_name": v["business_name"], "amount_paise": amt,
@@ -373,14 +373,21 @@ async def _post_settlement_paid(sid: str):
                            reason=f"Settlement {s['number']} paid", meta={"settlement": sid, "reference": s.get("reference")})
 
 
-async def reconcile_settlements() -> int:
-    """Repair: a settlement marked paid always has its ledger entry (covers a crash between the two writes)."""
-    n = 0
-    async for s in db.settlements.find({"status": "paid"}, {"_id": 0, "id": 1}):
-        if not await db.vendor_ledger.find_one({"source_key": f"settle:{s['id']}"}, {"_id": 1}):
-            await _post_settlement_paid(s["id"])
-            n += 1
-    return n
+async def reconcile_settlements(dry_run: bool = False, max_seconds: Optional[float] = None) -> int:
+    """Repair: a settlement marked paid always has its ledger entry (covers a crash between the two writes).
+    Programme 01 (B-005): resumable keyset sweep with per-record error isolation; posting is keyed (`settle:<id>`)."""
+    from sweeps import run_sweep
+
+    async def fix(s, dry):
+        if await db.vendor_ledger.find_one({"source_key": f"settle:{s['id']}"}, {"_id": 1}):
+            return "skipped"
+        if dry:
+            return "eligible"
+        await _post_settlement_paid(s["id"])
+        return "updated"
+    res = await run_sweep("settlements_reconcile", "settlements", {"status": "paid"}, fix, dry_run=dry_run, max_seconds=max_seconds,
+                          projection={"_id": 0, "id": 1})
+    return res["updated"] + res["eligible"]
 
 
 @router.get("/admin/finance/settlements")
@@ -393,10 +400,14 @@ async def admin_settlements(status: Optional[str] = None, page: int = 1, page_si
 
 
 @router.post("/admin/finance/reconcile")
-async def admin_reconcile(admin: dict = Depends(require_finance)):
-    """Rebuild any missing ledger entries from the order records (safe to run repeatedly)."""
-    r = await L.reconcile_ledger()
-    r["settlements"] = await reconcile_settlements()
+async def admin_reconcile(request: Request, dry_run: bool = False, admin: dict = Depends(require_finance)):
+    """Rebuild any missing ledger entries from the order records (safe to run repeatedly). Programme 01 (B-005): a bounded,
+    resumable run; `dry_run=true` reports what would be posted and writes nothing. Every applied run is audited."""
+    r = await L.reconcile_ledger(dry_run=dry_run, max_seconds=20)
+    r["settlements"] = await reconcile_settlements(dry_run=dry_run, max_seconds=10)
+    if not dry_run:
+        await log_audit(admin, "ledger_reconcile_run", "finance", "ledger",
+                        new_value={k: r[k] for k in ("sales", "reversals", "refunds", "settlements")}, request=request)
     return r
 
 
@@ -437,23 +448,34 @@ async def resolve_cod_discrepancy(order_id: str, request: Request, admin: dict =
                   "cod_discrepancy.resolution_evidence": {"type": r.evidence_type, "reference": r.evidence_reference,
                                                           "collected_paise": collected_p, "reviewer": admin["id"], "reviewed_at": now},
                   **({"commission_note": "short_collection_held", "cod_short_collected": True,
-                      "cod_shortfall_paise": expected_p - collected_p} if r.resolution == "accept_short" else {})}})
+                      "cod_shortfall_paise": expected_p - collected_p} if r.resolution == "accept_short" else {}),
+                  "completion_due": True}})          # Programme 01 (B-003): durable marker, written with the claim
     if claim.modified_count != 1:
         raise HTTPException(status_code=409, detail="This discrepancy was just resolved.")
-    o = await db.orders.find_one({"id": order_id}, {"_id": 0})
-    if not o.get("invoice_number"):
-        inv = await next_sequence("invoice", "INV", 6)
-        await db.orders.update_one({"id": order_id, "invoice_number": None}, {"$set": {"invoice_number": inv}})
-    commissions = None
-    if r.resolution == "confirm_full":
-        buyer = await db.users.find_one({"id": o["user_id"]}, {"_id": 0})
-        from commission import distribute_sale_commissions      # itself refuses unless collection_is_proven(order)
-        commissions = await distribute_sale_commissions(o, buyer or {}, request)
-    await L.post_order_collected(await db.orders.find_one({"id": order_id}, {"_id": 0}))
+    # Invoice, vendor sales (scaled to a short collection) and the commission plan through the ONE shared completion step.
+    # The commission step itself refuses unless collection_is_proven(order) - a short collection never earns commission.
+    from order_completion import complete_paid_order
+    done = await complete_paid_order(order_id, request, source="cod_discrepancy_resolution", notify=False)
+    commissions = done.get("commissions") if r.resolution == "confirm_full" else None
     await log_audit(admin, "cod_discrepancy_resolved", "order", order_id, old_value=d,
                     new_value={"resolution": r.resolution, "reason": r.reason, "collected_paise": collected_p,
                                "evidence_type": r.evidence_type, "evidence_reference": r.evidence_reference}, request=request)
     return {"ok": True, "resolution": r.resolution, "commissions": commissions}
+
+
+@router.get("/admin/finance/system-integrity")
+async def system_integrity(admin: dict = Depends(require_finance)):
+    """Programme 01 (B-004 / B-003 / B-005): read-only operational status. Whether each money area is protected by its unique
+    indexes (money writes are refused while one is not), how many paid orders still await their post-payment completion, and
+    where each resumable repair job stands. Counts and index names only - no customer data."""
+    from money_guard import readiness, required_indexes
+    st = await readiness(force=True)
+    jobs = await db.job_checkpoints.find({}, {"_id": 1, "last_key": 1, "updated_at": 1, "at": 1, "scanned": 1, "failed": 1}).to_list(50)
+    return {"money_protection": {"ready": st["ready"], "areas": st["areas"], "required": required_indexes()},
+            "completion": {"awaiting_completion": await db.orders.count_documents({"completion_due": True}),
+                           "blocked_for_finance": await db.orders.count_documents({"completion_blocked": {"$exists": True}})},
+            "jobs": [{"job": j["_id"], **{k: v for k, v in j.items() if k != "_id" and k != "last_key"},
+                      "in_progress": "last_key" in j} for j in jobs]}
 
 
 @router.get("/admin/finance/commission-funding")

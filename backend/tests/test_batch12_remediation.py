@@ -355,8 +355,11 @@ def test_one_vendor_rejecting_does_not_hold_the_other_vendors_money_for_ever(c):
     assert o["status"] == "delivered"
     _age_delivery(c, o["id"])
     o = _get(c, o["id"])
-    # B's refund case is still open, so the order's money waits for it (an open refund holds everything on the order) ...
-    assert _run(c, lambda: eligibility.payout_block(o, vendor_id=S["vA"]["id"])) == "open_return_or_refund"
+    # B's refund case is still open. Batch 12 held everything on the order for it; Programme 01 (B-001, directive section 5.3)
+    # changed that rule: B's case is refunded from B's share alone (ledger.post_refund_shares, vendor-specific refund), so it no
+    # longer holds vendor A's settlement. The whole-order HomeGenie commission still waits for it ...
+    assert _run(c, lambda: eligibility.payout_block(o, vendor_id=S["vA"]["id"])) is None
+    assert _run(c, lambda: eligibility.payout_block(o)) == "open_return_or_refund"
     assert _run(c, lambda: eligibility.payout_block(o, vendor_id=S["vB"]["id"])) == "not_delivered"   # B supplied nothing
     case = _run(c, lambda: db.refund_cases.find_one({"source_key": f"vreject:{o['id']}:{S['vB']['id']}"}, {"_id": 0}))
     assert c.post(f"/api/admin/refund-cases/{case['id']}/action", json={"action": "initiate"}, headers=_hdr("fin")).status_code == 200

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AlertTriangle, ArrowLeft, ArrowRight, Check, CheckCircle2, Circle, Layers, Loader2, Plus, Send, Trash2, Wand2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -93,7 +93,7 @@ export function ProductStudio({ base, draftId, onDone, header }) {
   const check = draft.check || { sections: {}, blocking: 0, ok: false };
   const sections = tpl.sections;
   const idx = sections.findIndex((s) => s.id === step);
-  const ctx = { data, update, tpl, isEdit: !!draft.product_id, check };
+  const ctx = { data, update, tpl, isEdit: !!draft.product_id, check, admin: base === "/admin/pim" };   // admin: platform uploads (B-009)
 
   return (
     <div className="space-y-4" data-testid="product-studio">
@@ -220,13 +220,13 @@ function Basics({ data, update, tpl }) {
   );
 }
 
-function Media({ data, update, tpl }) {
+function Media({ data, update, tpl, admin }) {
   const imgs = data.images || [];
   const alt = data.image_alt || {};
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted2">The first image is the main image. JPG, PNG or WebP up to 5 MB each; use clear photos on a plain background.</p>
-      <ImageInput value={imgs} max={tpl.max_images} onChange={(v) => update({ images: v, image_alt: Object.fromEntries(v.map((u) => [u, alt[u] || ""])) })} testid="ps-images" />
+      <ImageInput admin={admin} value={imgs} max={tpl.max_images} onChange={(v) => update({ images: v, image_alt: Object.fromEntries(v.map((u) => [u, alt[u] || ""])) })} testid="ps-images" />
       {imgs.length > 0 && (
         <div className="space-y-2">
           <div className="text-sm font-medium text-ink">Describe each image</div>
@@ -419,7 +419,7 @@ function Shipping({ data, update, tpl }) {
   );
 }
 
-function Compliance({ data, update }) {
+function Compliance({ data, update, admin }) {
   const docs = data.compliance_documents || [];
   const setDoc = (i, patch) => update({ compliance_documents: docs.map((d, j) => (j === i ? { ...d, ...patch } : d)) });
   const decl = (data.declarations || []).join("\n");
@@ -434,7 +434,7 @@ function Compliance({ data, update }) {
             </select>
             <Button variant="outline" size="icon" aria-label="Remove document" onClick={() => update({ compliance_documents: docs.filter((_, j) => j !== i) })}><Trash2 size={15} /></Button>
           </div>
-          <ImageInput value={d.url ? [d.url] : []} max={1} onChange={(v) => setDoc(i, { url: v[0] || "" })} testid={`ps-doc-${i}`} />
+          <ImageInput admin={admin} value={d.url ? [d.url] : []} max={1} onChange={(v) => setDoc(i, { url: v[0] || "" })} testid={`ps-doc-${i}`} />
           <Input aria-label="Document note" placeholder="Note, e.g. licence number or validity" maxLength={200} value={d.note || ""} onChange={(e) => setDoc(i, { note: e.target.value })} />
         </div>
       ))}

@@ -261,6 +261,9 @@ async def _init_db():
     # indexes: read-only check. Creating, changing or dropping indexes happens only in the migration (db_indexes.apply).
     from db_indexes import check_missing
     await _safe(check_missing())
+    # Programme 01 (B-004): name every money area that is blocked because its protective unique indexes are missing
+    from money_guard import startup_report
+    await _safe(startup_report())
     from admin_routes import activate_pending_registrations  # normal users no longer wait for admin approval
     await _safe(activate_pending_registrations())
 

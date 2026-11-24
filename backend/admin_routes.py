@@ -1,13 +1,10 @@
 """Admin panel routes: dashboard, users, products, orders, KYC, withdrawals,
 commissions, settings, audit logs, reports (with CSV export)."""
-import io
-import csv
 import math
 import re
 import secrets
 from core import hash_password, next_distributor_id, get_or_create_wallet, next_sequence
 from fastapi import APIRouter, HTTPException, Request, Depends
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 from decimal import Decimal
 from pymongo.errors import DuplicateKeyError
@@ -724,7 +721,10 @@ async def admin_edit_kyc(user_id: str, body: KycEditBody, request: Request, admi
     doc.update({"id": new_id(), "user_id": user_id, "distributor_id": u.get("distributor_id"), "status": "pending", "version": 1,
                 "aadhaar": "", "created_at": now, "submitted_at": now, "updated_at": now,
                 "last_edited_by": admin["id"], "last_edited_at": now})
-    await db.kyc_records.insert_one(doc)
+    try:
+        await db.kyc_records.insert_one(doc)
+    except DuplicateKeyError:            # W5: the member submitted at the same moment (one record per member); nothing was changed
+        raise HTTPException(status_code=409, detail="This member's KYC record was just created. Reload and edit it.")
     await db.users.update_one({"id": user_id}, {"$set": {"kyc_status": "pending"}})
     await log_audit(admin, "kyc_edited_by_admin", "kyc", user_id, old_value=None,
                     new_value={"status": "pending", **{k: _kyc_audit_value(k, doc.get(k)) for k in KYC_EDIT_FIELDS if k in doc}},
@@ -1477,31 +1477,85 @@ REPORTS = {
 
 
 def _report_projection(fields: list) -> dict:
-    """Only the report's own columns leave the database: never password hashes, Aadhaar, PAN, bank details or tokens."""
-    return {"_id": 0, **{f: 1 for f in fields}}
+    """Only the report's own columns leave the database: never password hashes, Aadhaar, PAN, bank details or tokens. (W4: plus the
+    exact paise field of a money column, which is converted and then dropped before the row is returned.)"""
+    return {"_id": 0, **{f: 1 for f in fields}, **{REPORT_MONEY[f]: 1 for f in fields if f in REPORT_MONEY}}
+
+
+# Programme 02 / W4. These are BULK listings, so contact details and payment look-up keys are masked for every role, in the screen
+# and in the CSV alike (one record's full contact stays where it already is: the user / order detail for the roles that have it).
+# The CSV follows the platform's one export rule (`admin_order_ops.EXPORT_ROLES`: super_admin, admin, accounts_admin; support is
+# refused) - interim pending owner decision D-16 (see HOME_GENIES_OWNER_DECISION_REGISTER.md, D-16 W4 table).
+REPORT_MASKS = {"email": "email", "mobile": "mobile", "session_id": "reference"}
+REPORT_VIEW_ROWS = 2000        # the screen shows the newest rows; `total` and `truncated` say when there are more
+REPORT_EXPORT_MAX = 5000       # larger exports are refused (narrow the dates) - never silently cut
+
+
+# W4 (readiness criterion c): money columns are printed from the exact integer paise field when the document has one (legacy
+# documents fall back to their rupee float through money.paise_of), always as a two-decimal string - same column names as before.
+REPORT_MONEY = {"subtotal": "subtotal_paise", "gst_amount": "gst_paise", "total": "total_paise", "amount": "amount_paise"}
+
+
+def _rupees(p: int) -> str:
+    return f"{'-' if p < 0 else ''}{abs(p) // 100}.{abs(p) % 100:02d}"
+
+
+def _mask_report_row(r: dict, fields: list = None) -> dict:
+    """One row as it leaves the server (screen and CSV alike): personal fields masked, money from paise, helper keys removed."""
+    from exports import mask_email, mask_mobile, mask_reference
+    from money import paise_of
+    fn = {"email": mask_email, "mobile": mask_mobile, "reference": mask_reference}
+    out = {}
+    for k, v in r.items():
+        if fields is not None and k not in fields:
+            continue                                     # the *_paise helper keys read below
+        if k in REPORT_MASKS and v:
+            out[k] = fn[REPORT_MASKS[k]](v)
+        elif k in REPORT_MONEY and (v is not None or REPORT_MONEY[k] in r):
+            out[k] = _rupees(paise_of(r, REPORT_MONEY[k], k))
+        else:
+            out[k] = v
+    return out
+
+
+def _report_query(report: str, date_from: Optional[str], date_to: Optional[str]):
+    from exports import date_bounds
+    if report not in REPORTS:
+        raise HTTPException(status_code=404, detail="Report not found.")
+    coll, q, fields = REPORTS[report]
+    b = date_bounds(date_from, date_to)
+    return coll, ({**q, "created_at": b} if b else dict(q)), fields
 
 
 @router.get("/reports/{report}")
-async def get_report(report: str, admin: dict = Depends(require_admin)):
-    if report not in REPORTS:
-        raise HTTPException(status_code=404, detail="Report not found.")
-    coll, q, fields = REPORTS[report]
-    rows = await db[coll].find(q, _report_projection(fields)).sort("created_at", -1).to_list(2000)
-    return {"report": report, "fields": fields, "rows": rows, "count": len(rows)}
+async def get_report(report: str, request: Request, date_from: Optional[str] = None, date_to: Optional[str] = None,
+                     admin: dict = Depends(require_admin)):
+    coll, q, fields = _report_query(report, date_from, date_to)
+    total = await db[coll].count_documents(q)
+    rows = await db[coll].find(q, _report_projection(fields)).sort("created_at", -1).to_list(REPORT_VIEW_ROWS)
+    await log_audit(admin, "report_viewed", "report", report, new_value={"role": admin.get("role"), "rows": len(rows), "total": total,
+                                                                          "date_from": date_from, "date_to": date_to}, request=request)
+    return {"report": report, "fields": fields, "rows": [_mask_report_row(r, fields) for r in rows], "count": len(rows), "total": total,
+            "truncated": total > len(rows), "masked": [f for f in fields if f in REPORT_MASKS]}
 
 
 @router.get("/reports/{report}/export")
-async def export_report(report: str, admin: dict = Depends(require_admin)):
-    if report not in REPORTS:
-        raise HTTPException(status_code=404, detail="Report not found.")
-    from finance_routes import _csv_safe
-    coll, q, fields = REPORTS[report]
-    rows = await db[coll].find(q, _report_projection(fields)).sort("created_at", -1).to_list(5000)
-    buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=fields, extrasaction="ignore")
-    writer.writeheader()
-    for r in rows:
-        writer.writerow({f: (_csv_safe(r[f]) if isinstance(r.get(f), str) else r.get(f, "")) for f in fields})
-    buf.seek(0)
-    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
-                             headers={"Content-Disposition": f"attachment; filename={report}_report.csv"})
+async def export_report(report: str, request: Request, date_from: Optional[str] = None, date_to: Optional[str] = None,
+                        admin: dict = Depends(require_admin)):
+    from admin_order_ops import EXPORT_ROLES
+    from exports import audit_export, check_size, csv_response, csv_text, new_export_id
+    eid = new_export_id()
+    if admin.get("role") not in EXPORT_ROLES:
+        await audit_export(admin, request, report, eid, status="refused", reason="role", date_from=date_from, date_to=date_to)
+        raise HTTPException(status_code=403, detail="Your role cannot export reports.")
+    coll, q, fields = _report_query(report, date_from, date_to)
+    ctx = {"date_from": date_from, "date_to": date_to}
+    await check_size(admin, request, report, eid, await db[coll].count_documents(q), REPORT_EXPORT_MAX, **ctx)
+    try:
+        rows = await db[coll].find(q, _report_projection(fields)).sort("created_at", -1).to_list(REPORT_EXPORT_MAX)
+        text = csv_text(fields, ([r.get(f, "") for f in fields] for r in (_mask_report_row(x, fields) for x in rows)))
+    except Exception as e:
+        await audit_export(admin, request, report, eid, status="failed", reason=type(e).__name__, **ctx)
+        raise HTTPException(status_code=500, detail="The export could not be created. Nothing was downloaded.")
+    await audit_export(admin, request, report, eid, rows=len(rows), **ctx)
+    return csv_response(text, f"{report}_report.csv", eid)
