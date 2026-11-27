@@ -446,7 +446,8 @@ async def create_checkout(body: CheckoutBody, request: Request, user: dict = Dep
         raise HTTPException(status_code=400, detail="This order is already paid.")
     order = await _ensure_payable(order)
 
-    amount = float(order["total"])  # server-side amount, never from client
+    amount_p = paise_of(order, "total_paise", "total")   # server-side amount, never from client; DEF-05: the exact paise total
+    amount = amount_p / 100
     success_url = f"{body.origin_url}/payment/success?session_id={{CHECKOUT_SESSION_ID}}"
     cancel_url = f"{body.origin_url}/payment/cancel"
     sc = _stripe(request)
@@ -462,7 +463,7 @@ async def create_checkout(body: CheckoutBody, request: Request, user: dict = Dep
         "session_id": session.session_id,
         "order_id": order["id"],
         "user_id": user["id"],
-        "amount": amount,
+        "amount": amount, "amount_paise": amount_p, "provider": "stripe",
         "currency": order.get("currency", "INR"),
         "status": "initiated",
         "payment_status": "pending",
@@ -811,32 +812,49 @@ async def payment_status(session_id: str, request: Request):
     tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
     if not tx:
         raise HTTPException(status_code=404, detail="Transaction not found.")
-    if tx.get("payment_status") != "paid":
+    # Programme 03 / DEF-05: only a Stripe attempt is checked here, and only Stripe's own record of the session (amount, currency,
+    # order) can complete the order - `payment_status: "paid"` alone, or the redirect, never does (payment_events.stripe_checkout_paid).
+    if tx.get("payment_status") != "paid" and (tx.get("provider") or "stripe") == "stripe" \
+            and not tx["session_id"].startswith(MANUAL_SESSION_PREFIXES):
         try:
+            from payment_events import stripe_checkout_paid
             sc = _stripe(request)
-            status = await sc.get_checkout_status(session_id)
-            if status.payment_status == "paid" or status.status == "complete":
-                await _process_paid_order(session_id, request)
-                tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
+            await stripe_checkout_paid(session_id, sc.get_checkout_status, request)
+            tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
+        except HTTPException:
+            pass                                        # card checkout not configured / money protection not ready: stays pending
         except Exception as e:
-            print(f"[payment_status] error: {e}")
+            logger.error("payment status check for %s failed (%s); it stays pending and is retried", session_id, type(e).__name__)
     return {"session_id": tx["session_id"], "status": tx["status"],
             "payment_status": tx["payment_status"], "order_id": tx.get("order_id")}
 
 
 @router.post("/webhook/stripe")
 async def stripe_webhook(request: Request):
+    """Programme 03 / DEF-05: verified (signature, by the Stripe SDK), recorded once in `webhook_events`, then validated against
+    Stripe's own record of the session before anything changes (payment_events.apply_stripe)."""
+    from payment_events import apply_stripe, claim, stripe_event, _finish
     body = await request.body()
     sig = request.headers.get("Stripe-Signature", "")
     try:
         sc = _stripe(request)
         resp = await sc.handle_webhook(body, sig)
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"[webhook] error: {e}")
+        logger.warning("stripe webhook refused (%s)", type(e).__name__)
         raise HTTPException(status_code=400, detail="Invalid webhook")
-    if resp.payment_status == "paid" and resp.session_id:
-        await _process_paid_order(resp.session_id, request)
-    return {"status": "ok"}
+    if not getattr(resp, "event_id", None) or not getattr(resp, "event_type", None):
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    ev = stripe_event(resp.event_id, resp.event_type, getattr(resp, "session_id", None))
+    if not await claim(ev, provider="stripe"):
+        return {"status": "duplicate"}
+    try:
+        out = await apply_stripe(ev, sc.get_checkout_status, request)
+    except Exception as e:                                       # recorded; Stripe (or finance) retries it
+        await _finish(ev["event_id"], "failed", f"{type(e).__name__}: {str(e)[:200]}")
+        raise HTTPException(status_code=500, detail="Event could not be processed; it will be retried.")
+    return {"status": out["status"]}
 
 
 # ---------------- Manual UPI — admin-confirmed ----------------

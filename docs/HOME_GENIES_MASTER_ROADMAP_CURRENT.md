@@ -16,7 +16,7 @@ defects, verification gaps). Historical evidence: all Programme 00 documents, `P
 | 00 | Master architecture and completion audit | complete (documentation) | — | — |
 | 01 | Money and data integrity (B-001…B-006, B-008, B-009) | **engineering complete; uncommitted; not deployed**; production index migration pending (P1-01) | 2 owner actions (E15, O21) | — |
 | 02 | Security hardening and identity protection | **in progress**: W8, W6, W5, W4 done and W7 engineering done (2026-11-24; uncommitted; P1-08 presentation open); W1 CSP / frame protection done (2FA waits for P0-06), W2 / W3 (decisions) remain; see readiness document | 25 | Programme 01 committed; P1-01 executed before any Programme 01 deployment; decisions per workstream |
-| 03 | Payments and finance governance | not started | 28 | P02 identity / masking done; P0-01, P0-02, P0-03, P0-04, D-02, D-03, P1-02…P1-05 |
+| 03 | Payments and finance governance | **in progress** (2026-11-27, by owner directive): DEF-05, B-022, B-023 and the reconciliation report done locally; uncommitted; not deployed. Remaining items need owner decisions or external integrations (see the Programme 03 report §K) | 28 | P02 identity / masking done; P0-01, P0-02, P0-03, P0-04, D-02, D-03, P1-02…P1-05 |
 | 04 | Customer service and notifications | not started | 20 | P03 refund execution (for refund messages); P0-08; L-01 |
 | 05 | Operations and observability | not started (parts may run in parallel with 03 / 04) | 31 | P0-09 hosting choices; staging environment |
 | 06 | Vendor completeness | not started | 33 | D-04, D-15, D-16, D-17, D-19, P1-06 |
@@ -49,6 +49,13 @@ shim (PyMongo lazy SRV, `core.py`). Upgrades are uncommitted and not deployed. N
 **Update 2026-11-24:** DEF-03 was corrected by a separate corrective package before Programme 02 (evidence in the remaining-work register
 §8); it no longer needs a place in P02 W5 or P05. Programme 02 should re-run the full regression on its committed baseline (now 75
 in-process suites, 1,587 tests after W7).
+
+**Update 2026-11-27 (Programme 03, first package):** started on the owner's Programme 03 directive (the sequence is unchanged; the
+three tasks needed no open decision). DEF-05 Stripe completion integrity, B-022 crash-safe idempotent withdrawal requests, B-023
+immutable settlement order / bank snapshots, and a read-only financial reconciliation report across eight money domains
+(`HOME_GENIES_PROGRAMME_03_ENGINEERING_REPORT.md`). Five new owner decisions (P03-OD-01 … 05). Matrix row statuses unchanged.
+Programme 02's open workstreams (W2, W3, W1 second factor) still wait for their decisions; P1-01 remains the hard production gate and
+now also creates the withdrawal indexes. In-process regression is now 79 suites.
 
 ## 2. Overall progress (from the current matrix, 303 rows)
 | Measure | Value |

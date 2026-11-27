@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import { toast } from "sonner";
 import { Banknote, Clock, CheckCircle2, XCircle, ShieldCheck, Lock, History } from "lucide-react";
@@ -19,6 +19,14 @@ const PILL = {
   rejected: "bg-danger/10 text-danger ring-danger/25",
 };
 
+// Programme 03 (B-022): one key per withdrawal attempt, reused on every retry of it, so a retry after a lost response returns the
+// same request instead of creating a second one. The server is the authority; this only lets it recognise the retry.
+const newRequestKey = () => {
+  if (window.crypto?.randomUUID) return window.crypto.randomUUID();
+  const b = window.crypto.getRandomValues(new Uint8Array(16));
+  return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
+};
+
 export default function Withdrawals() {
   const { t } = useI18n();
   const { user } = useAuth();
@@ -26,6 +34,7 @@ export default function Withdrawals() {
   const [list, setList] = useState([]);
   const [amount, setAmount] = useState("");
   const [busy, setBusy] = useState(false);
+  const attempt = useRef(null);            // { key, amount } of the attempt not yet answered by the server
 
   const load = () => {
     API.get("/wallet").then(({ data }) => setW(data)).catch(() => {});
@@ -37,13 +46,17 @@ export default function Withdrawals() {
     e.preventDefault();
     const amt = Number(amount);
     if (!amt || amt <= 0) return toast.error(t("withdraw.enterAmount"));
+    if (!attempt.current || attempt.current.amount !== amt) attempt.current = { key: newRequestKey(), amount: amt };
     setBusy(true);
     try {
-      await API.post("/withdrawals", { amount: amt });
+      await API.post("/withdrawals", { amount: amt, request_key: attempt.current.key });
+      attempt.current = null;
       toast.success(t("withdraw.submitted"));
       setAmount("");
       load();
     } catch (err) {
+      const status = err?.response?.status;
+      if (status && status < 500) attempt.current = null;   // answered: a new attempt gets a new key. No answer / 5xx: retry keeps it
       toast.error(apiError(err));
     } finally { setBusy(false); }
   };

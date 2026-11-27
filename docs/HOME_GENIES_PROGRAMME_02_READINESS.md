@@ -267,6 +267,12 @@ need the owner's explicit answer first.
 
 ---
 
+## Note — Programme 03 first package (2026-11-27)
+On the owner's Programme 03 directive, DEF-05, B-022 and B-023 were implemented before Programme 02 finished. They touched no
+W1 / W2 / W3 scope: no authentication, identity-provider or KYC-encryption change, no new key material (A-01 still open), and no role
+was broadened (permission matrix §10). Settlement snapshots and withdrawal records keep bank details masked only. Programme 02's
+completion gate below is unchanged; its open items still wait for P0-05, P0-06, P0-07, A-01, D-06, D-16 and P1-08.
+
 ## Recommended execution order
 | Order | Workstream | Why first / after | Can start without decisions? |
 |---|---|---|---|

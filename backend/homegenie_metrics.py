@@ -118,7 +118,9 @@ async def compute(uid: str, start: str, end: str) -> dict:
         "commission_by_type": {t: sum(comm_net(c) for c in comms if c.get("type") == t)
                                for t in ("COMMISSION_DIRECT", "COMMISSION_REFERRAL", "COMMISSION_TEAM")},
     })
-    wds = await db.withdrawal_requests.find({"user_id": uid, "created_at": {"$gte": start, "$lt": end}}, {"_id": 0}).to_list(None)
+    # P03 (B-022): a request closed as not_reserved never held money, so it is not a withdrawal request in these figures
+    wds = await db.withdrawal_requests.find({"user_id": uid, "created_at": {"$gte": start, "$lt": end}, "status": {"$ne": "not_reserved"}},
+                                            {"_id": 0}).to_list(None)
     m.update({
         "withdrawal_requests": len(wds),
         "withdrawal_requested_paise": sum(paise_of(w, "amount_paise", "amount") for w in wds),

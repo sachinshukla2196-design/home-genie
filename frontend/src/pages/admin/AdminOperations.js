@@ -131,6 +131,16 @@ function Settlements({ fin }) {
     <Table testid="ops-settlements" state={s} empty="No settlements yet." columns={[
       { h: "Settlement", r: (st) => <><b className="font-mono">{st.number || st.id.slice(0, 8)}</b><div className="text-xs text-muted2">{day(st.created_at)}</div></> },
       { h: "Amount", r: (st) => rupees(st.amount_paise) },
+      // Programme 03 (B-023): what the request was based on, recorded once when it was made (masked bank details; finance only)
+      { h: "Recorded basis", r: (st) => {
+        const sn = st.snapshot_summary || {};
+        if (!sn.present) return <span className="text-xs text-muted2">Not recorded (older settlement)</span>;
+        return <div className="text-xs text-muted2" data-testid={`settlement-basis-${st.id}`}>
+          <div>{sn.orders_count} order{sn.orders_count === 1 ? "" : "s"} · eligible {rupees(sn.basis?.eligible_paise)}</div>
+          {sn.bank && <div>Pay to {sn.bank.present ? `${sn.bank.account_masked} · ${sn.bank.ifsc}` : "no bank details on record"}</div>}
+          {sn.verified === false && <div className="font-semibold text-danger">Record altered: do not pay</div>}
+        </div>;
+      } },
       { h: "Status", r: (st) => <CaseStatus status={st.status} /> },
       { h: "", r: (st) => fin && <>
         {st.status === "requested" && <Act onClick={() => act(st, { action: "approve" }, "Approved")}>Approve (not the requester)</Act>}

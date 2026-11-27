@@ -29,6 +29,7 @@ AREAS = {
     "settlements": ("settlements_one_open_per_vendor",),
     "stock": ("stock_txns_key_unique",),
     "orders": ("orders_order_number_unique",),
+    "withdrawals": ("withdrawal_requests_user_key_unique",),       # Programme 03 (B-022): one request per idempotency key
 }
 OK_TTL, BAD_TTL = 300.0, 15.0
 _cache = {"at": 0.0, "state": None}

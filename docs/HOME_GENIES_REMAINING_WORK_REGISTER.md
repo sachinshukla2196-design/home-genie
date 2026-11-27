@@ -1,4 +1,4 @@
-# HOME GENIES — Remaining work register (pre-Programme 02)
+# HOME GENIES — Remaining work register (pre-Programme 02; updated through Programme 03 first package, 2026-11-27)
 
 Reconciled 2026-11-24 against the working tree of `main` @ `d31cb74` (Programme 01 uncommitted). One place for everything still
 outstanding: capabilities (generated from `HOME_GENIES_CURRENT_MODULE_COMPLETION_MATRIX.md` so the two cannot disagree), defects,
@@ -12,7 +12,7 @@ Decision IDs: `HOME_GENIES_OWNER_DECISION_REGISTER.md`. Sequence and gates: `HOM
 | DEF-02 | ~~Frontend build does not fail on undefined identifiers; two runtime crashes reached the browser (Batch 13 dashboard, Programme 01 studio step — fixed)~~ **CORRECTED 2026-11-24 (W8)** — see §8 | `frontend/craco.config.js:75-81` (hooks rules only) | P2 | P02 (W8) |
 | DEF-03 | ~~Stock-journal crash recovery handles at most 20 interrupted transactions per run; stuck-expiry self-heal also capped (`limit`)~~ **CORRECTED 2026-11-24** — see §8 | `stock.py:641` `run_recovery(limit=20)` via the expiry sweep; `stock.py:516-523` (as found) | P2 | done (DEF-03 package) |
 | DEF-04 | Open refund cases can promise more than is still refundable (now refused at confirmation and reported as `over_promised`) | B-021; `test_programme01_cross_module` scenario 6 | P2 | P03 |
-| DEF-05 | Stripe completion path: no amount / currency check, events not recorded in `webhook_events`, unauthenticated status poll triggers processing | `shop_routes.py` `/payments/status`, `/webhook/stripe` | P1 | P03 |
+| DEF-05 | ~~Stripe completion path: no amount / currency check, events not recorded in `webhook_events`, unauthenticated status poll triggers processing~~ **CORRECTED 2026-11-27 (Programme 03)** — see §8 | `shop_routes.py` `/payments/status`, `/webhook/stripe` | P1 | P03 |
 | DEF-06 | Default "Place order" uses Stripe; unconfigured → 503 after the order is created (stock held until the 15-min expiry) | `Checkout.js`, `shop_routes.py` `_stripe` | P1 | P03 (P0-01) |
 | DEF-07 | Customer "Pay now" on a pending order opens an empty checkout | Programme 00 workflow audit (B-029) — not re-verified in the browser | P2 | P04 |
 | DEF-08 | ~~Legacy reports export personal contact data to every admin role, unaudited; float money; silent row caps~~ **CORRECTED 2026-11-24 (W4)** — masked, audited, export roles, paise money, refused instead of cut; see §8 | `admin_routes.py` reports | — | — |
@@ -25,7 +25,7 @@ Decision IDs: `HOME_GENIES_OWNER_DECISION_REGISTER.md`. Sequence and gates: `HOM
 |---|---|---|---|---|
 | VG-01 | No repository UI tests; browser checks run from scratch scripts outside the repo (still true after W8; W8 added static guards, not browser tests) | 2 frontend unit-test files; P01 browser check (72 checks) not in the repo | repository-tracked smoke suite | P02 (W8) / P05 |
 | VG-02 | Razorpay client order + verify routes have no tests; live gateway never exercised | no test references `/payments/razorpay/order|verify` | staging run with test keys (R-15) | P03 / P05 |
-| VG-03 | Stripe webhook untested; card tests skipped on test servers | no test references `/webhook/stripe`; 2 live skips | gateway decision first (P0-01) | P03 |
+| VG-03 | Stripe webhook ~~untested~~ tested against a fake Stripe (`test_p03_stripe_integrity`, 2026-11-27); never exercised against Stripe itself; card tests skipped on test servers | 2 live skips | sandbox run with test keys after P0-01 | P03 |
 | VG-04 | Vendor profile overview endpoint untested | no test references `profile-overview` | API test | P06 |
 | VG-05 | Admin uploads verified only with an in-memory object store | `test_programme01_admin_media` stand-in | staging check with real Cloudinary / Emergent storage | P05 |
 | VG-06 | `scripts/programme01_reconcile.py` smoke-run on an empty database only | P01 log | run against a production copy before go-live | P05 |
@@ -89,15 +89,15 @@ Decision IDs: `HOME_GENIES_OWNER_DECISION_REGISTER.md`. Sequence and gates: `HOM
 | B-012 runtime-editable commission rates ⚠ | open (P0-03) | P03 |
 | B-013 single-person money actions ⚠ | open (P0-02) | P03 |
 | B-014 customer support tickets | open | P04 |
-| B-015 Stripe gaps / default gateway | open (P0-01) | P03 |
+| B-015 Stripe gaps / default gateway | integrity gaps **done (DEF-05, 2026-11-27)**; default gateway still open (P0-01, DEF-06) | P03 |
 | B-016 CSV import on PIM | open | P06 |
 | B-017 backups / monitoring / alerting | open (P0-09) | P05 |
 | B-018 GST invoice / TCS | open (L-02, D-15) | P07 |
 | B-019 legacy report exports | **done (W4, 2026-11-24)**; role questions in D-16 (D16-W4-1…5) | — |
 | B-020 unrecorded money owed (late UPI, double payment, rejected events) | open | P03 |
 | B-021 over-promising refund cases | open (DEF-04) | P03 |
-| B-022 withdrawal request not crash-safe | open | P03 |
-| B-023 settlements without order / bank snapshot | open | P03 |
+| B-022 withdrawal request not crash-safe | **done (P03, 2026-11-27)**; uncommitted | — |
+| B-023 settlements without order / bank snapshot | **done (P03, 2026-11-27)**; uncommitted | — |
 | B-024 vendor platform commission policy ⚠ | open (P0-04) | P03 |
 | B-025 missing indexes / TTLs | **indexes done (W5, 2026-11-24; production migration pending, P1-01)**; TTLs await P0-05; residual W5-R1…W5-R6 (§8) | — |
 | B-026 admin role breadth | open (D-04, D-06, D-16) | P02 |
@@ -129,6 +129,25 @@ Decision IDs: `HOME_GENIES_OWNER_DECISION_REGISTER.md`. Sequence and gates: `HOM
 | 2026-11-24 | **DEF-08 / B-019 corrected (Programme 02 W4)** — every report and export inventoried (30 endpoints); bulk reports mask mobile / e-mail / payment session id for every role (screen and CSV); report CSV export follows the export roles (support refused, interim D16-W4-1); one formula-injection rule for every cell; every export attempt audited; money from paise; dates validated; oversized exports refused; Reports screen errors and roles fixed | `HOME_GENIES_REPORTS_AND_EXPORTS_SECURITY_AUDIT_W4.md`; `test_w4_export_security` (63) | W4-R1…W4-R6 below |
 | 2026-11-24 | **DEF-01 / B-039 corrected (Programme 02 W7)** — browser crawl of every admin page and Operations tab as each admin role: 16 refused requests → 0; actions the server refuses no longer offered (COD collect, merchandising editing, catalogue decisions, add-for-vendor); one frontend copy of the server's role sets kept in step by a backend test | `lib/roles.js`, `components/RoleGate.js`; `test_w7_role_sets_in_sync`, `RoleGate.test.js`; browser 112/112 | P1-08 presentation; admin studio / Settings money-field gaps (D44) |
 | 2026-11-24 | **R-10 / L5 corrected (Programme 02 W1, criterion d)** — frontend served with a strict Content-Security-Policy and frame protection (`frontend/vercel.json`), build without inline script; header test + browser check under the same headers (38/38) | `src/securityHeaders.test.js`; engineering log | headers on the deployed host unverified; 2FA (P0-06) |
+| 2026-11-27 | **DEF-05 corrected (Programme 03)** — Stripe webhook and status poll pay an order only on Stripe's own server-side record (paid, INR, exact paise total, the attempt's order); one `webhook_events` record per delivery / session with claim, outcomes and finance retry (re-reads Stripe); applied only through the shared state machine | `test_p03_stripe_integrity` (26; 23 fail on the old code) | gateway choice / default button (P0-01, DEF-06); rejected captures create no refund obligation (P03-OD-04); poll public (P03-OD-03); `origin_url` allow-list (P03-A12) |
+| 2026-11-27 | **B-022 done (Programme 03)** — withdrawal request intent-first, keyed hold excluded by a void marker, HELD row by op key, notice / audit once, optional idempotency key, repair sweep in the daily maintenance; pay / reject path fails closed before money moves and a settled-but-open request is reported (P03-A04) | `test_p03_withdrawal_requests` (40; 31 of the first 38 fail on the old code); browser: lost response + retry ⇒ one request | key optional (P03-A13); P03-OD-02; new indexes need P1-01 |
+| 2026-11-27 | **B-023 done (Programme 03)** — immutable settlement snapshot (order basis, masked payee bank details, digest); pay refused on altered snapshot or bank change | `test_p03_settlement_snapshot` (11; all fail on the old code) | P03-OD-01, P03-OD-05; open legacy settlements (P03-A14) |
+| 2026-11-27 | **Financial reconciliation framework (Programme 03)** — read-only report over payments, wallets, withdrawals, settlements, vendor ledger, refunds, commissions, stock (API, script) | `test_p03_reconciliation` (17; read-only proven by full-database fingerprint) | — |
+
+**Programme 03 audit items (2026-11-27; detail `HOME_GENIES_PROGRAMME_03_ENGINEERING_REPORT.md` §6):**
+| ID | Item | Severity | Programme · decision |
+|---|---|---|---|
+| P03-A01 | Customer cancel of a paid order writes no refund marker with the claim; a crash before the case leaves an unrecorded refund (now reported by reconciliation) | High | P03 next package |
+| P03-A02 | Late payment on a cancelled order: a crash before late handling leaves paid + cancelled with no refund record (now reported) | High | P03 next package (B-020) |
+| P03-A03 | COD discrepancy resolve / cash collection not excluded for cancelled orders | Medium (to confirm) | P03 next package |
+| P03-A05 | Return-window policy changeable by `admin` | Medium | D-05 |
+| P03-A06 | Any admin role can verify KYC / bank details | to confirm | D-06 / P0-02 |
+| P03-A07 | Failed financial approval cannot be retried after partial execution | Low | P03 |
+| P03-A08 | Vendor commission percent → basis points via float `round()` | Low | P03 with B-024 |
+| P03-A09 | Manual payment may target an expired order; no post-check | Low | P03 |
+| P03-A10 | Ledger not-supplied set omits `returned_to_origin` | Low | P03 before B-024 |
+| P03-A11 | Maintenance time budget overrun per batch | to confirm | P05 |
+| P03-A12 / A13 / A14 | Stripe `origin_url` allow-list; optional withdrawal key; open legacy settlements without snapshot | Low | P03 |
 
 **Remaining frontend lint warnings after W8 (9; none fail the build; not fixed because each would change behaviour, semantics or vendored code):**
 | File:line | Rule | Classification |

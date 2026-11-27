@@ -82,7 +82,7 @@ async def vendor_settlements(page: int = 1, page_size: int = 25, user: dict = De
 def _vendor_settlement_view(s: dict) -> dict:
     """What a vendor may see of a payout: amounts, dates, status and reference. Not which admin created, approved or paid it."""
     v = _money_view(s)
-    for k in ("created_by", "approved_by", "paid_by"):
+    for k in ("created_by", "approved_by", "paid_by", "snapshot", "snapshot_digest"):     # P03: the snapshot is finance evidence
         v.pop(k, None)
     v["events"] = [{"status": e.get("status"), "at": e.get("at"), "note": e.get("note", "")} for e in (s.get("events") or [])]
     return v
@@ -303,19 +303,23 @@ async def create_settlement(body: SettlementIn, request: Request, admin: dict = 
         raise HTTPException(status_code=400, detail="Amount is below the minimum settlement.")
     from money_guard import ensure as _money_guard          # Programme 01 (B-004): fail closed without the unique indexes
     await _money_guard("settlements", "ledger")
+    import settlement_snapshot as SS
+    snap = await SS.build(v, bal, amt, admin["id"])         # P03 (B-023): immutable evidence of the basis and the payee bank details
     num = await next_sequence("settlement", "STL", 6)
     now = now_iso()
     s = {"id": new_id(), "number": num, "vendor_id": body.vendor_id, "vendor_name": v["business_name"], "amount_paise": amt,
          "currency": "INR", "status": "requested", "policy_version": policy["version"], "note": body.note.strip(),
          "created_by": admin["id"], "approved_by": None, "paid_by": None, "reference": "",
+         "snapshot": snap, "snapshot_digest": SS.digest(snap),
          "events": [{"status": "requested", "at": now, "by": admin["id"], "note": body.note.strip()}], "created_at": now, "updated_at": now}
     try:
         await db.settlements.insert_one(dict(s))
     except DuplicateKeyError:     # one open settlement per vendor at a time (unique partial index)
         raise HTTPException(status_code=409, detail="This vendor already has an open settlement. Finish or reject it first.")
-    await log_audit(admin, "settlement_created", "settlement", s["id"], new_value={"vendor_id": body.vendor_id, "amount_paise": amt}, request=request)
+    await log_audit(admin, "settlement_created", "settlement", s["id"], new_value={"vendor_id": body.vendor_id, "amount_paise": amt,
+                    "snapshot_digest": s["snapshot_digest"], "orders_count": snap["orders_count"]}, request=request)
     s.pop("_id", None)
-    return _money_view(s)
+    return _admin_settlement_view(s, full=True)
 
 
 class SettlementAction(BaseModel):
@@ -348,6 +352,17 @@ async def settlement_action(sid: str, body: SettlementAction, request: Request, 
         payable_now = bal["available_for_settlement_paise"] + bal["settlement_in_progress_paise"]
         if s["amount_paise"] > min(bal["pending_settlement_paise"], payable_now):
             raise HTTPException(status_code=409, detail="The vendor's balance changed since this settlement was requested. Reject it and create a new one.")
+        # Programme 03 (B-023): the snapshot is evidence, not authority. A settlement whose evidence was altered, or whose payee bank
+        # details changed after it was requested, is not paid; it is rejected and requested again against the current details.
+        import settlement_snapshot as SS
+        if SS.verify(s) is False:
+            raise HTTPException(status_code=409, detail="This settlement's recorded evidence does not verify. It cannot be paid; escalate to the super admin.")
+        if s.get("snapshot") is not None:
+            v_now = await db.vendors.find_one({"id": s["vendor_id"]}, {"_id": 0}) or {"id": s["vendor_id"]}
+            changed = SS.bank_changed(s["snapshot"].get("bank"), await SS.bank_fingerprint(v_now))
+            if changed:
+                raise HTTPException(status_code=409, detail="The vendor's bank details changed since this settlement was requested. "
+                                                            "Reject it and create a new one against the current details.")
     now = now_iso()
     sets = {"status": target, "updated_at": now}
     if target == "approved":
@@ -363,7 +378,21 @@ async def settlement_action(sid: str, body: SettlementAction, request: Request, 
     await log_audit(admin, f"settlement_{body.action}", "settlement", sid, old_value={"status": s["status"]}, new_value={"status": target, "reference": body.reference}, request=request)
     v = await db.vendors.find_one({"id": s["vendor_id"]}, {"_id": 0, "user_id": 1})
     await create_notification(v["user_id"], "vendor", f"Settlement {s['number']} {target}", f"Your settlement {s['number']} is now {target}.")
-    return _money_view(await db.settlements.find_one({"id": sid}, {"_id": 0}))
+    return _admin_settlement_view(await db.settlements.find_one({"id": sid}, {"_id": 0}), full=True)
+
+
+def _admin_settlement_view(s: dict, full: bool = False, finance: bool = True) -> dict:
+    """Admin view of a settlement. Lists carry a snapshot summary (totals, counts, masked bank details, whether it verifies); the
+    detail view carries the whole snapshot. Bank details are only ever the masked form stored in the snapshot."""
+    import settlement_snapshot as SS
+    v = _money_view({k: val for k, val in s.items() if k not in ("snapshot", "snapshot_digest")})
+    v["snapshot_summary"] = SS.summary(s)
+    if not finance:                       # non-finance admins may list settlements but never see payee bank details
+        v["snapshot_summary"].pop("bank", None)
+    if full and s.get("snapshot") is not None:
+        v["snapshot"] = s["snapshot"]
+        v["snapshot_digest"] = s.get("snapshot_digest")
+    return v
 
 
 async def _post_settlement_paid(sid: str):
@@ -396,7 +425,17 @@ async def admin_settlements(status: Optional[str] = None, page: int = 1, page_si
     q = {"status": status} if status in SETTLE_FLOW else {}
     total = await db.settlements.count_documents(q)
     rows = await db.settlements.find(q, {"_id": 0}).sort("created_at", -1).skip((page - 1) * page_size).limit(page_size).to_list(page_size)
-    return {"items": [_money_view(r) for r in rows], **page_meta(total, page, page_size)}
+    fin = admin.get("role") in FINANCE_ROLES
+    return {"items": [_admin_settlement_view(r, finance=fin) for r in rows], **page_meta(total, page, page_size)}
+
+
+@router.get("/admin/finance/settlements/{sid}")
+async def admin_settlement_detail(sid: str, admin: dict = Depends(require_finance)):
+    """Programme 03 (B-023): one settlement with its full snapshot (order basis, masked payee bank details) and verification."""
+    s = await db.settlements.find_one({"id": sid}, {"_id": 0})
+    if not s:
+        raise HTTPException(status_code=404, detail="Settlement not found.")
+    return _admin_settlement_view(s, full=True)
 
 
 @router.post("/admin/finance/reconcile")
@@ -476,6 +515,16 @@ async def system_integrity(admin: dict = Depends(require_finance)):
                            "blocked_for_finance": await db.orders.count_documents({"completion_blocked": {"$exists": True}})},
             "jobs": [{"job": j["_id"], **{k: v for k, v in j.items() if k != "_id" and k != "last_key"},
                       "in_progress": "last_key" in j} for j in jobs]}
+
+
+@router.get("/admin/finance/reconciliation")
+async def financial_reconciliation(domain: Optional[str] = None, admin: dict = Depends(require_finance)):
+    """Programme 03: the read-only reconciliation report across payments, wallets, withdrawals, settlements, the vendor ledger,
+    refunds, commissions and stock (reconciliation.py). Ids, order numbers, operation keys and counts only. Writes nothing."""
+    import reconciliation
+    if domain and domain not in reconciliation.DOMAINS:
+        raise HTTPException(status_code=400, detail=f"Unknown domain. One of: {', '.join(reconciliation.DOMAINS)}.")
+    return await reconciliation.run([domain] if domain else None)
 
 
 @router.get("/admin/finance/commission-funding")

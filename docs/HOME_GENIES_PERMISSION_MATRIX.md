@@ -216,3 +216,18 @@ U-6, U-9, where the **backend itself** is broader than the documented policy.
   L4 **open** (no beneficiary check); L10 **open**.
 * `returns_routes.set_policy` error text "Only a super admin can change the returns policy" contradicts `POLICY_ROLES` which includes
   `admin` (returns_routes.py:35 vs 84).
+
+## 10. Programme 03 changes (2026-11-27) — no permission was broadened
+Uncommitted; not deployed. Evidence: `HOME_GENIES_PROGRAMME_03_ENGINEERING_REPORT.md`.
+
+| Action | Endpoint | Guard | Change |
+|---|---|---|---|
+| Withdrawal request | `POST /api/withdrawals` | unchanged (distributor + green + KYC) | optional `request_key` (8-80 of `[A-Za-z0-9_-]`, unique per member): a retry returns the same request; same key + different amount ⇒ 409. A request that never reserved money (`not_reserved`) is hidden from the member's own list. |
+| Withdrawal review | `PUT /api/admin/withdrawals/{id}` | unchanged | a request still `reserving` cannot be approved / rejected / paid (it is not in a requested state). |
+| Financial reconciliation report | `GET /api/admin/finance/reconciliation[?domain=]` | **new**, `require_finance` (super_admin, accounts_admin) | read-only; ids / counts only. support_admin, admin, members, vendors ⇒ 403. |
+| Settlement detail (with snapshot) | `GET /api/admin/finance/settlements/{id}` | **new**, `require_finance` | read-only; masked bank details only. |
+| Settlement list | `GET /api/admin/finance/settlements` | unchanged (`require_admin`) | adds `snapshot_summary`; its payee bank part (holder, IFSC, masked account) is returned to finance roles only. |
+| Settlement mark paid | `POST …/settlements/{id}/action` mark_paid | unchanged roles; creator ≠ approver ≠ payer rules unchanged | additionally refused (409) when the snapshot does not verify or the vendor's bank details changed since the request (P03-OD-01). |
+| Vendor own settlements | `GET /api/vendor/finance/settlements` | unchanged | the snapshot is not returned to vendors. |
+| Stripe status poll | `GET /api/payments/status/{sid}` | unchanged (public) | can only complete a payment Stripe itself confirms (amount, currency, order); only Stripe attempts are checked (P03-OD-03). |
+| Payment events list / retry | `GET /api/admin/payment-events`, `POST …/{id}/retry` | unchanged (`_finance`) | now also holds Stripe events (provider `stripe`); a Stripe retry re-reads Stripe. |

@@ -113,6 +113,8 @@ async def run_maintenance(budget_seconds: float = None, dry_run: bool = False) -
         out["stock_recovery"] = await run_recovery(limit=200, dry_run=True, max_seconds=left())
         out["stuck_expiries"] = await heal_stuck_expiries(limit=200, dry_run=True, max_seconds=left())
     out["completion_repair"] = await repair_incomplete_completions(dry_run=dry_run, max_seconds=left())   # paid orders finished first
+    from withdrawal_intents import repair_withdrawal_requests
+    out["withdrawal_requests"] = await repair_withdrawal_requests(dry_run=dry_run, max_seconds=left())   # P03 B-022
     out["refund_obligations"] = await ensure_cases_for_flagged_orders(dry_run=dry_run, max_seconds=left())   # every obligation has its case
     out["returns_repaired"] = await reconcile_returns(dry_run=dry_run, max_seconds=left())
     if not dry_run:

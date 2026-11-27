@@ -858,6 +858,9 @@ async def review_withdrawal(wd_id: str, body: WithdrawalReview, request: Request
     pay_op, reject_op = f"withdrawal_paid:{wd_id}", f"withdrawal_rejected:{wd_id}"
     my_op = pay_op if body.action == "mark_paid" else reject_op
     target = "paid" if body.action == "mark_paid" else "rejected"
+    # Programme 03 (audit P03-A04): fail closed BEFORE the wallet moves, not only at the ledger row after it (B-004 pattern)
+    from money_guard import ensure as _money_guard
+    await _money_guard("wallet")
     wallet = await db.wallets.find_one({"user_id": wr["user_id"]}, {"_id": 0, "applied_ops": 1}) or {}
     done = set(wallet.get("applied_ops") or [])
     if (pay_op in done or reject_op in done) and my_op not in done:

@@ -218,6 +218,14 @@ async def reconcile_ledger(limit: int = 500, dry_run: bool = False, max_seconds:
 
 async def _eligible_paise(vendor_id: str):
     """Sum of ledger entries that may be settled now (decision 3), and how many orders are still held."""
+    d = await eligible_detail(vendor_id)
+    return d["eligible_paise"], d["held_orders"]
+
+
+async def eligible_detail(vendor_id: str) -> dict:
+    """The same decision as `_eligible_paise`, with its composition: the net ledger amount of every order that may be settled now,
+    of every order still held (with the reason code), and of the entries with no order. Integer paise. Read-only.
+    Programme 03 (B-023): the settlement snapshot records this as evidence of what the settlement was based on."""
     from eligibility import payout_block, return_window_days
     rows = await db.vendor_ledger.find({"vendor_id": vendor_id}, {"_id": 0, "amount_paise": 1, "order_id": 1}).to_list(None)
     by_order, free = {}, 0
@@ -226,17 +234,22 @@ async def _eligible_paise(vendor_id: str):
             by_order[r["order_id"]] = by_order.get(r["order_id"], 0) + r["amount_paise"]
         else:
             free += r["amount_paise"]
+    out = {"eligible_paise": free, "held_orders": 0, "non_order_paise": free, "eligible": [], "held": []}
     if not by_order:
-        return free, 0
+        return out
     window = await return_window_days()
     orders = {o["id"]: o for o in await db.orders.find({"id": {"$in": list(by_order)}}, {"_id": 0}).to_list(None)}
-    eligible, held = free, 0
-    for oid, amt in by_order.items():
-        if await payout_block(orders.get(oid), window=window, vendor_id=vendor_id) is None:
-            eligible += amt
+    for oid, amt in sorted(by_order.items()):
+        o = orders.get(oid)
+        reason = await payout_block(o, window=window, vendor_id=vendor_id)
+        item = {"order_id": oid, "order_number": (o or {}).get("order_number"), "amount_paise": amt}
+        if reason is None:
+            out["eligible_paise"] += amt
+            out["eligible"].append(item)
         elif amt:
-            held += 1
-    return eligible, held
+            out["held_orders"] += 1
+            out["held"].append({**item, "reason": reason})
+    return out
 
 
 async def balances(vendor_id: str) -> dict:

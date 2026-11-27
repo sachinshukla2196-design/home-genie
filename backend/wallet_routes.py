@@ -7,8 +7,8 @@ from datetime import datetime, timezone, timedelta
 from pymongo.errors import DuplicateKeyError
 
 from money import to_paise, paise_to_float, paise_of
-from core import (db, now_iso, new_id, get_current_user, get_settings, get_or_create_wallet, wallet_apply,
-                  add_wallet_transaction, create_notification, log_audit)
+from core import (db, now_iso, new_id, get_current_user, get_settings, get_or_create_wallet, create_notification,
+                  log_audit)
 
 router = APIRouter(prefix="/api", tags=["homegenie"])
 
@@ -155,15 +155,46 @@ async def submit_kyc(body: KycBody, request: Request, user: dict = Depends(get_c
 # ---------------- Withdrawals ----------------
 class WithdrawBody(BaseModel):
     amount: float = Field(gt=0)
+    # Programme 03 (B-022): an idempotency key chosen by the client for one withdrawal attempt and reused on every retry of it.
+    # The same key returns the same request (never a second one); optional so older clients keep working.
+    request_key: Optional[str] = Field(default=None, pattern=r"^[A-Za-z0-9_-]{8,80}$")
 
 
 @router.get("/withdrawals")
 async def my_withdrawals(user: dict = Depends(get_current_user)):
-    return await db.withdrawal_requests.find({"user_id": user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(200)
+    # a request that never reserved money (closed as not_reserved) is evidence for finance, not a withdrawal of the member's
+    return await db.withdrawal_requests.find({"user_id": user["id"], "status": {"$ne": "not_reserved"}},
+                                             {"_id": 0, "request_key": 0, "hold_op": 0}).sort("created_at", -1).to_list(200)
+
+
+def _public_wr(wr: dict, **extra) -> dict:
+    out = {k: v for k, v in wr.items() if k not in ("_id", "request_key", "hold_op")}
+    out.update(extra)
+    return out
+
+
+async def _finish_existing(wr: dict, amount_p: int, request: Request, user: dict, settings: dict) -> dict:
+    """A retry with a key that already has a request: never a second request. Different amount -> 409."""
+    import withdrawal_intents as wi
+    if int(wr.get("amount_paise") or -1) != amount_p:
+        raise HTTPException(status_code=409, detail="This withdrawal request was already submitted with a different amount. "
+                                                    "Refresh the page and submit a new request.")
+    if wr.get("status") == wi.RESERVING:
+        await wi.settle(wr, actor=user, request=request, settings=settings)
+        wr = await db.withdrawal_requests.find_one({"id": wr["id"]}, {"_id": 0})
+    if wr.get("status") == wi.NOT_RESERVED:
+        raise HTTPException(status_code=400, detail="Insufficient available balance.")
+    if wr.get("status") == wi.RESERVING:
+        raise HTTPException(status_code=503, detail="Your withdrawal request is still being processed. Try again in a moment.")
+    return _public_wr(wr, already=True)
 
 
 @router.post("/withdrawals")
 async def request_withdrawal(body: WithdrawBody, request: Request, user: dict = Depends(get_current_user)):
+    """Programme 03 (B-022): the request is written first (status reserving), then the money is held at most once on the wallet,
+    then its ledger row is ensured and the request opens as pending. A crash at any point is finished by a retry with the same
+    request_key or by the withdrawal_request_repair sweep; see withdrawal_intents. Eligibility rules are unchanged."""
+    import withdrawal_intents as wi
     if user.get("role") != "distributor" or user.get("status") != "green":
         raise HTTPException(status_code=403, detail="Your HomeGenie selling role must be approved before you can withdraw points.")
     settings = await get_settings()
@@ -174,33 +205,41 @@ async def request_withdrawal(body: WithdrawBody, request: Request, user: dict = 
         kyc = await db.kyc_records.find_one({"user_id": user["id"]})
         if not kyc or kyc.get("status") != "verified":
             raise HTTPException(status_code=400, detail="Verify your identity and bank details before withdrawing points.")
-    await get_or_create_wallet(user["id"])
-    # Atomic conditional debit in exact paise: only succeeds if available balance >= amount.
     amount_p = to_paise(body.amount)
     if amount_p <= 0:
         raise HTTPException(status_code=400, detail="Enter a valid amount.")
-    moved = await wallet_apply(user["id"], {"available_balance": -amount_p, "pending_balance": amount_p}, require_available=amount_p)
-    if not moved:
+    key = body.request_key
+    if key:
+        prior = await db.withdrawal_requests.find_one({"user_id": user["id"], "request_key": key}, {"_id": 0})
+        if prior:
+            return await _finish_existing(prior, amount_p, request, user, settings)
+    wallet = await get_or_create_wallet(user["id"])
+    if paise_of(wallet, "available_balance_paise", "available_balance") < amount_p:      # fast refusal; the hold re-checks atomically
         raise HTTPException(status_code=400, detail="Insufficient available balance.")
-    # informational ledger entry (aggregates already moved atomically above)
-    await add_wallet_transaction(user["id"], "WITHDRAWAL", body.amount, "HELD",
-                                 description="Withdrawal request (held)", direction="debit")
-    req_no = new_id()[:8].upper()
+    wd_id, now = new_id(), now_iso()
     wr = {
-        "id": new_id(), "request_number": f"WD{req_no}", "user_id": user["id"],
+        "id": wd_id, "request_number": f"WD{new_id()[:8].upper()}", "user_id": user["id"],
         "distributor_id": user.get("distributor_id"), "amount": paise_to_float(amount_p), "amount_paise": amount_p,
-        "status": "pending", "admin_note": None,
-        "created_at": now_iso(), "updated_at": now_iso(),
+        "status": wi.RESERVING, "hold_op": wi.hold_op(wd_id), "admin_note": None, "created_at": now, "updated_at": now,
     }
-    await db.withdrawal_requests.insert_one(dict(wr))
-    await create_notification(user["id"], "withdrawal", "Withdrawal requested",
-                              f"Your withdrawal of {settings.get('currency_symbol','₹')}{int(body.amount)} is pending review.",
-                              "निकासी अनुरोध",
-                              f"आपकी {settings.get('currency_symbol','₹')}{int(body.amount)} की निकासी समीक्षाधीन है।")
-    await log_audit(user, "withdrawal_requested", "withdrawal", wr["id"],
-                    new_value={"amount": body.amount}, request=request)
-    wr.pop("_id", None)
-    return wr
+    if key:
+        wr["request_key"] = key
+    from money_guard import ensure as _money_guard
+    await _money_guard("wallet", "withdrawals")
+    try:
+        await db.withdrawal_requests.insert_one(dict(wr))
+    except DuplicateKeyError:                                     # a concurrent retry with the same key created it first
+        prior = await db.withdrawal_requests.find_one({"user_id": user["id"], "request_key": key}, {"_id": 0})
+        if not prior:
+            raise
+        return await _finish_existing(prior, amount_p, request, user, settings)
+    status = await wi.settle(wr, actor=user, request=request, settings=settings)
+    if status == wi.NOT_RESERVED:
+        raise HTTPException(status_code=400, detail="Insufficient available balance.")
+    if status == wi.RESERVING:
+        raise HTTPException(status_code=503, detail="Your withdrawal request is still being processed. Try again in a moment.")
+    cur = await db.withdrawal_requests.find_one({"id": wd_id}, {"_id": 0}) or wr
+    return _public_wr(cur)
 
 
 # ---------------- Notifications ----------------

@@ -71,13 +71,13 @@ def normalise(event: dict, header_event_id: str = "") -> dict:
             "error_code": (pay.get("error_code") or None) if pay else None}
 
 
-async def claim(ev: dict) -> bool:
+async def claim(ev: dict, provider: str = "razorpay") -> bool:
     """True when THIS delivery should process the event (exactly one concurrent delivery wins)."""
     from money_guard import ensure as _money_guard          # Programme 01 (B-004): fail closed without the unique indexes
     await _money_guard("webhooks")          # 503: the gateway retries the delivery later; nothing was recorded
     now = datetime.now(timezone.utc)
     try:
-        await db.webhook_events.insert_one({**ev, "provider": "razorpay", "status": "processing", "claimed_at": now.isoformat(),
+        await db.webhook_events.insert_one({**ev, "provider": provider, "status": "processing", "claimed_at": now.isoformat(),
                                             "created_at": now.isoformat(), "attempts": []})
         return True
     except DuplicateKeyError:
@@ -146,13 +146,95 @@ async def apply(ev: dict, request: Optional[Request] = None) -> dict:
     return await _finish(eid, "processed", note, **link, applied=applied)
 
 
-async def complete_paid_order(order: dict, request: Optional[Request] = None) -> None:
+# ------------------------------------------------------------------ Stripe (Programme 03 / DEF-05)
+# Stripe used to complete an order from a webhook or from the browser's status poll without checking the amount or the currency,
+# and its events were not recorded. Now both paths: (1) take only Stripe's OWN record of the checkout session, read server-to-server
+# (`get_checkout_status`) - never the browser's word, never the webhook body's figures; (2) record one event in `webhook_events`
+# (provider "stripe"; same claim / outcome / attempts / finance retry as Razorpay); (3) validate before any money state changes:
+# our payment attempt exists, the session belongs to the attempt's order, Stripe says "paid", currency INR, amount == the order total
+# in paise; (4) apply only through `shop_routes._process_paid_order`, the one idempotent state machine every payment path uses.
+STRIPE_ACT_ON = ("checkout.session.completed", "checkout.session.async_payment_succeeded", "status_check")
+PLATFORM_CURRENCY = "INR"
+
+
+def stripe_event(event_id: str, event_type: str, session_id: Optional[str]) -> dict:
+    """The stored summary of one Stripe event. A webhook keeps Stripe's event id; the browser's status poll records ONE event per
+    checkout session (`stripe:checkout:<session>`) - created only once Stripe says the session is paid, so an early poll never
+    leaves a final "ignored" record that would block the real one."""
+    return {"event_id": f"stripe:{str(event_id)[:110]}", "type": str(event_type)[:60], "gateway_order_id": session_id}
+
+
+async def apply_stripe(ev: dict, fetch_status, request: Optional[Request] = None) -> dict:
+    """Validate and apply one claimed Stripe event. `fetch_status(session_id)` returns Stripe's own record of the session."""
+    from shop_routes import _process_paid_order
+    eid, sid = ev["event_id"], ev.get("gateway_order_id")
+    if ev["type"] not in STRIPE_ACT_ON:
+        return await _finish(eid, "ignored", f"event type {ev['type']} is not acted on")
+    if not sid:
+        return await _finish(eid, "ignored", "the event carries no checkout session")
+    # our attempt: Stripe attempts carry provider "stripe"; attempts created before DEF-05 carry no provider at all
+    tx = await db.payment_transactions.find_one({"session_id": sid, "provider": {"$in": [None, "stripe"]}}, {"_id": 0})
+    if not tx:
+        return await _finish(eid, "unmatched", "unknown payment attempt (no Stripe checkout created by HOME GENIES has this id)")
+    order = await db.orders.find_one({"id": tx["order_id"]}, {"_id": 0})
+    link = {"order_id": tx["order_id"], "session_id": sid}
+    if not order:
+        return await _finish(eid, "unmatched", "the payment attempt points at an order that does not exist", **link)
+    st = await fetch_status(sid)                                      # Stripe's record, server-to-server
+    amount = st.amount_total if isinstance(st.amount_total, int) and not isinstance(st.amount_total, bool) else None
+    facts = {"amount_paise": amount, "currency": (st.currency or "").upper() or None, "gateway_status": st.payment_status}
+    await db.webhook_events.update_one({"event_id": eid}, {"$set": facts})
+    if st.payment_status != "paid":
+        return await _finish(eid, "ignored", f"Stripe reports the session {st.payment_status!r}, not paid", **link)
+    meta_order = (st.metadata or {}).get("order_id")
+    if meta_order and meta_order != tx["order_id"]:
+        return await _finish(eid, "rejected", "the checkout session belongs to another order", **link)
+    if facts["currency"] != PLATFORM_CURRENCY:
+        return await _finish(eid, "rejected", f"currency {facts['currency']!r} does not match {PLATFORM_CURRENCY}", **link)
+    expected = paise_of(order, "total_paise", "total")
+    if amount != expected:
+        return await _finish(eid, "rejected", f"amount {amount} paise does not match the order total {expected} paise", **link)
+    await db.payment_transactions.update_one({"session_id": sid}, {"$set": {"provider": "stripe", "gateway_amount_paise": amount,
+                                                                           "gateway_currency": facts["currency"], "verified_at": now_iso(),
+                                                                           "updated_at": now_iso()}})
+    await _process_paid_order(sid, request)
+    fresh = await db.orders.find_one({"id": order["id"]}, {"_id": 0})
+    applied = (fresh or {}).get("paid_session_id") == sid
+    if applied:
+        await complete_paid_order(fresh, request, source="stripe_webhook")
+    dup = any(d.get("session_id") == sid for d in (fresh or {}).get("duplicate_payments") or [])
+    note = "applied to the order" if applied else ("captured money not applied: recorded as a duplicate payment to refund" if dup
+                                                   else f"order is {(fresh or {}).get('payment_status')}; handled by the order's own rules")
+    return await _finish(eid, "processed", note, **link, applied=applied)
+
+
+async def stripe_checkout_paid(session_id: str, fetch_status, request: Optional[Request] = None) -> Optional[dict]:
+    """The browser's status poll: nothing is recorded until Stripe itself says the session is paid; then one event per session is
+    claimed and applied (a repeated poll, or a poll racing the webhook, applies nothing twice)."""
+    st = await fetch_status(session_id)
+    if st.payment_status != "paid":
+        return None
+    ev = stripe_event(f"checkout:{session_id}", "status_check", session_id)
+    if not await claim(ev, provider="stripe"):
+        return {"status": "duplicate"}
+    try:
+        return await apply_stripe(ev, lambda _sid: _known(st), request)
+    except Exception as e:                                       # recorded; the next poll, the webhook or finance retries it
+        await _finish(ev["event_id"], "failed", f"{type(e).__name__}: {str(e)[:200]}")
+        raise
+
+
+async def _known(st):
+    return st
+
+
+async def complete_paid_order(order: dict, request: Optional[Request] = None, source: str = "razorpay_webhook") -> None:
     """Finish the money effects of a payment that THIS attempt applied, so a retry completes what a crash interrupted.
     Both steps are idempotent: the vendor sale per (order, vendor) has a unique ledger key, and the commission plan is
     frozen once per order. An order that must be refunded (late / cancelled) earns nothing here."""
     # Programme 01 (B-003): the one shared, idempotent completion step used by every payment path.
     from order_completion import complete_paid_order as _complete
-    await _complete(order["id"], request, source="razorpay_webhook")
+    await _complete(order["id"], request, source=source)
 
 
 @router.post("/webhook/razorpay")
@@ -211,10 +293,15 @@ async def retry_event(event_id: str, request: Request, admin: dict = Depends(_fi
     if ev.get("status") not in ("failed", "processing") or not ev.get("type"):
         raise HTTPException(status_code=409, detail=f"This event is {ev.get('status')}; only failed or stuck events can be retried.")
     summary = {k: ev.get(k) for k in ("event_id", "type", "gateway_order_id", "payment_id", "amount_paise", "currency", "gateway_status", "error_code")}
-    if not await claim(summary):
+    provider = ev.get("provider") or "razorpay"
+    if not await claim(summary, provider=provider):
         raise HTTPException(status_code=409, detail="This event is being processed right now.")
     try:
-        out = await apply(summary, request)
+        if provider == "stripe":                                 # DEF-05: re-read Stripe's own record; never the stored figures
+            from shop_routes import _stripe
+            out = await apply_stripe(summary, _stripe(request).get_checkout_status, request)
+        else:
+            out = await apply(summary, request)
     except Exception as e:
         await _finish(event_id, "failed", f"{type(e).__name__}: {str(e)[:200]}")
         raise HTTPException(status_code=500, detail="The retry failed again; see the event's attempts.")

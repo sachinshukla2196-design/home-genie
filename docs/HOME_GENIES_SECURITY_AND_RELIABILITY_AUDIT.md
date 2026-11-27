@@ -263,3 +263,20 @@ Full audit: `HOME_GENIES_REPORTS_AND_EXPORTS_SECURITY_AUDIT_W4.md`.
 - **P1-2 (admin MFA, localStorage token) — still open:** waits for P0-06 (factor, recovery, session lifetime) and D-10 (cookie scope).
 - **UI vs backend (permission matrix §7):** no admin page now fires a request its viewer's role is refused (4 roles, 22 pages, 8 tabs); actions
   the server refuses are no longer offered (COD collect, merchandising editing, catalogue decisions). Server rules unchanged.
+
+## Programme 03 status (2026-11-27) — findings above kept as found
+Evidence: `HOME_GENIES_PROGRAMME_03_ENGINEERING_REPORT.md`. Local / isolated database only; uncommitted; not deployed.
+- **F / P2-1 (Stripe status poll treated `complete` as paid) — corrected:** the poll checks only Stripe attempts that are not yet paid,
+  and completes an order only when Stripe's own record (read server-to-server) says `payment_status == "paid"`, currency INR, amount ==
+  the order's `total_paise`, and the session belongs to the attempt's order. The route stays public (the browser returns from Stripe
+  without a session of ours) but can no longer cause anything Stripe has not confirmed; nothing is recorded until Stripe says paid.
+  Whether to require a signed-in owner anyway is recorded as P03-OD-03.
+- **F / P2-2 (Stripe webhook unverifiable on the Emergent path; no validation) — mitigated:** whatever the signature path, the
+  webhook body's figures are never used; the same server-to-server check decides. Every delivery is recorded once in `webhook_events`
+  (provider `stripe`, no gateway payload, no customer data) and shows in the finance payment-events inbox with retry.
+- **Reliability (B-022):** a crash at any step of a withdrawal request is finished by a retry with the same key or by the repair sweep
+  in the daily maintenance; no double reservation and no stranded reservation (tested at five crash points and under races).
+- **Sensitive data (B-023):** settlement snapshots never copy the full account number (masked, last four); bank details in settlement
+  lists are shown to finance roles only; no new key material (A-01 unresolved). Logs added in this programme name event ids, statuses
+  and exception types only.
+- **Logging:** the Stripe status poll's `print()` replaced by a structured log line without the exception text.

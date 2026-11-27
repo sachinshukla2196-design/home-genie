@@ -484,3 +484,31 @@ content — both fixed so the test proves `frame-ancestors`.
 - **Browser (throwaway API + `hg_cycle_ui_test`):** 4-role admin crawl (22 pages + 8 Operations tabs) before: 16 refused requests; after:
   **0** (repeated under the production headers); W7 role-by-role checks **112/112** at 1366 and 390 px (repeated under the production
   headers, 112/112); CSP checks **38/38** at 1366 and 390 px; design unchanged (screenshots reviewed).
+
+
+# Programme 03 — first package: DEF-05, B-022, B-023, reconciliation (2026-11-27)
+Base `main` @ `383e811`; uncommitted; isolated test MongoDB only. Full detail: `HOME_GENIES_PROGRAMME_03_ENGINEERING_REPORT.md`.
+
+## What was built
+- **DEF-05** Stripe completion integrity: server-to-server Stripe record decides (paid, INR, exact paise, the attempt's order); one
+  `webhook_events` record per delivery / session; finance retry re-reads Stripe; applied only via `_process_paid_order`.
+- **B-022** withdrawal requests: intent first, keyed hold excluded by a void marker, HELD row by op key, notice / audit once,
+  `request_key`, repair sweep in maintenance; pay / reject path guarded before money moves (audit P03-A04).
+- **B-023** settlement snapshot with digest; pay refused on altered snapshot or bank change; finance-only detail view.
+- **Reconciliation** framework over eight domains (API, script), read-only, with a check for cancelled orders holding money with no
+  refund record (audit P03-A15).
+- **Audit:** independent review of every money module; 16 register entries (2 High open: P03-A01, P03-A02).
+
+## Existing tests changed
+None. No assertion was weakened.
+
+## Defects found by the verification itself
+- The first `applied` assertion in the Stripe race test assumed "applied" meant "this event applied it"; in this codebase (Razorpay too)
+  it means "this session is the order's payment". The test was corrected to assert the real invariant (effects exactly once).
+- Index specs: a partial index on `id` would duplicate the key of `withdrawal_requests_id` (reported as a conflict by `db_indexes`);
+  given a distinct key.
+
+## Final verification
+New suites 94/94; full regression 79 suites 1,678 passed / 0 failed / 0 skipped, then the 17 suites touched by three late changes
+re-run on the final code (all passed; final 1,681); live 96 passed / 6 skipped (one earlier transient timeout run recorded in the
+report); pyflakes no new findings; frontend lint 0 errors, tests 15/15, build OK; browser checks (desktop + mobile) passed.
