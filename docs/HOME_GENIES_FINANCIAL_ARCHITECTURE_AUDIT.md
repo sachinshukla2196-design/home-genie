@@ -270,3 +270,12 @@ production-verified, committed or deployed.
 | §7 — settlements recorded no order basis and no payee bank details (B-023) | **Resolved.** Each new settlement stores an immutable snapshot (eligible orders with net ledger amounts, held orders with reasons, non-order entries, the balance figures, the requested amount, payee bank details masked: holder, IFSC, last four, last approved bank-change id) and its SHA-256 digest. No code path updates it; `mark_paid` refuses a snapshot that does not verify or whose bank details changed since the request (reject and re-request). Legacy settlements (no snapshot) behave as before. The snapshot is evidence, not authority to pay. |
 | No single reconciliation across money domains | **Added.** `reconciliation.py` (+ `GET /api/admin/finance/reconciliation`, `scripts/financial_reconciliation_report.py`): payments, wallets, withdrawals, settlements, vendor ledger, refunds, commissions, stock; read-only (proven by a full-database fingerprint before / after); each domain isolated. |
 | Single-person money actions, runtime commission rates, unrecorded money owed, over-promising refund cases, provider refunds, bank payouts (B-012/13/20/21, G8, G9) | Unchanged — owner decisions / external integrations (see the Programme 03 report §J–K). |
+
+## Programme 03-B resolution (2026-11-27) — P03-A01 / P03-A02
+Detail: `HOME_GENIES_PROGRAMME_03B_FINANCIAL_LIABILITY_INTEGRITY_REPORT.md`. Uncommitted; local only.
+
+| Finding | Status |
+|---|---|
+| P03-A01 — customer cancellation of a paid order committed without a durable obligation; a payment landing between read and claim could also produce paid + cancelled + unrecorded (customer and admin cancel) | **Resolved.** `refund_due_cancel` in the cancellation claim; claims pinned to the payment state read; idempotent settle (restock → reversal → one `cancel:` case → marker cleared), finished by the existing obligation sweep after any crash. |
+| P03-A02 — payment claimed on a cancelled order; a crash before the late-payment decision lost the obligation and completion cleared its marker | **Resolved.** `late_payment_due` (with lease) in the paid claim on every payment path; unchanged decision under the lease; `repair_late_payments` in the daily maintenance; completion waits while a decision is pending. |
+| No check for duplicated / orphaned liabilities or revenue on refund-owed orders | **Added** — reconciliation `liabilities` domain. |

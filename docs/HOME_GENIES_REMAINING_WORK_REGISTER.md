@@ -137,8 +137,8 @@ Decision IDs: `HOME_GENIES_OWNER_DECISION_REGISTER.md`. Sequence and gates: `HOM
 **Programme 03 audit items (2026-11-27; detail `HOME_GENIES_PROGRAMME_03_ENGINEERING_REPORT.md` §6):**
 | ID | Item | Severity | Programme · decision |
 |---|---|---|---|
-| P03-A01 | Customer cancel of a paid order writes no refund marker with the claim; a crash before the case leaves an unrecorded refund (now reported by reconciliation) | High | P03 next package |
-| P03-A02 | Late payment on a cancelled order: a crash before late handling leaves paid + cancelled with no refund record (now reported) | High | P03 next package (B-020) |
+| P03-A01 | ~~Customer cancel of a paid order writes no refund marker with the claim~~ **FIXED 2026-11-27 (P03-B)** | High | done (uncommitted) |
+| P03-A02 | ~~Late payment on a cancelled order: a crash before late handling leaves no refund record~~ **FIXED 2026-11-27 (P03-B)** | High | done (uncommitted) |
 | P03-A03 | COD discrepancy resolve / cash collection not excluded for cancelled orders | Medium (to confirm) | P03 next package |
 | P03-A05 | Return-window policy changeable by `admin` | Medium | D-05 |
 | P03-A06 | Any admin role can verify KYC / bank details | to confirm | D-06 / P0-02 |
@@ -148,6 +148,10 @@ Decision IDs: `HOME_GENIES_OWNER_DECISION_REGISTER.md`. Sequence and gates: `HOM
 | P03-A10 | Ledger not-supplied set omits `returned_to_origin` | Low | P03 before B-024 |
 | P03-A11 | Maintenance time budget overrun per batch | to confirm | P05 |
 | P03-A12 / A13 / A14 | Stripe `origin_url` allow-list; optional withdrawal key; open legacy settlements without snapshot | Low | P03 |
+| P03B-R07 | `refund_due_cancel` can remain on an order whose state changed so that nothing is owed (sweep re-checks harmlessly) | Low | P03 |
+| P03B-R04 | = P03-A03 (COD claims on cancelled orders); confirmed again by the P03-B review | Medium | P03 next |
+| P03B-OPS-01 | Money-guard readiness cache: a server started BEFORE the production indexes exist keeps refusing money writes (503, fail closed) for up to 15 s after they are created (BAD_TTL); a dropped index stays cached as ready for up to 300 s (OK_TTL). Proven locally (solo `test_upi_adminlogin`: 6 × 503 without a wait, all pass after a 16 s wait). Deployment runbook: create indexes (P1-01) before starting / restart after; or wait 15 s. No code change made | Low (ops) | P1-01 runbook |
+| P03B-UX-01 | A customer's own cancellation shows the shipment note "Order cancelled by admin" (pre-existing: the shared `confirmed_cancel` restock step writes that text, `stock.py` `cancel_order_stock`). Copy only; money unaffected | Low | UX pass |
 
 **Remaining frontend lint warnings after W8 (9; none fail the build; not fixed because each would change behaviour, semantics or vendored code):**
 | File:line | Rule | Classification |

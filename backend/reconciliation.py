@@ -11,6 +11,10 @@ One report across every money domain, built from the existing per-domain checks 
   refunds      refund obligations without a case; cancelled orders with money in and no obligation record at all; cases by state
   commissions  paid orders without a commission plan / vendor groups without their sale entry (order_completion), unfunded plans
   stock        negative stock, stock journal transactions left unfinished (stock crash recovery, dry run)
+  liabilities  (Programme 03-B) captured money on cancelled orders without an obligation; interrupted late-payment decisions;
+               refund owed but the order is active or earned revenue; duplicated / orphaned refund liabilities; one gateway
+               payment or bank reference used for more than one order - each issue with severity, ids, amount, gateway, reason,
+               detection time and a remediation category
 
 Nothing here writes: only find / count / aggregate / distinct, and the repair sweeps in DRY-RUN mode (which write nothing).
 Every domain is isolated: one failing check is reported as `error` and never hides the others. Reports carry record ids, order
@@ -131,7 +135,7 @@ async def refunds() -> dict:
     # (audit P03-A01 customer cancel, P03-A02 late payment crash, P03-A03 COD resolve after cancel). Reported, never repaired here.
     unmarked = []
     q = {"status": "cancelled", "payment_status": {"$in": ["paid", "partially_refunded"]}, "needs_refund": {"$ne": True},
-         "refund_due_cancel": {"$ne": True}, "fulfilments.refund_due": {"$ne": True}}
+         "refund_due_cancel": {"$ne": True}, "fulfilments.refund_due": {"$ne": True}, "late_payment_due": {"$exists": False}}
     async for o in db.orders.find(q, {"_id": 0, "id": 1, "order_number": 1}):
         if not await db.refund_cases.find_one({"order_id": o["id"]}, {"_id": 1}):
             unmarked.append({"order": o.get("order_number") or o["id"], "issue": "cancelled_with_money_in_and_no_refund_record"})
@@ -166,8 +170,107 @@ async def stock() -> dict:
                    [{"product_id": p["id"], "issue": "negative_stock"} for p in neg], ("stock_negative", "journal_stuck"))
 
 
+LIABILITY_LIVE_STATES = ("awaiting_review", "initiated", "failed", "confirmed")      # a case that still owes or has paid money
+MONEY_IN = ("paid", "partially_refunded", "refunded")
+
+
+def _issue(severity: str, reason: str, remediation: str, order: dict = None, *, payment=None, liability=None, amount=None,
+           gateway=None) -> dict:
+    o = order or {}
+    return {"severity": severity, "reason": reason, "order_id": o.get("id"), "order_number": o.get("order_number"),
+            "payment_session": payment, "liability_id": liability, "amount_paise": amount, "currency": "INR",
+            "gateway": gateway, "detected_at": now_iso(), "remediation": remediation}
+
+
+async def _gateway(order: dict):
+    sid = order.get("paid_session_id")
+    if not sid:
+        return None, None
+    tx = await db.payment_transactions.find_one({"session_id": sid}, {"_id": 0, "provider": 1})
+    return sid, (tx or {}).get("provider")
+
+
+async def liabilities() -> dict:
+    """Programme 03-B (P03-A01 / P03-A02): every captured payment is accounted for - a valid sale, a recorded refund obligation,
+    a refund in progress / done, or a pending late-payment decision; and no obligation is duplicated or orphaned."""
+    issues, c = [], {"cancelled_money_without_obligation": 0, "late_payment_unresolved": 0, "late_payment_pending": 0,
+                     "refund_owed_order_active": 0, "refund_owed_order_has_revenue": 0, "duplicate_order_liability": 0,
+                     "liabilities_exceed_money_in": 0, "orphan_liability": 0, "duplicate_payment_reference": 0}
+    now = now_iso()
+    # 1. money in on a cancelled order with no obligation of any kind (P03-A01 / P03-A02 / P03-A03 symptoms)
+    q = {"status": "cancelled", "payment_status": {"$in": ["paid", "partially_refunded"]}, "needs_refund": {"$ne": True},
+         "refund_due_cancel": {"$ne": True}, "fulfilments.refund_due": {"$ne": True}, "late_payment_due": {"$exists": False}}
+    async for o in db.orders.find(q, {"_id": 0, "id": 1, "order_number": 1, "paid_session_id": 1, "total_paise": 1, "total": 1}):
+        if not await db.refund_cases.find_one({"order_id": o["id"]}, {"_id": 1}):
+            c["cancelled_money_without_obligation"] += 1
+            sid, gw = await _gateway(o)
+            issues.append(_issue("critical", "cancelled_order_with_captured_money_and_no_obligation", "open_refund_obligation",
+                                 o, payment=sid, amount=paise_of(o, "total_paise", "total"), gateway=gw))
+    # 2. late payments whose decision is still pending (lease expired = interrupted; else in progress)
+    async for o in db.orders.find({"late_payment_due": {"$exists": True}}, {"_id": 0, "id": 1, "order_number": 1, "late_payment_due": 1,
+                                                                            "total_paise": 1, "total": 1}):
+        m = o["late_payment_due"]
+        if (m.get("lease_until") or "") < now:
+            c["late_payment_unresolved"] += 1
+            tx = await db.payment_transactions.find_one({"session_id": m.get("session_id")}, {"_id": 0, "provider": 1}) or {}
+            issues.append(_issue("high", "late_payment_decision_interrupted", "run_late_payment_repair", o, payment=m.get("session_id"),
+                                 amount=paise_of(o, "total_paise", "total"), gateway=tx.get("provider")))
+        else:
+            c["late_payment_pending"] += 1
+    # 3. a refund is owed, yet the order is active or earned revenue (the payment silently treated as a sale)
+    async for o in db.orders.find({"needs_refund": True}, {"_id": 0, "id": 1, "order_number": 1, "status": 1, "paid_session_id": 1,
+                                                         "total_paise": 1, "total": 1}):
+        sid, gw = await _gateway(o)
+        if o.get("status") != "cancelled":
+            c["refund_owed_order_active"] += 1
+            issues.append(_issue("high", "refund_owed_but_order_active", "finance_review", o, payment=sid, gateway=gw))
+        sales = await db.vendor_ledger.aggregate([{"$match": {"order_id": o["id"], "type": {"$in": ["SALE_COLLECTED", "SALE_REVERSAL"]}}},
+                                                  {"$group": {"_id": None, "n": {"$sum": "$amount_paise"}}}]).to_list(1)
+        if await db.commission_plans.find_one({"_id": o["id"]}, {"_id": 1}) or (sales and sales[0]["n"] > 0):
+            c["refund_owed_order_has_revenue"] += 1
+            issues.append(_issue("high", "refund_owed_order_recorded_as_revenue", "finance_review", o, payment=sid, gateway=gw))
+    # 4. duplicated / orphaned liabilities
+    per_order = await db.refund_cases.aggregate([
+        {"$match": {"status": {"$in": list(LIABILITY_LIVE_STATES)}}},
+        {"$group": {"_id": "$order_id", "total": {"$sum": "$amount_paise"}, "kinds": {"$push": "$kind"}, "ids": {"$push": "$id"},
+                    "amounts": {"$push": "$amount_paise"}, "states": {"$push": "$status"}}}]).to_list(None)
+    for g in per_order:
+        o = await db.orders.find_one({"id": g["_id"]}, {"_id": 0, "id": 1, "order_number": 1, "payment_status": 1, "total_paise": 1,
+                                                        "total": 1, "paid_session_id": 1, "refunded_paise": 1, "refunded_amount": 1})
+        if not o or o.get("payment_status") not in MONEY_IN:
+            c["orphan_liability"] += 1
+            issues.append(_issue("medium", "liability_without_money_in", "finance_review", o or {"id": g["_id"]},
+                                 liability=g["ids"][0], amount=g["total"]))
+            continue
+        order_level = [k for k in g["kinds"] if k in ("cancellation", "late_payment")]
+        if len(order_level) > 1:
+            c["duplicate_order_liability"] += 1
+            issues.append(_issue("high", "more_than_one_order_level_liability", "finance_review_duplicate", o, liability=",".join(g["ids"]),
+                                 amount=g["total"]))
+        open_total = sum(a for a, st in zip(g["amounts"], g["states"]) if st in ("awaiting_review", "initiated", "failed"))
+        remaining = paise_of(o, "total_paise", "total") - paise_of(o, "refunded_paise", "refunded_amount")
+        if open_total > remaining:            # open promises beyond the money still held (confirmed refunds already reduced it)
+            c["liabilities_exceed_money_in"] += 1
+            issues.append(_issue("high", "liabilities_exceed_money_in", "finance_review_duplicate", o, liability=",".join(g["ids"]),
+                                 amount=open_total))
+    # 5. one gateway payment / bank reference used for more than one order
+    for field in ("razorpay_payment_id", "reference"):
+        dup = await db.payment_transactions.aggregate([
+            {"$match": {field: {"$type": "string", "$ne": ""}}},
+            {"$group": {"_id": f"${field}", "orders": {"$addToSet": "$order_id"}}},
+            {"$match": {"orders.1": {"$exists": True}}}]).to_list(None)
+        for d in dup:
+            c["duplicate_payment_reference"] += 1
+            issues.append(_issue("high", f"{field}_used_for_more_than_one_order", "finance_review",
+                                 {"id": ",".join(sorted(x for x in d["orders"] if x))}))
+    return _domain(c, issues, ("cancelled_money_without_obligation", "late_payment_unresolved", "refund_owed_order_active",
+                               "refund_owed_order_has_revenue", "duplicate_order_liability", "liabilities_exceed_money_in",
+                               "orphan_liability", "duplicate_payment_reference"))
+
+
 DOMAINS = {"payments": payments, "wallets": wallets, "withdrawals": withdrawals, "settlements": settlements,
-           "vendor_ledger": vendor_ledger, "refunds": refunds, "commissions": commissions, "stock": stock}
+           "vendor_ledger": vendor_ledger, "refunds": refunds, "commissions": commissions, "stock": stock,
+           "liabilities": liabilities}
 
 
 async def run(domains=None) -> dict:

@@ -231,3 +231,8 @@ Uncommitted; not deployed. Evidence: `HOME_GENIES_PROGRAMME_03_ENGINEERING_REPOR
 | Vendor own settlements | `GET /api/vendor/finance/settlements` | unchanged | the snapshot is not returned to vendors. |
 | Stripe status poll | `GET /api/payments/status/{sid}` | unchanged (public) | can only complete a payment Stripe itself confirms (amount, currency, order); only Stripe attempts are checked (P03-OD-03). |
 | Payment events list / retry | `GET /api/admin/payment-events`, `POST …/{id}/retry` | unchanged (`_finance`) | now also holds Stripe events (provider `stripe`); a Stripe retry re-reads Stripe. |
+
+## 11. Programme 03-B (2026-11-27) — no permission changed
+Customer cancellation, admin status change and the payment paths keep their guards. Two claims became stricter (conditional on the
+payment state read): a cancellation racing a payment now gets 409 "refresh and retry" instead of cancelling a paid order without its
+refund obligation. The reconciliation `liabilities` domain is under the existing finance-only endpoint.

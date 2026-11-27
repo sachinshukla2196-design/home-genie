@@ -57,6 +57,11 @@ immutable settlement order / bank snapshots, and a read-only financial reconcili
 Programme 02's open workstreams (W2, W3, W1 second factor) still wait for their decisions; P1-01 remains the hard production gate and
 now also creates the withdrawal indexes. In-process regression is now 79 suites.
 
+**Update 2026-11-27 (Programme 03-B):** the two High audit findings are fixed locally — P03-A01 (customer cancellation of a paid
+order) and P03-A02 (late payment on a cancelled order) now record the refund obligation in the same database update as the
+transition, with repair sweeps and a reconciliation `liabilities` domain (`HOME_GENIES_PROGRAMME_03B_FINANCIAL_LIABILITY_INTEGRITY_REPORT.md`).
+One owner decision added (P03B-OD-01, the existing revival rule). Uncommitted; P1-01 remains the production gate.
+
 ## 2. Overall progress (from the current matrix, 303 rows)
 | Measure | Value |
 |---|---|

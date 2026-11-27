@@ -62,6 +62,12 @@ eligibility or timing. Detail and impact: `HOME_GENIES_PROGRAMME_03_ENGINEERING_
 | P03-OD-04 | When a captured card payment is rejected (amount, currency or order mismatch), should a finance-review refund obligation be opened automatically? Today only a `rejected` event is recorded (same as Razorpay; part of B-020) | Captured money with no owed record ⚠ | A15, F5, D21 | Finance must notice rejected events in the inbox / reconciliation report | Event recorded, counted under payments `events_rejected_for_review` | Launch (only if a card gateway is enabled; with P0-01) |
 | P03-OD-05 | Settlement snapshots keep the payee's account holder name, IFSC and last four digits for the life of the settlement (settlements are never deleted). Confirm under the retention policy | Financial evidence vs data minimisation | D23, L12 | Interim stays | Minimum fields; no full account number; finance-only display | Launch (with P0-05) |
 
+### Programme 03-B — found while fixing P03-A01 / P03-A02 (2026-11-27)
+| ID | Exact question | Why it matters | Affected modules | If not decided | Safe interim (in code) | Blocks |
+|---|---|---|---|---|---|---|
+| P03B-OD-01 | A payment captured after an order was cancelled by the 15-minute payment expiry RESTORES the order when its stock can be taken back (existing rule, documented in Programme 01 as "the existing late-payment rule", never owner-settled); every other cancelled order is never reopened and a refund is owed. Confirm, or should every late payment be refunded? | Customer receives goods they may have abandoned vs a refund they must wait for; stock and vendor workload | A14, A15, F2, G1 | Existing rule stays (preserved unchanged by P03-B) | Revive only expiry-cancelled orders with stock; all others refund owed | Launch |
+| P03B-OD-02 | When a paid order is cancelled while another refund case is still open (e.g. an admin refund being processed), the cancellation case covers only what that open case does not (owner-approved G1 rule, now also on the customer path). If that other case is later closed WITHOUT paying, should the remainder be re-owed automatically (today: finance re-opens manually)? | Money could stop being owed if a case is wrongly closed | D21, G1 | Finance must notice; reconciliation reports cancelled money only if NO case exists | G1 amount; manual review | — |
+
 ### Security, identity and privacy (Programme 02)
 | ID | Exact question | Why it matters | Affected modules | If not decided | Safe interim (in code) | Blocks |
 |---|---|---|---|---|---|---|
@@ -133,15 +139,15 @@ the code (marked "in force (interim)"). Each row is a sub-question of D-16, not 
 | D16-W4-6 | Should accounts_admin read vendor identity-document links (PAN, identity, bank proof)? It may not review documents or open the onboarding view, but the documents listing answers it (existing, tested behaviour) | `GET /api/admin/vendors/{id}/documents` | document links | read: all four admin roles; review: super_admin, admin, support_admin | limit the listing to the document reviewers | not changed | accounts_admin can open identity documents | public launch (identity data) |
 
 ## Counts
-Open / interim decisions listed: **54** (counted from the tables; 49 before Programme 03 + P03-OD-01 … P03-OD-05) — D-series **18** (D-01 … D-19 except settled D-07; D-13 is interim
+Open / interim decisions listed: **56** (counted from the tables; 49 before Programme 03 + P03-OD-01 … P03-OD-05 + P03B-OD-01, P03B-OD-02) — D-series **18** (D-01 … D-19 except settled D-07; D-13 is interim
 and already actioned), P0-01 … P0-09 (**9**), P1-01 … P1-08 (**8**), OD-M1 … OD-M8 (**8**), L-01 … L-03 (**3**), A-01 (**1**, found in this
 reconciliation), W6-01 (**1**, found in Programme 02 / W6, 2026-11-24; does not block launch), W5-01 (**1**, found in Programme 02 /
 W5, 2026-11-24; conditional on the production dry run).
 - **W6 note (2026-11-24):** whether the Emergent platform environment (`backend/requirements.txt`, private `emergentintegrations`) can be
   retired follows from **D-10** (API reachable only through Vercel); it is not a separate decision. Five unused vulnerable Python packages
   (pillow, python-jose, ecdsa, filelock, oauthlib) remain there until D-10 is answered (remaining-work register W6-R2, W6-R5).
-- **28 block public launch**: D-01, D-03, D-04, D-05, D-06, D-09, D-10, D-11, D-14, D-15, P0-01 … P0-09, P1-02, P1-03, P1-05, L-01,
-  L-02, L-03, A-01, P03-OD-04 (only if a card gateway is enabled), P03-OD-05 (with P0-05).
+- **29 block public launch**: D-01, D-03, D-04, D-05, D-06, D-09, D-10, D-11, D-14, D-15, P0-01 … P0-09, P1-02, P1-03, P1-05, L-01,
+  L-02, L-03, A-01, P03-OD-04 (only if a card gateway is enabled), P03-OD-05 (with P0-05), P03B-OD-01.
 - **1 blocks production deployment of Programme 01**: P1-01. **Programme 03 note (2026-11-27):** the migration now also creates the
   withdrawal idempotency / repair indexes; until it runs, member withdrawal requests are refused (503) like every other money write.
 - **Programme 02 cannot finish these parts without an answer**: P0-05 (retention / deletion), P0-06 (admin second factor),

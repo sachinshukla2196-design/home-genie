@@ -20,7 +20,7 @@ from cod_rules import refundable_total_paise, require_confirmer_role, refuse_own
 from pymongo.errors import DuplicateKeyError
 from core import (db, now_iso, new_id, get_current_user, get_settings, next_sequence, wallet_apply,
                   add_wallet_transaction, create_notification, log_audit, require_admin, P_PUBLIC)
-from stock import (expire_one, expire_pending_online_orders, handle_late_payment, EXPIRY_REASON, reserve_for_order,
+from stock import (expire_one, expire_pending_online_orders, EXPIRY_REASON, reserve_for_order,
                    mark_reserve_bound, abandon_reservation)
 
 logger = logging.getLogger("homegenies")
@@ -757,6 +757,10 @@ async def _process_paid_order(session_id: str, request: Request = None):
             elif paid_by == session_id:
                 # Programme 01 (B-003): this payment's claim landed earlier. If the process died before finishing, the same
                 # payment reported again finishes it (transaction record + completion), idempotently, instead of returning early.
+                if order.get("late_payment_due"):          # Programme 03-B: an interrupted late-payment decision (lease expired)
+                    from late_payments import resolve_late_payment
+                    await resolve_late_payment(order["id"], session_id, own_lease=False)
+                    order = await db.orders.find_one({"id": tx["order_id"]})
                 if tx.get("payment_status") != "paid":
                     await db.payment_transactions.update_one({"session_id": session_id},
                                                              {"$set": {"status": "completed", "payment_status": "paid", "updated_at": now_iso()}})
@@ -777,6 +781,9 @@ async def _process_paid_order(session_id: str, request: Request = None):
                     "completion_due": True}     # B-003: durable "finish me" marker, written atomically with the claim
         if not cancelled:      # the invoice is written atomically with the claim (a lost claim only leaves a numbering gap)
             paid_set.update({"status": "processing", "invoice_number": await next_sequence("invoice", "INV", 6)})
+        else:                  # Programme 03-B (P03-A02): the late payment's obligation is durable from this same update on
+            from late_payments import marker as _late_marker
+            paid_set["late_payment_due"] = _late_marker(session_id, revivable)
         claim = await db.orders.update_one({"id": order["id"], "payment_status": {"$in": list(PAYABLE_PAYMENT_STATES)},
                                             "payment_method": {"$ne": "cod"},
                                             "status": "cancelled" if cancelled else {"$ne": "cancelled"}}, {"$set": paid_set})
@@ -792,7 +799,11 @@ async def _process_paid_order(session_id: str, request: Request = None):
     source = f"payment:{tx.get('provider') or 'gateway'}"
     if cancelled:
         # Expired order: take the stock back if still available. Admin-cancelled order: flag for refund. Otherwise refund.
-        if not await handle_late_payment(order, allow_revive=revivable):
+        # Programme 03-B: decided under the lease this claim holds; a crash before the decision is durable leaves the marker
+        # for late_payments.repair_late_payments.
+        from late_payments import resolve_late_payment, _fault as _late_fault
+        _late_fault("late_after_claim", order_id=order["id"])
+        if not await resolve_late_payment(order["id"], session_id, own_lease=True):
             await complete_paid_order(order["id"], request, source=source)   # clears the marker: a refund is owed, nothing earns
             return  # no commission / no invoice for an order that cannot be fulfilled
         # the revived order gets its invoice inside the shared completion (only when missing)

@@ -13,6 +13,13 @@ cod:     cod_pending ──cash confirmed (admin / super_admin: D-03 open)──
          cod_pending ──amount ≠ expected or manual evidence──▶ cod_discrepancy ──independent finance review──▶ paid
 paid ──refund cases confirmed──▶ partially_refunded ──▶ refunded
 ```
+**Refund obligations at the transition (Programme 03-B).** A cancellation of a paid order writes `refund_due_cancel` in the same
+conditional update that cancels it (customer and admin; the claim is pinned to the payment state read) → one `cancel:<order>` refund
+case → marker cleared. A payment claimed on an already-cancelled order writes `late_payment_due` (leased) in the same update that marks
+it paid → the unchanged rule: expiry-cancelled + stock available → restored (earns); otherwise `needs_refund` → one `late:<order>`
+case → marker cleared. Interrupted steps are finished by the obligation sweep / `repair_late_payments`; recording an obligation never
+executes a refund.
+
 Expected COD cash = order total − goods a vendor did not supply (C-8). A second gateway capture is flagged as a duplicate
 payment (`duplicate_payments[].status: refund_due → refunded`), never applied.
 

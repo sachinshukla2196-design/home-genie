@@ -512,3 +512,39 @@ None. No assertion was weakened.
 New suites 94/94; full regression 79 suites 1,678 passed / 0 failed / 0 skipped, then the 17 suites touched by three late changes
 re-run on the final code (all passed; final 1,681); live 96 passed / 6 skipped (one earlier transient timeout run recorded in the
 report); pyflakes no new findings; frontend lint 0 errors, tests 15/15, build OK; browser checks (desktop + mobile) passed.
+
+
+# Programme 03-B — financial liability integrity: P03-A01, P03-A02 (2026-11-27)
+Branch `programme-03-payments-finance` @ `bf412c0`; uncommitted; isolated test MongoDB only. Full detail:
+`HOME_GENIES_PROGRAMME_03B_FINANCIAL_LIABILITY_INTEGRITY_REPORT.md`.
+
+## What was built
+- **P03-A01** customer cancel of a paid order: `refund_due_cancel` written in the cancellation claim itself; the claim pins the payment
+  state the request read (the admin cancel claim too); settling (restock intents → sale / commission reversal → one `cancel:<order>`
+  case → marker cleared) is idempotent and finished by the existing obligation sweep after any crash.
+- **P03-A02** payment claimed on a cancelled order: `late_payment_due {session_id, revivable, at, lease_until, attempts}` written in the
+  paid claim itself (all gateways converge on `_process_paid_order`); the unchanged revive-or-refund rule runs under the lease
+  (`late_payments.py`); `repair_late_payments` (keyset sweep) finishes interrupted decisions from the inline expiry sweep, a redelivery
+  of the same payment and the daily maintenance; completion waits while a decision is pending. Index `orders_late_payment_due`.
+- **Reconciliation** `liabilities` domain (read-only): missing / interrupted / duplicate / orphan obligations, refund owed but order active
+  or earning, obligations above money held, duplicate payment references; each issue with severity, ids, paise, currency, gateway,
+  reason, time, remediation.
+- No transactions (standalone server, 0 existing call sites); no refund, cancellation, revival, commission, COD or gateway rule changed;
+  no money moved; no permission changed.
+
+## Existing tests changed
+None. No assertion was weakened.
+
+## Defects found by the verification itself
+- Independent adversarial review of the first implementation: **R01 (High)** repair after a crash inside a revival re-released the
+  revived stock (oversell); **R02** lease not a fence; **R03** day-long undecided window / revival after a recorded refund / second
+  liability. All fixed with state fences and a re-run-safe decision; each reproduced by a test that fails on the first implementation.
+- Browser check found pre-existing copy "Order cancelled by admin" on a customer's own cancellation (P03B-UX-01, Low, not changed).
+- UPI admin-login solo 503 explained and reproduced: money-guard "not ready" cached 15 s from server start on an empty database
+  (harness only; deployment runbook note P03B-OPS-01).
+
+## Final verification
+New suite 47/47; full regression 80 suites **1,728 passed / 0 failed / 0 skipped** (one environmental timeout in `test_db_indexes`
+under load, 8/8 when re-run; 20 suites run separately after the first runner ended with the previous session); live 96 passed / 6
+skipped (unchanged); pyflakes no new findings; frontend quality exit 0 (lint 0 errors, tests 15/15, guards ✓, build OK); browser
+4/4 (customer cancels a paid order, desktop + mobile, incl. lost response + retry: exactly one case, full amount, stock restored).

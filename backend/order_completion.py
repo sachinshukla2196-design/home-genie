@@ -63,6 +63,10 @@ async def complete_paid_order(order_or_id, request=None, source: str = "", notif
     order = await db.orders.find_one({"id": oid}, {"_id": 0})
     if not order:
         return {"outcome": "skipped", "reason": "order_missing"}
+    if order.get("late_payment_due"):
+        # Programme 03-B: a payment landed on a cancelled order and its outcome (restore or refund) is not decided yet. Wait -
+        # skipping now would clear `completion_due` and lose the sales / commission of an order about to be restored.
+        return {"outcome": "skipped", "reason": "late_payment_pending"}
     why = None
     if order.get("needs_refund"):
         why = "refund_owed"

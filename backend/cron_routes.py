@@ -112,6 +112,8 @@ async def run_maintenance(budget_seconds: float = None, dry_run: bool = False) -
         from stock import run_recovery, heal_stuck_expiries
         out["stock_recovery"] = await run_recovery(limit=200, dry_run=True, max_seconds=left())
         out["stuck_expiries"] = await heal_stuck_expiries(limit=200, dry_run=True, max_seconds=left())
+    from late_payments import repair_late_payments          # P03-B: late payments decided before completion runs
+    out["late_payments"] = await repair_late_payments(dry_run=dry_run, max_seconds=left())
     out["completion_repair"] = await repair_incomplete_completions(dry_run=dry_run, max_seconds=left())   # paid orders finished first
     from withdrawal_intents import repair_withdrawal_requests
     out["withdrawal_requests"] = await repair_withdrawal_requests(dry_run=dry_run, max_seconds=left())   # P03 B-022

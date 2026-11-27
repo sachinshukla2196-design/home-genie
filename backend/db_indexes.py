@@ -132,6 +132,9 @@ SPECS = [
     {"coll": "return_cases", "keys": [("order_id", 1), ("created_at", 1)], "name": "return_cases_order_created"},
     {"coll": "settlements", "keys": [("id", 1)], "name": "settlements_id"},
     {"coll": "withdrawal_requests", "keys": [("id", 1)], "name": "withdrawal_requests_id"},
+    # Programme 03-B (P03-A02): the late-payment repair finds payments on cancelled orders whose decision was interrupted.
+    {"coll": "orders", "keys": [("late_payment_due.lease_until", 1), ("id", 1)], "name": "orders_late_payment_due",
+     "partialFilterExpression": {"late_payment_due": {"$exists": True}}},
     # Programme 03 (B-022): one withdrawal request per (member, idempotency key); the repair sweep finds interrupted requests.
     {"coll": "withdrawal_requests", "keys": [("user_id", 1), ("request_key", 1)], "name": "withdrawal_requests_user_key_unique",
      "unique": True, "partialFilterExpression": PARTIAL_STR("request_key")},

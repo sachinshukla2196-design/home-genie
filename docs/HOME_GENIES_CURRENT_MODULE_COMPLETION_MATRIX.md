@@ -47,6 +47,10 @@ B-023 (immutable settlement order / bank snapshots) implemented and verified loc
 (gateway choice P0-01; never exercised live) but carry the new evidence; B7, D23 and G7 were already "Implemented and verified" and
 carry the new tests. Uncommitted; not deployed; the new withdrawal indexes join the production migration (P1-01).
 
+**Update 2026-11-27 (Programme 03-B):** P03-A01 / P03-A02 fixed (refund obligations recorded with the cancellation / late-payment
+claim; repair; reconciliation `liabilities`). **No row changes status:** G1 (cancellation refunds), G18 (refund integrity) and A14 / A15
+(payment paths) carry the new evidence (`test_p03b_liability_integrity`).
+
 Status changes against Programme 00: D30 (Frontend complete, backend incomplete → Implemented, verification incomplete). Programme 01 rows whose status did not change carry the new evidence and remaining work in their columns.
 
 Open rows by assigned programme: Owner / legal (gates launch): 7, Owner action before deploying Programme 01: 2, P02: 25, P03: 28, P04: 20, P05: 31, P06: 33, P07: 7, P08: 23, Unscheduled (not in P02–P08; owner to prioritise): 8, — (retired by S-7; must stay retired): 1.

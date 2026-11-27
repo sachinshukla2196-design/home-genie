@@ -90,6 +90,11 @@ async def set_policy(body: PolicyIn, request: Request, admin: dict = Depends(req
     return new
 
 
+def _fault(point: str, **ctx):
+    """Crash-injection hook for tests (no-op in the application)."""
+    return None
+
+
 # ================================================================== refund cases
 async def open_refund_case(order: dict, kind: str, amount_paise: int, reason: str, source_key: str, *, return_case_id: str = None,
                            vendor_id: str = None):
@@ -159,7 +164,7 @@ def _lines_refund_paise(order: dict, vendor_id: str) -> int:
     return _value_with_tax(order, value)
 
 
-async def settle_paid_cancellation(order_id: str):
+async def settle_paid_cancellation(order_id: str, reason: str = "A paid order was cancelled"):
     """G1 (owner-approved): a PAID order that was cancelled gets ONE refund case (`cancel:<order>`, the same key the customer
     cancellation uses) for what is still refundable and not already promised by another open case, and the sales of the
     vendors whose fulfilment was cancelled are reversed once. No money moves: finance confirms the case as usual.
@@ -167,13 +172,26 @@ async def settle_paid_cancellation(order_id: str):
     o = await db.orders.find_one({"id": order_id}, {"_id": 0})
     if not o or o.get("status") != "cancelled" or o.get("needs_refund") or o.get("payment_status") not in PAID_STATES:
         return None
+    # Programme 03-B: finish any restock intent written with the cancellation first (idempotent, exactly once per line), so the
+    # vendor groups are in their final state before the sale reversals below - when the repair sweep runs this after a crash,
+    # the cancellation's own restock step may not have run yet.
+    if o.get("restock_intents"):
+        await run_intents(order_id)
+        o = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    customer = o.get("cancel_reason") == "customer_cancelled"
     for f in o.get("fulfilments", []):
-        if f.get("status") in ("cancelled", "rejected"):
+        # a customer may cancel only while every group is untouched, and every such group's sale is taken back (as before
+        # Programme 03-B) - also on an older order whose restock step leaves the group status unchanged (review P03B-R05)
+        if f.get("status") in ("cancelled", "rejected") or (customer and f.get("status") in PRE_DISPATCH):
             await L.post_sale_reversal(o, f["vendor_id"])
-    amount = await refundable_paise(o) - await _open_case_total(order_id)
-    case = None
-    if amount > 0:
-        case, _ = await open_refund_case(o, "cancellation", amount, "A paid order was cancelled", f"cancel:{order_id}")
+    _fault("settle_cancel_before_case", order_id=order_id)
+    existing = await db.refund_cases.find_one({"source_key": f"cancel:{order_id}"}, {"_id": 0})
+    case = existing
+    if not existing:
+        amount = await refundable_paise(o) - await _open_case_total(order_id)
+        if amount > 0:
+            case, _ = await open_refund_case(o, "cancellation", amount, reason, f"cancel:{order_id}")
+    _fault("settle_cancel_before_marker_clear", order_id=order_id)
     await db.orders.update_one({"id": order_id}, {"$unset": {"refund_due_cancel": ""}})
     return case
 
@@ -226,9 +244,14 @@ async def ensure_cases_for_flagged_orders(limit: int = 200, dry_run: bool = Fals
     async def late(o, dry):
         if await db.refund_cases.find_one({"source_key": f"late:{o['id']}"}, {"_id": 1}):
             return "skipped"
+        # Programme 03-B (review P03B-R03): what another open case already promises is not promised twice (same rule as the
+        # cancellation case); if that case is later closed without paying, the next run opens the remainder.
+        amount = await refundable_paise(o) - await _open_case_total(o["id"])
+        if amount <= 0:
+            return "skipped"
         if dry:
             return "eligible"
-        await open_refund_case(o, "late_payment", await refundable_paise(o), o.get("needs_refund_reason") or "paid_after_cancellation", f"late:{o['id']}")
+        await open_refund_case(o, "late_payment", amount, o.get("needs_refund_reason") or "paid_after_cancellation", f"late:{o['id']}")
         return "updated"
     out["late_payment"] = await run_sweep("refund_obligations_late", "orders",
                                           {"needs_refund": True, "payment_status": {"$in": ["paid", "partially_refunded"]}},
@@ -476,23 +499,27 @@ async def customer_cancel(order_id: str, body: CancelIn, request: Request, user:
         raise HTTPException(status_code=409, detail="This order has already been dispatched. You can request a return after it is delivered.")
     now = now_iso()
     if all(s == "new" for s in fs):
+        # Programme 03-B (P03-A01): the refund obligation becomes durable IN the cancellation itself. The claim is conditional on
+        # the payment state this request read (a payment landing in between makes it miss: 409, retry), and for a paid order it
+        # writes the `refund_due_cancel` marker in the same update - the marker the obligation sweep turns into the refund case
+        # if anything below is interrupted. Settling (restock, sale reversals, the one `cancel:<order>` case) is idempotent.
+        paid = order.get("payment_status") in PAID_STATES
+        sets = {"status": "cancelled", "cancel_reason": "customer_cancelled", "cancel_note": body.reason.strip(), "cancelled_at": now,
+                "cancelled_by": user["id"], "updated_at": now}
+        if paid:
+            sets["refund_due_cancel"] = True
         res = await db.orders.update_one(
-            {"id": order_id, "status": {"$ne": "cancelled"}, "fulfilments": {"$not": {"$elemMatch": {"status": {"$nin": ["new"]}}}}},
-            {"$set": {"status": "cancelled", "cancel_reason": "customer_cancelled", "cancel_note": body.reason.strip(), "cancelled_at": now,
-                      "cancelled_by": user["id"], "updated_at": now},
+            {"id": order_id, "status": {"$ne": "cancelled"}, "payment_status": order.get("payment_status"),
+             "fulfilments": {"$not": {"$elemMatch": {"status": {"$nin": ["new"]}}}}},
+            {"$set": sets,
              "$unset": {"cancel_requested": ""},
              "$push": {"restock_intents": intent("confirmed_cancel", user["id"], prev_status=order.get("status", ""))}})
         if res.modified_count != 1:
             raise HTTPException(status_code=409, detail="The order changed just now. Please refresh and try again.")
+        _fault("customer_cancel_after_claim", order_id=order_id)
         await run_intents(order_id)
+        case = await settle_paid_cancellation(order_id, reason="Customer cancelled a paid order") if paid else None
         fresh = await db.orders.find_one({"id": order_id}, {"_id": 0})
-        case = None
-        if fresh.get("payment_status") == "paid":
-            for f in fresh.get("fulfilments", []):
-                await L.post_sale_reversal(fresh, f["vendor_id"])
-            amount = await refundable_paise(fresh)
-            if amount > 0:
-                case, _ = await open_refund_case(fresh, "cancellation", amount, "Customer cancelled a paid order", f"cancel:{order_id}")
         for f in fresh.get("fulfilments", []):
             await _notify_vendor(f["vendor_id"], "Order cancelled by customer", f"Order {fresh.get('order_number')} was cancelled before you accepted it.", {"order_id": order_id})
         await log_audit(user, "order_cancelled_by_customer", "order", order_id, new_value={"reason": body.reason}, request=request)

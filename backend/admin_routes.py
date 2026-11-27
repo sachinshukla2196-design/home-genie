@@ -425,7 +425,9 @@ async def update_order_status(order_id: str, body: OrderStatusBody, request: Req
         upd["$push"] = {"restock_intents": intent("admin_cancel", admin["id"], prev_status=o.get("status", ""))}
         if o.get("payment_status") in ("paid", "partially_refunded") and not o.get("needs_refund"):
             upd["$set"]["refund_due_cancel"] = True      # G1: the refund obligation is recorded with the cancellation itself
-    changed = await db.orders.update_one({"id": order_id, "status": current}, upd)    # conditional: a concurrent expiry/payment wins cleanly
+    # Programme 03-B: also conditional on the payment state read above - the refund marker is decided from it, so a payment that
+    # lands between the read and this claim makes the claim miss (409) instead of cancelling a paid order with no obligation.
+    changed = await db.orders.update_one({"id": order_id, "status": current, "payment_status": o.get("payment_status")}, upd)
     if changed.matched_count != 1:
         raise HTTPException(status_code=409, detail="This order was just updated. Refresh and try again.")
     restock = None

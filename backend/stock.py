@@ -344,7 +344,7 @@ async def reserve_replacement(case_id: str, order_id: str, lines: list, actor_id
 # ---------------------------------------------------------------------------------------------- order-level effects
 async def _flag_refund(order_id: str, reason: str) -> bool:
     """Idempotent: mark a paid-but-unfulfillable order for refund and alert admin + customer (first caller only)."""
-    res = await db.orders.update_one({"id": order_id, "needs_refund": {"$ne": True}},
+    res = await db.orders.update_one({"id": order_id, "needs_refund": {"$ne": True}, "status": "cancelled"},    # P03-B: never an active order
                                      {"$set": {"needs_refund": True, "needs_refund_reason": reason,
                                                "needs_refund_at": now_iso(), "updated_at": now_iso()}})
     if res.modified_count != 1:
@@ -370,8 +370,8 @@ async def finish_revival(order_id: str, txn_id: str, distribute: bool = False):
     fl = [{**f, "status": "new", "events": [*f.get("events", []),
            {"status": "new", "at": now, "by": "system", "note": "Payment received after timeout; order restored"}]}
           for f in order.get("fulfilments", [])]
-    res = await db.orders.update_one(
-        {"id": order_id, "revive_done_txn": {"$ne": txn_id}},
+    res = await db.orders.update_one(      # P03-B (P03B-R02): only a still-cancelled order is restored (never reset twice)
+        {"id": order_id, "revive_done_txn": {"$ne": txn_id}, "status": "cancelled"},
         {"$set": {"status": "processing", "fulfilments": fl, "revived_after_timeout": True, "revive_done_txn": txn_id,
                   "updated_at": now}, "$inc": {"revive_count": 1}, "$unset": {"cancel_reason": "", "cancelled_at": ""}})
     if res.modified_count == 1:
@@ -402,7 +402,9 @@ async def handle_late_payment(order: dict, allow_revive: bool = True) -> bool:
         # would otherwise return the stock after the revival below had re-reserved only the lines already marked
         # released, leaving an active order with no stock behind it. release_stock uses the expiry's own transaction
         # keys, so this finishes that same return exactly once; then every line is released and is re-reserved together.
-        await release_stock(oid, "order_payment_timeout", "system")
+        # Programme 03-B (review P03B-R02): only the expiry's own release (generation 0). A line already revived is at a later
+        # generation; a late actor working from a stale read must never release the stock a revival re-reserved.
+        await release_stock(oid, "order_payment_timeout", "system", eligible=lambda li: li.get("release_gen", 0) == 0)
         n = (await db.orders.find_one({"id": oid}, {"_id": 0, "revive_count": 1}) or {}).get("revive_count", 0)
         if await reserve_again(oid, "order_revived_late_payment"):
             _fault("before_finish_revival", order=order)
@@ -538,6 +540,10 @@ async def expire_pending_online_orders(limit: int = 100, max_seconds: Optional[f
     # Self-heal: cancelled by expiry but interrupted before the stock was returned (e.g. a function timeout).
     n += await heal_stuck_expiries(limit, max_seconds=max_seconds)
     await run_recovery(limit=20, max_seconds=max_seconds)     # DEF-03: 20 is the page size now, not a per-run ceiling
+    # Programme 03-B (review P03B-R03): interrupted late-payment decisions are finished here too (after stock recovery, which
+    # finishes any revival already started), so the window is the lease plus the next checkout - not a whole day.
+    from late_payments import repair_late_payments
+    await repair_late_payments(batch=limit, max_seconds=max_seconds)
     return n
 
 
