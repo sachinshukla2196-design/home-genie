@@ -19,7 +19,7 @@ function useGet(url) {
   return [data, error, load];
 }
 
-function History_() {
+function HistoryPanel() {
   const { t, lang } = useI18n();
   const [h, error, load] = useGet("/vendor/me/history");
   return (
@@ -110,7 +110,7 @@ function BankChange() {
 export function Governance({ approved }) {
   return (
     <div className="space-y-4" data-testid="governance">
-      <History_ />
+      <HistoryPanel />
       <Documents />
       <Verification />
       {approved && <BankChange />}

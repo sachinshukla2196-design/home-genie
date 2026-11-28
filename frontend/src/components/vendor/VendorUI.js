@@ -91,7 +91,7 @@ export function VYesNo({ value, onChange, disabled, name }) {
   return (
     <div className="mt-2 flex gap-2" role="radiogroup" aria-label={name}>
       {[[true, "Yes"], [false, "No"]].map(([v, l]) => (
-        <button key={l} type="button" role="radio" aria-checked={value === v} className="hgv-chip" aria-pressed={value === v} disabled={disabled} onClick={() => onChange(v)}>{l}</button>
+        <button key={l} type="button" role="radio" aria-checked={value === v} className="hgv-chip" disabled={disabled} onClick={() => onChange(v)}>{l}</button>
       ))}
     </div>
   );

@@ -51,7 +51,6 @@ export default function AdminUsers() {
     API.get("/admin/password-reset-requests").then(({ data }) => setPwReqs(data)).catch(() => {});
   }, []);
 
-  const loadPwReqs = () => API.get("/admin/password-reset-requests").then(({ data }) => setPwReqs(data)).catch(() => {});
   const openReset = (target) => { setResetForm({ temporary_password: "", reason: target.reqId ? "Member asked for a password reset" : "" }); setResetTarget(target); };
   const resetForReq = (r) => openReset({ id: r.user_id, full_name: r.full_name, distributor_id: r.distributor_id, reqId: r.id });
   const tempOk = resetForm.temporary_password.length >= 10 && /[A-Za-z]/.test(resetForm.temporary_password) && /\d/.test(resetForm.temporary_password);

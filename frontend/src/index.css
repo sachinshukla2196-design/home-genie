@@ -433,7 +433,7 @@ html:not(.dark) .text-hg-violet { color: #5C3A26; }
 
   .hgv-chip { background-color: #FFFFFF; display: inline-flex; align-items: center; gap: 0.4rem; min-height: 44px; padding: 0 1rem; border-radius: 9999px;
               border: 1.5px solid #E3D3B4; background: #FFFFFF; color: #3B2417; font-weight: 600; font-size: 0.875rem; cursor: pointer; }
-  .hgv-chip[aria-pressed="true"] { background: #3B2417; color: #FBF1DA; border-color: #3B2417; box-shadow: 0 6px 14px -8px rgba(43, 26, 16, 0.7); }
+  .hgv-chip[aria-pressed="true"], .hgv-chip[aria-checked="true"], .hgv-chip[aria-selected="true"] { background: #3B2417; color: #FBF1DA; border-color: #3B2417; box-shadow: 0 6px 14px -8px rgba(43, 26, 16, 0.7); }
   .hgv-pill { display: inline-flex; align-items: center; gap: 0.3rem; padding: 0.2rem 0.65rem; border-radius: 9999px; font-size: 0.72rem;
               font-weight: 700; letter-spacing: 0.02em; border: 1px solid transparent; white-space: nowrap; }
   .hgv-pill-gold { background: #FBF1DA; color: #86671E; border-color: #EAD394; }

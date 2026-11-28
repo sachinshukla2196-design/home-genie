@@ -8,14 +8,11 @@ import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageHeader, SectionCard } from "@/components/PageHeader";
 import { useI18n } from "@/context/I18nContext";
-import { useAuth } from "@/context/AuthContext";
 import { API, apiError } from "@/lib/api";
 
 export default function AdminSettings() {
   const { t } = useI18n();
-  const { user } = useAuth();
   const [s, setS] = useState(null);
-  const isSuper = user?.role === "super_admin";
   const set = (k) => (e) => setS((p) => ({ ...p, [k]: e.target?.value ?? e }));
 
   useEffect(() => { API.get("/admin/settings").then(({ data }) => setS(data)).catch(() => {}); }, []);

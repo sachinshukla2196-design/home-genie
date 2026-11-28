@@ -80,7 +80,7 @@ export default function AdminVendorApplications() {
       <div className="mt-5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1" role="tablist" aria-label="Application status">
           {TABS.map(([k, label]) => (
-            <button key={k} type="button" role="tab" aria-selected={tab === k} aria-pressed={tab === k} className="hgv-chip shrink-0"
+            <button key={k} type="button" role="tab" aria-selected={tab === k} className="hgv-chip shrink-0"
                     onClick={() => { setTab(k); setSelected(null); setDetail(null); }} data-testid={`apps-tab-${k}`}>{label}</button>
           ))}
         </div>

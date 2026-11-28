@@ -153,14 +153,9 @@ Decision IDs: `HOME_GENIES_OWNER_DECISION_REGISTER.md`. Sequence and gates: `HOM
 | P03B-OPS-01 | Money-guard readiness cache: a server started BEFORE the production indexes exist keeps refusing money writes (503, fail closed) for up to 15 s after they are created (BAD_TTL); a dropped index stays cached as ready for up to 300 s (OK_TTL). Proven locally (solo `test_upi_adminlogin`: 6 × 503 without a wait, all pass after a 16 s wait). Deployment runbook: create indexes (P1-01) before starting / restart after; or wait 15 s. No code change made | Low (ops) | P1-01 runbook |
 | P03B-UX-01 | A customer's own cancellation shows the shipment note "Order cancelled by admin" (pre-existing: the shared `confirmed_cancel` restock step writes that text, `stock.py` `cancel_order_stock`). Copy only; money unaffected | Low | UX pass |
 
-**Remaining frontend lint warnings after W8 (9; none fail the build; not fixed because each would change behaviour, semantics or vendored code):**
+**Remaining frontend lint warnings (4, all vendored; none fail the build).** 2026-11-28: the five in application code were fixed after they failed the Vercel production build (`CI=true` turns warnings into errors): `History_` → `HistoryPanel`; the redundant `aria-pressed` removed from the Yes / No radios (`aria-checked` kept) and the application tabs (`aria-selected` kept), with the `.hgv-chip` selected style extended to `aria-checked` / `aria-selected` so the look is unchanged; unused `isSuper` (no role check was pending: the server enforces settings permissions) and the duplicate `loadPwReqs` (the list loads on mount and updates after reset / dismiss) removed.
 | File:line | Rule | Classification |
 |---|---|---|
-| `components/vendor/Governance.js:113` | react/jsx-pascal-case (`History_`) | naming only; renaming a component is a refactor — P3 |
-| `components/vendor/VendorUI.js:94` | jsx-a11y/role-supports-aria-props (`aria-pressed` on role radio) | accessibility semantics — needs a UI decision — P3 |
-| `pages/admin/AdminVendorApplications.js:83` | jsx-a11y/role-supports-aria-props (`aria-pressed` on role tab) | same — P3 |
-| `pages/admin/AdminSettings.js:18` | no-unused-vars (`isSuper`) | unused computed value; may signal an unfinished role check — review, P3 |
-| `pages/admin/AdminUsers.js:54` | no-unused-vars (`loadPwReqs`) | unused loader; may signal a missing refresh — review, P3 |
 | `components/ui/alert.jsx:32` | jsx-a11y/heading-has-content | vendored shadcn component — P3 |
 | `components/ui/pagination.jsx:38` | jsx-a11y/anchor-has-content | vendored shadcn component — P3 |
 | `hooks/use-toast.js:8` | no-unused-vars (`actionTypes`) | vendored shadcn hook — P3 |
